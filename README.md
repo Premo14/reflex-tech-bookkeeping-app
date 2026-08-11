@@ -9,7 +9,7 @@ Bookkeeping project for Reflex Technologies
 
 #### How to use heic2any
 
-```
+```typescript
 import heic2any from "heic2any";
 // or
 const heic2any = require("heic2any");
@@ -26,4 +26,8 @@ fetch("./my-image.heic")
 	.catch((e) => {
 		// see error handling section
 	});
-```typescript
+```
+
+#### Important
+
+- Embedding HTML is a XSS security risk, to ensure there is no risk, embedded HTML emails need to be put in `<iframe sandbox="">` tags. the `sandbox=""` makes sure scripts cannot be uploaded to it.

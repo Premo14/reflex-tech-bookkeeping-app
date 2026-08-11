@@ -1,0 +1,166 @@
+Delivered-To: ajaipremo@gmail.com
+Received: by 2002:a05:7300:bf2a:b0:30b:b2ec:e41 with SMTP id ff42csp3049040dyb; Mon, 10 Aug 2026 17:03:54 -0700 (PDT)
+X-Received: by 2002:a05:6102:2c1c:b0:738:472f:2cb1 with SMTP id ada2fe7eead31-768e6b7fa4bmr1343909137.8.1786406634114; Mon, 10 Aug 2026 17:03:54 -0700 (PDT)
+ARC-Seal: i=2; a=rsa-sha256; t=1786406634; cv=pass; d=google.com; s=arc-20260327; b=C+INIrCe4Z8E1trQd8xBbOFRvfuRN58mV9zzJwEehXVGxLIaFjeoyFRmr4sy1UvMwr 86WpI17iAJ25cjKTGYzaL5IXmYuYWfF2rtmTzE3OjKwYBqmztRj8GSlSX1VS7zk/io9n 7HR62wvsbAjKw9sENX4x033Gv4wokxTA/x+E5jDc4UproVIJJNpB0KmTztZWGo4niK1z tafLCLTQ/mT99dEhN9lXbJk+9yLB8iWXe6og44wWXLb+7FQkQtVPew8nUWo8Fj7p5Bik iqNEpFHxyXBA6iwjbSkrtDTWSGsbOe3XQvwJSCwIg1AvOQPLBvJ2V73B6tgQkiOz3y2u Ce6g==
+ARC-Message-Signature: i=2; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327; h=to:subject:message-id:date:from:in-reply-to:references:mime-version :dkim-signature; bh=+KL+wCY1Mvx7UIMBbWl3tAvIUfVgBE29bTpuHHdPxsg=; fh=MxnOG6rZpT6jP2JFB5jN5E5n9848bTzzA+renlOSL/g=; b=n1sBCdn7AEMbLNLrSF6z1Cb9jH15VhadsX6nuMRilKj1BVqaIMXHEodBRvrq/Oo1dP nNj/2FDYHUNS5V+heiDh53fg5TVHywhdebROtDHTIbJUak4Mb1XFo6Bup25pz4Dnmpe9 f/Yq+RPf6BzTemhx/PuA+O+QtBu2LwJ9fkwM2hO2gCejZurvgf6yPKxZyPtMAz1vriLI d4zdWmqxG+B/NabKN13OTVDzKZQBkCjbyslvBOSG3tnIIe9zhx8Ht63WWOhEQfbU8PTV X+TQ9Rk5thxVPJWXtQTvBAtrQBN8DUVa1V+0N0ou5oXo0vE5KpMajT9Gl6qerm/Y94YM ubhw==; dara=google.com
+ARC-Authentication-Results: i=2; mx.google.com; dkim=pass header.i=@reflexny.com header.s=google header.b=RlKEmSBg; arc=pass (i=1); spf=pass (google.com: domain of farastu@reflexny.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=farastu@reflexny.com; dmarc=pass (p=QUARANTINE sp=QUARANTINE dis=NONE) header.from=reflexny.com; dara=pass header.i=@gmail.com
+Return-Path: <farastu@reflexny.com>
+Received: from mail-sor-f41.google.com (mail-sor-f41.google.com. [209.85.220.41]) by mx.google.com with SMTPS id a1e0cc1a2514c-979f744d739sor573132241.7.2026.08.10.17.03.53 for <ajaipremo@gmail.com> (Google Transport Security); Mon, 10 Aug 2026 17:03:54 -0700 (PDT)
+Received-SPF: pass (google.com: domain of farastu@reflexny.com designates 209.85.220.41 as permitted sender) client-ip=209.85.220.41;
+Authentication-Results: mx.google.com; dkim=pass header.i=@reflexny.com header.s=google header.b=RlKEmSBg; arc=pass (i=1); spf=pass (google.com: domain of farastu@reflexny.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=farastu@reflexny.com; dmarc=pass (p=QUARANTINE sp=QUARANTINE dis=NONE) header.from=reflexny.com; dara=pass header.i=@gmail.com
+ARC-Seal: i=1; a=rsa-sha256; t=1786406633; cv=none; d=google.com; s=arc-20260327; b=X8RovoUiUI/LaV8beb0mUrvO5A0S68v86/kUQjHFgXotlbtJdSgSweCIdPoXCfWyUH pZqhWMa0FH4aQkjSC0a5nIgo2AFzhib/UPfvwXkiXdk9tNRj41JanlT8UQ22S5pEI2oS ew9MNp1g5kz/8b6UMM4CqWjHrW48HhS+TeYYWFHXn0tWCc1GR/FmBeGvva1Oay94vClE zBpLs1U+0SAAp12evoBWNWI8mxP4eLbjLj3lmOObvCuTfWhGBfYfk2vPZ8m/9G7w1l+Q iaH/weNRtZG5DobJg8ItjRUPVtC5RAirS3itX6Idy5Ko5iZt9PMeYk1MTKa42yrGLRlp vr2g==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327; h=to:subject:message-id:date:from:in-reply-to:references:mime-version :dkim-signature; bh=+KL+wCY1Mvx7UIMBbWl3tAvIUfVgBE29bTpuHHdPxsg=; fh=MxnOG6rZpT6jP2JFB5jN5E5n9848bTzzA+renlOSL/g=; b=GrpBaSldFwMqwaLgC4rVcdFwBMp5WIKnZZFQOjAtRKrA2N3FV+k8s8xDDc4FxSF6Cc vtqZCdSIa9Iwd2YwyUVvIDTSEwGz8mJQB/Bf9mTEz+YLgSQXNSgOF/iQH/gDJNtu/n4t SGWk55rV3TwBsc3A0OhnxxKHJiqhbhdhzMtBaEb1/5tOwJ/AZBSaaskxpKl76hr9a9s5 m9YJg3PvjtrT8mmKZuvwmP3jRNydQ6hMvOKGYyoL/RZIXabI6085f74SOW/goTBfayjH j4P/NgFyiPMpEMHWEhCQoKxJAvxpuIQOhgQg1d5eYcabvoOl0PlHdco2GUxvAlpFiieT JzYw==; dara=google.com
+ARC-Authentication-Results: i=1; mx.google.com; arc=none
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=reflexny.com; s=google; t=1786406633; x=1787011433; dara=google.com; h=content-type:to:subject:message-id:date:from:in-reply-to:references :mime-version:from:to:cc:subject:date:message-id:reply-to :content-type; bh=+KL+wCY1Mvx7UIMBbWl3tAvIUfVgBE29bTpuHHdPxsg=; b=RlKEmSBgszgOtgar1T3yOG6bgZY/eLhBK1FhC/PCyQ2nICW8U8BZsVDMto0+EHt6h+ 0Q50lDSolqMTtb/ozsJcYVe8fMalb/++Ni2u8+/vladMmSULv/+3CjFAT3L8Z6Y1uqDt kBwoCfiF4qbtXq40KgB2jvhr0t9iuDYrYmuXane0fHzEUpdPQ1mfm4gYoqrhhPJjbMSj S2vnlQ3Ov/qKQlCaaepJ7tjAr950CVGA+HLLXQUZjsnOlBKmM8dirDZqjnlH2XZ5xM8r FBSZR9pKcd23iw7SyzyC7yvw3oVK6fTUUDtdyfrnDr78lEOYTYfSj/weBpLPygIbAU0M zk6g==
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=1e100.net; s=20251104; t=1786406633; x=1787011433; h=content-type:to:subject:message-id:date:from:in-reply-to:references :mime-version:x-gm-gg:x-gm-message-state:from:to:cc:subject:date :message-id:reply-to:content-type; bh=+KL+wCY1Mvx7UIMBbWl3tAvIUfVgBE29bTpuHHdPxsg=; b=cnH0QoF4LWVUtqYatWkXoRo9Pi2rtoisCGBAHdJ3t0zn/1e8pJUxHhxqhytaGouPrz /eTz5Url4JIptkp/xJl59BNQ3oxUi7ZEjbwuAggcDuZ+bfOAS4/k2Vc9FxqpS/hPgcnp mBTvDQw63F6rjm3YY02RMZLHS82EQOrsy98wc44QN0BOSSZpugjFZCg+0NGWXLwOB2ZP lSdBSiiSrY29N8XR7iM/ilK1mEcQu2Gpgjd133v1e57IrMIPPRvyFYrSmkZHVFaWcRZy ij+VHugsIrdhzsP0H4GdPzg3ImeAfZGq27AL30HQgKevCzn6KDBSwdZN5+XSuMdWNshM WNvA==
+X-Gm-Message-State: AOJu0YxXrQO08H6gXCluUd1MHN5enJvcmFrgwmEalh3wWOwCBvQrGPyg 1xZHIfxQrfgbAYebtlvDqDaFkh7xHE0SAfYTOBOkPsFl/c526RTdIGGf0DdqpE9BUWPhyW8L1Zy R1F/01LKVvD8I5S11ZzNXIu7FYeWo/dH+wpm5HxMwmyCinNviVSnpWuM=
+X-Gm-Gg: AR+sD11CRjPeD9D3iq3nwjWP8vRfCiLucFwDgBYDVZyPw5MOvKUqsklDddX7I52/L0t gYCh3ouyeaXsmBX95l5kRNoRjeB/ONrCZ9BVC5QCfAfo3jL6ACFyyrm+luajMGhOk3WstqF5YcA eRtfxvU5AO4+fGCswtbsXJx/oG6btj+Q8C8YCta7RckM/7XxbxEFA6Mjamvq1UAnuBfDzGGOjF+ YD8VBJ6OQbpIiA8vzOiERKzbBjbpCdULOPxSpz+Z0+0DcDMwebBXW6BWm3t6km4COb1XvcbZWDV iBFDMVHKMpczRva5Z5IeN5cy0LuePsIG+Zws9TP+vCxCfLaCW46Fyt0Ixk/pCpVbrANqqujs4cl Mrjl4XTcj0jY0k3Alspa5oTStuRiEy2OQS4Yid5/gZzoZ3CpoRK8Q4TAc8QnSTnsOL7D/gkwXKg ==
+X-Received: by 2002:a05:6102:3f8d:b0:65a:fcea:5a8 with SMTP id ada2fe7eead31-768e5d234a5mr1502154137.3.1786406632721; Mon, 10 Aug 2026 17:03:52 -0700 (PDT)
+MIME-Version: 1.0
+References: <CAGu-b5qbynWUe7tJH0niQPO5j9chjV86E2D1A3mWYY5i5CLnYg@mail.gmail.com> <CAAtX-wOePj5RcOT5d=zNAqTVDHYdZozMmtoxf9LaG-+Vauwz9Q@mail.gmail.com> <CAGu-b5peZvQ7SbZ-46hgUSFFA8DU3PQi30CjFXbpp4y313m0HA@mail.gmail.com> <CAAtX-wM_K_-wvSieuiCyzNoxTDDcVKcAUSk1xYU7SR13PSC_6A@mail.gmail.com> <CAGu-b5oN=TH0xKEFf8KvhLMPfHj1yGXrwSBMUMw=4P-C8Zgyug@mail.gmail.com> <CAAtX-wO5PrbG9i3AU-dQ6ijB-pgEiyLGqyE2Q9scifz4Z-4aAg@mail.gmail.com>
+In-Reply-To: <CAAtX-wO5PrbG9i3AU-dQ6ijB-pgEiyLGqyE2Q9scifz4Z-4aAg@mail.gmail.com>
+From: Faraz Arastu <farastu@reflexny.com>
+Date: Mon, 10 Aug 2026 20:03:16 -0400
+X-Gm-Features: AUfX_mzuDwZ1l7jlYeZy-YMpAhO4KWOqVJsez0a8QwcL0w9kZBDmDzhz-xc5sAU
+Message-ID: <CAAtX-wP8+E0V4JCu277sj-cCedKObd0Recixw7gW3mdJXHL3kw@mail.gmail.com>
+Subject: Re: Updated Feasibility Study
+To: Anthony Premo <ajaipremo@gmail.com>
+Content-Type: multipart/mixed; boundary="000000000000c4cace0658ba3452"
+
+--000000000000c4cace0658ba3452
+Content-Type: multipart/alternative; boundary="000000000000c4cacc0658ba3450"
+
+--000000000000c4cacc0658ba3450
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+On Mon, 10 Aug 2026 at 19:47, Faraz Arastu <farastu@reflexny.com> wrote:
+
+>
+>
+> On Mon, 10 Aug 2026 at 10:27, Anthony Premo <ajaipremo@gmail.com> wrote:
+>
+>> Sounds good, I=E2=80=99ll give you a call around 6:30. If you need a dif=
+ferent
+>> time just let me know.
+>>
+>> On Mon, Aug 10, 2026 at 09:20 Faraz Arastu <farastu@reflexny.com> wrote:
+>>
+>>> I'm free after 1800 today.
+>>>
+>>> I generally take 2 days off each week in Q3. Usually on the weekend but
+>>> sometimes during the week. The other quarters I'm working 7 days/wk. Co=
+uld
+>>> change as the company grows but thats the current situation.
+>>>
+>>> Faraz
+>>>
+>>> On Sat, Aug 8, 2026 at 21:48 Anthony Premo <ajaipremo@gmail.com> wrote:
+>>>
+>>>> You free Monday? I should be good to get together whenever.
+>>>>
+>>>> Btw, I=E2=80=99m available on the weekends too. Not sure if you=E2=80=
+=99re a =E2=80=9Cno work
+>>>> on the weekend=E2=80=9D kinda person, I=E2=80=99m usually working on o=
+r learning something
+>>>> 7 days a week. No pressure, just want to give you the option if you=E2=
+=80=99re ever
+>>>> tight on time.
+>>>>
+>>>> On Sat, Aug 8, 2026 at 21:25 Faraz Arastu <farastu@reflexny.com> wrote=
+:
+>>>>
+>>>>> I think you're trying to account for too much. Let's just start by
+>>>>> getting all the documents from many sources to one server directory. =
+And
+>>>>> just display the raw documents in a web app.
+>>>>>
+>>>>> I have a simple baseline design in mind. Shoot me some times for a
+>>>>> call next week.
+>>>>>
+>>>>> On Sat, 8 Aug 2026 at 16:45, Anthony Premo <ajaipremo@gmail.com>
+>>>>> wrote:
+>>>>>
+>>>>>> Hey Faraz,
+>>>>>>
+>>>>>> I have attached an updated study.
+>>>>>>
+>>>>>> I would like to get together again at some point and go over it in
+>>>>>> more detail, in the meantime I am happy to take any feedback over em=
+ail.
+>>>>>>
+>>>>>> Thanks,
+>>>>>> AJ
+>>>>>>
+>>>>>
+
+--000000000000c4cacc0658ba3450
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<div dir=3D"ltr"><br></div><br><div class=3D"gmail_quote gmail_quote_contai=
+ner"><div dir=3D"ltr" class=3D"gmail_attr">On Mon, 10 Aug 2026 at 19:47, Fa=
+raz Arastu &lt;<a href=3D"mailto:farastu@reflexny.com">farastu@reflexny.com=
+</a>&gt; wrote:<br></div><blockquote class=3D"gmail_quote" style=3D"margin:=
+0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex">=
+<div dir=3D"ltr"><br></div><br><div class=3D"gmail_quote"><div dir=3D"ltr" =
+class=3D"gmail_attr">On Mon, 10 Aug 2026 at 10:27, Anthony Premo &lt;<a hre=
+f=3D"mailto:ajaipremo@gmail.com" target=3D"_blank">ajaipremo@gmail.com</a>&=
+gt; wrote:<br></div><blockquote class=3D"gmail_quote" style=3D"margin:0px 0=
+px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex"><div =
+dir=3D"auto">Sounds good, I=E2=80=99ll give you a call around 6:30. If you =
+need a different time just=C2=A0let me know.=C2=A0</div><div><br><div class=
+=3D"gmail_quote"><div dir=3D"ltr" class=3D"gmail_attr">On Mon, Aug 10, 2026=
+ at 09:20 Faraz Arastu &lt;<a href=3D"mailto:farastu@reflexny.com" target=
+=3D"_blank">farastu@reflexny.com</a>&gt; wrote:<br></div><blockquote class=
+=3D"gmail_quote" style=3D"margin:0px 0px 0px 0.8ex;border-left:1px solid rg=
+b(204,204,204);padding-left:1ex"><div dir=3D"auto">I&#39;m free after 1800 =
+today.=C2=A0</div><div dir=3D"auto"><br></div><div dir=3D"auto">I generally=
+ take 2 days off each week in Q3. Usually on the weekend but sometimes duri=
+ng the week. The other quarters=C2=A0I&#39;m working 7 days/wk. Could chang=
+e as the company grows but thats the current situation.=C2=A0</div><div dir=
+=3D"auto"><br></div><div dir=3D"auto">Faraz</div><div><br><div class=3D"gma=
+il_quote"><div dir=3D"ltr" class=3D"gmail_attr">On Sat, Aug 8, 2026 at 21:4=
+8 Anthony Premo &lt;<a href=3D"mailto:ajaipremo@gmail.com" target=3D"_blank=
+">ajaipremo@gmail.com</a>&gt; wrote:<br></div><blockquote class=3D"gmail_qu=
+ote" style=3D"margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,20=
+4);padding-left:1ex"><div dir=3D"auto">You free Monday? I should be good to=
+ get together whenever.</div><div dir=3D"auto"><br></div><div dir=3D"auto">=
+Btw, I=E2=80=99m available on the weekends too. Not sure if you=E2=80=99re =
+a =E2=80=9Cno work on the weekend=E2=80=9D kinda person, I=E2=80=99m usuall=
+y working on or learning something 7 days a week. No pressure, just want to=
+ give you the option if you=E2=80=99re ever tight on time.</div><div><br><d=
+iv class=3D"gmail_quote"><div dir=3D"ltr" class=3D"gmail_attr">On Sat, Aug =
+8, 2026 at 21:25 Faraz Arastu &lt;<a href=3D"mailto:farastu@reflexny.com" t=
+arget=3D"_blank">farastu@reflexny.com</a>&gt; wrote:<br></div><blockquote c=
+lass=3D"gmail_quote" style=3D"margin:0px 0px 0px 0.8ex;border-left:1px soli=
+d rgb(204,204,204);padding-left:1ex"><div dir=3D"ltr">I think you&#39;re tr=
+ying to account for too much. Let&#39;s just start by getting all the docum=
+ents from many sources to one server directory. And just display the raw do=
+cuments in a web app.<div><br></div><div>I have a simple baseline design in=
+ mind. Shoot me some times for a call next week.</div></div><br><div class=
+=3D"gmail_quote"><div dir=3D"ltr" class=3D"gmail_attr">On Sat, 8 Aug 2026 a=
+t 16:45, Anthony Premo &lt;<a href=3D"mailto:ajaipremo@gmail.com" target=3D=
+"_blank">ajaipremo@gmail.com</a>&gt; wrote:<br></div><blockquote class=3D"g=
+mail_quote" style=3D"margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204=
+,204,204);padding-left:1ex"><div dir=3D"ltr">Hey Faraz,<br><br>I have attac=
+hed an updated study.=C2=A0<br><br>I would like to get together again at so=
+me point and go over it in more detail, in the meantime I am happy to take =
+any feedback over email.<br><br>Thanks,<br>AJ</div>
+</blockquote></div>
+</blockquote></div></div>
+</blockquote></div></div>
+</blockquote></div></div>
+</blockquote></div>
+</blockquote></div>
+
+--000000000000c4cacc0658ba3450--
+--000000000000c4cace0658ba3452
+Content-Type: image/png; name="2026.08.10.png"
+Content-Disposition: attachment; filename="2026.08.10.png"
+Content-Transfer-Encoding: base64
+Content-ID: <f_msnwd1if0>
+X-Attachment-Id: f_msnwd1if0
+
+
+--000000000000c4cace0658ba3452--
