@@ -1,6 +1,24 @@
 # reflex-tech-bookkeeping-app
 Bookkeeping project for Reflex Technologies
 
+## How to Run
+
+#### 1. Clone the repo
+```bash
+git clone <SSH Key>
+```
+
+#### 2. Install dependencies
+```bash
+cd reflex-bookkeeping-app/frontend
+npm install
+```
+
+#### 3. Run the app
+```bash
+npm run dev
+```
+
 ## Current Notes
 
 ### Frontend
@@ -30,4 +48,4 @@ fetch("./my-image.heic")
 
 #### Important
 
-- Embedding HTML is a XSS security risk, to ensure there is no risk, embedded HTML emails need to be put in `<iframe sandbox="">` tags. the `sandbox=""` makes sure scripts cannot be uploaded to it.
+- Embedding HTML is a XSS security risk, to ensure there is no risk, embedded HTML emails need to be put in `<iframe sandbox="">` tags. the `sandbox=""` makes sure scripts cannot be run.
