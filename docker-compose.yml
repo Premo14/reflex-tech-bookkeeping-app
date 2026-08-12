@@ -1,0 +1,46 @@
+services:
+  frontend:
+    container_name: reflex-tech-bookkeping-app-frontend
+    image: frontend
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+    restart: unless-stopped
+
+  backend:
+    container_name: backend
+    image: reflex-tech-bookkeping-app-backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backend:/app
+      - document-data:/app/documents
+    restart: unless-stopped
+
+  postgres:
+    container_name: postgres
+    image: postgres:18.4-alpine3.24
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: reflex-tech-bookkeeping-app-postgres-db
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    restart: unless-stopped
+
+networks:
+  default:
+    name: reflex-tech-bookkeeping-app-network
+
+volumes:
+  postgres-data:
+    name: postgres-data
+  document-data:
+    name: document-data

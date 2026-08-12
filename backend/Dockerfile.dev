@@ -1,0 +1,15 @@
+FROM golang:1.26.5-alpine
+
+WORKDIR /app
+
+RUN go install github.com/air-verse/air@latest
+
+COPY go.mod go.sum /app/
+
+RUN go mod download
+
+COPY ./ /app/
+
+EXPOSE 8080
+
+CMD ["air"]
