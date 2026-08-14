@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
+	"reflex-tech-bookkeeping-app-api/constants"
 	"sync"
 	"time"
 
@@ -34,15 +34,8 @@ func debouceEvent(filePath string, delay time.Duration) {
 		// --- THIS CODE RUNS AFTER THE FILE HAS STOPPED CHANGING ---
 		log.Println("File finished writing, ready to convert:", filePath)
 
-		outputPath, err := ConvertHeicToPng(filePath)
-		if err != nil {
-			log.Println("Error Converting HEIC image to PNG:", err)
-		} else {
-			log.Println("Conversion succeeded, PNG at:", outputPath)
-			// Safe to delete the original now
-			if err := os.Remove(filePath); err != nil {
-				log.Println("Failed to delete original HEIC:", err)
-			}
+		if err := processFile(filePath); err != nil {
+			log.Println("Error processing file:", err)
 		}
 
 		mu.Lock()
@@ -70,9 +63,8 @@ func Watcher() error {
 				}
 				log.Println("event:", event)
 				if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
-					if strings.ToLower(filepath.Ext(event.Name)) == ".heic" {
-						debouceEvent(event.Name, 2*time.Second)
-					}
+					debouceEvent(event.Name, 2*time.Second)
+
 					// log.Println("modified file:", event.Name) // debug only
 				}
 			case err, ok := <-watcher.Errors:
@@ -84,8 +76,7 @@ func Watcher() error {
 		}
 	}()
 
-	inboxPath := "/app/documents/inbox" // TODO: create a const file for constant vars
-	err = watcher.Add(inboxPath)
+	err = watcher.Add(constants.InboxPath)
 	if err != nil {
 		return err
 	}
@@ -93,11 +84,13 @@ func Watcher() error {
 	return nil
 }
 
-// Create documents/inbox/ folder(s) if they do not already exist.
-func CreateDirIfNotExists() error {
-	path := "/app/documents/inbox"
+// Create documents/inbox/ and documents/processed/ folders if they do not already exist.
+func CreateDirsIfNotExists() error {
 
-	if err := os.MkdirAll(path, 0755); err != nil {
+	if err := os.MkdirAll(constants.InboxPath, 0755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(constants.ProcessedPath, 0755); err != nil {
 		return err
 	}
 	return nil
@@ -116,18 +109,8 @@ func ProcessExistingFiles(inboxPath string) error {
 	}
 
 	for _, content := range contents {
-		if !content.IsDir() && strings.ToLower(filepath.Ext(content.Name())) == ".heic" {
-			filePath := filepath.Join(inboxPath, content.Name())
-			outputPath, err := ConvertHeicToPng(filePath)
-			if err != nil {
-				log.Println("Error Converting HEIC image to PNG:", err)
-			} else {
-				log.Println("Conversion succeeded, PNG at:", outputPath)
-				// Safe to delete the original now
-				if err = os.Remove(filePath); err != nil {
-					log.Println("Failed to delete original HEIC:", err)
-				}
-			}
+		if err := processFile(filepath.Join(inboxPath, content.Name())); err != nil {
+			log.Println("Error processing existing file:", err)
 		}
 	}
 

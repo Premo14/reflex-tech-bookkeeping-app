@@ -4,16 +4,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflex-tech-bookkeeping-app-api/models"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
-
-type Receipt struct {
-	gorm.Model
-	FileName string
-	FileURI  string
-}
 
 var DB *gorm.DB
 
@@ -52,5 +47,8 @@ func Connect() {
 		log.Fatal("Failed to connect to database.", err)
 	}
 
-	DB.AutoMigrate(&Receipt{})
+	DB.AutoMigrate(
+		&models.Expense{},
+		&models.Receipt{},
+	)
 }

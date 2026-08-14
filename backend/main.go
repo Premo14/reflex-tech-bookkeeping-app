@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"reflex-tech-bookkeeping-app-api/constants"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/utils"
 	"time"
@@ -10,15 +11,16 @@ import (
 )
 
 func main() {
-	inboxPath := "/app/documents/inbox"
 
-	// Call this so existing files are handled at startup
-	if err := utils.ProcessExistingFiles(inboxPath); err != nil {
-		log.Fatal("Failed to process existing files:", err)
+	db.Connect()
+
+	if err := utils.CreateDirsIfNotExists(); err != nil {
+		log.Fatal("Failed to create watched \"inbox/\" and \"processed/\" folders:", err)
 	}
 
-	if err := utils.CreateDirIfNotExists(); err != nil {
-		log.Fatal("Failed to create watched \"inbox/\" folder:", err)
+	// Call this so existing files are handled at startup
+	if err := utils.ProcessExistingFiles(constants.InboxPath); err != nil {
+		log.Fatal("Failed to process existing files:", err)
 	}
 
 	if err := utils.Watcher(); err != nil {
@@ -26,8 +28,6 @@ func main() {
 	}
 
 	app := fiber.New()
-
-	db.Connect()
 
 	app.Get("/", func(c fiber.Ctx) error {
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{
