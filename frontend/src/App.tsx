@@ -1,50 +1,4 @@
-import { useEffect, useState } from "react";
-import convertHeicToPng from "./utils/convertHeicToPNG";
-
-interface HeicViewerProps {
-  heicUrl: string;
-}
-
-export function HeicViewer({ heicUrl }: HeicViewerProps) {
-  const [imgSrc, setImgSrc] = useState<string | undefined>(undefined);
-  
-  const [hasError, setHasError] = useState<boolean>(false);
-
-  useEffect(() => {
-    const loadAndConvertImage = async () => {
-      try {
-        const pngUrl = await convertHeicToPng(heicUrl);
-        setImgSrc(pngUrl);
-      } catch (err) {
-        console.error("Failed to load HEIC receipt:", err);
-        setHasError(true);
-      }
-    };
-
-    loadAndConvertImage();
-  }, [heicUrl]);
-
-  // Loading state while heic2any does its job
-  if (!imgSrc && !hasError) {
-    return <p className="text-black animate-pulse py-12">Converting iPhone receipt...</p>;
-  }
-
-  // Error fallback
-  if (hasError) {
-    return <p className="text-red-500 py-12">Error loading HEIC file.</p>;
-  }
-
-  // Final render 
-  return (
-    <img
-      src={imgSrc}
-      alt="Converted HEIC receipt"
-      className="max-h-150 w-auto object-contain rounded shadow-sm"
-    />
-  );
-}
-
-function App() {
+  function App() {
 
     return (
     // Main background wrapper
@@ -71,10 +25,7 @@ function App() {
         <section className="bg-gray-600 rounded-xl shadow-sm border border-gray-200 p-6">
           <h2 className="text-lg font-semibold bg-gray-600 mb-4">Mobile Image Capture (.heic)</h2>
           {/* We added min-h-[200px] and items-center here so the "Converting..." text sits nicely in the middle */}
-          <div className="flex justify-center items-center bg-gray-800 rounded-lg p-4 border border-gray-200 min-h-50">
-            
-            {/* Inject our new component and pass the local path */}
-            <HeicViewer heicUrl="/mock_receipts/image1.heic" />
+          <div className="flex justify-center items-center bg-gray-800 rounded-lg p-4 border border-gray-200 min-h-50">            
             
           </div>
         </section>

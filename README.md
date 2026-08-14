@@ -1,51 +1,28 @@
 # reflex-tech-bookkeeping-app
 Bookkeeping project for Reflex Technologies
 
+## Overview
+A single-entry bookkeeping system that ingests raw receipts and bank statements, extracts structured data from them, reconciles the two datasets automatically, and presents the results through a clean web interface.
+
 ## How to Run
 
-#### 1. Clone the repo
-```bash
-git clone <SSH Key>
-```
+### Running with Docker
+This method runs the frontend, backend, and PostgreSQL database together in isolated containers.
 
-#### 2. Install dependencies
 ```bash
-cd reflex-bookkeeping-app/frontend
-npm install
-```
+# 1. Clone the repository
+git clone <repository-url>
+cd reflex-tech-bookkeeping-app
 
-#### 3. Run the app
-```bash
-npm run dev
+# 2. Start the services
+docker compose up -d
+
+# The frontend will be available at http://localhost:5173
+# The backend API will be available at http://localhost:8080
 ```
 
 ## Current Notes
 
-### Frontend
-
-- Currently use heic2any library to convert .heic files to PNGs because they are browser friendly and PNGs are the highest quality of compressed image file extensions (outside of SVGs). Also, both Tesseract and Textract only support JPEG, JPG, PNG, PDF, TIF, and TIFF.
-
-#### How to use heic2any
-
-```typescript
-import heic2any from "heic2any";
-// or
-const heic2any = require("heic2any");
-// skip the lines above if you're not using a module bundler
-
-// fetching the heic image
-fetch("./my-image.heic")
-	.then((res) => res.blob())
-	.then((blob) => heic2any({ blob }))
-	.then((conversionResult) => {
-		// conversionResult is a BLOB
-		// of the PNG formatted image
-	})
-	.catch((e) => {
-		// see error handling section
-	});
-```
-
-#### Important
-
-- Embedding HTML is a XSS security risk, to ensure there is no risk, embedded HTML emails need to be put in `<iframe sandbox="">` tags. the `sandbox=""` makes sure scripts cannot be run.
+### Processing Pipeline
+- **Server-Side Conversion:** All image processing, including converting iPhone `.heic` files to standard `.png` format, is handled by the Go backend (via `goheif`).
+- **Drop Zone Ingestion:** The backend watches the `/app/documents/inbox/{user}/` folder for new files. Uploads can be handled via the web UI or external sync tools like Syncthing.

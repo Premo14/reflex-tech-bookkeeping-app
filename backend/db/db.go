@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 
-	"github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -19,10 +18,7 @@ type Receipt struct {
 var DB *gorm.DB
 
 func Connect() {
-	err := godotenv.Load("../.env", ".env")
-	if err != nil {
-		log.Println("No .env file found, relying on OS variables")
-	}
+	var err error
 
 	dbHost := os.Getenv("POSTGRES_HOST")
 	if dbHost == "" {

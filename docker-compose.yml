@@ -1,40 +1,41 @@
 services:
   frontend:
     container_name: reflex-tech-bookkeping-app-frontend
-    image: frontend
     build: 
       context: ./frontend
       dockerfile: Dockerfile.dev
     environment:
       - POSTGRES_HOST=postgres
     ports:
-      - "5173:5173"
+      - "${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
     volumes:
       - ./frontend:/app
     restart: unless-stopped
-
+    
   backend:
     container_name: backend
-    image: reflex-tech-bookkeping-app-backend
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
     ports:
-      - "8080:8080"
+      - "${BACKEND_PORT:-8080}:${BACKEND_PORT:-8080}"
+    environment:
+      - DOCUMENTS_PATH=${DOCUMENTS_PATH:-/app/documents}
+      - CGO_ENABLED=1
     volumes:
       - ./backend:/app
-      - document-data:/app/documents
+      - ./document-data:/app/documents
     restart: unless-stopped
 
   postgres:
     container_name: postgres
     image: postgres:18.4-alpine3.24
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-"user"}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-"pass"}
-      POSTGRES_DB: ${POSTGRES_DB:-"reflex-tech-bookkeeping-app-postgres-db"}
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pass}
+      POSTGRES_DB: ${POSTGRES_DB:-reflex-tech-bookkeeping-app-postgres-db}
     ports:
-      - ${POSTGRES_PORT}:${POSTGRES_PORT-"5432"}
+      - "${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
     volumes:
       - postgres-data:/var/lib/postgresql
     restart: unless-stopped
@@ -46,5 +47,3 @@ networks:
 volumes:
   postgres-data:
     name: postgres-data
-  document-data:
-    name: document-data
