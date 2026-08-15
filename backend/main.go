@@ -18,7 +18,6 @@ func main() {
 		log.Fatal("Failed to create watched \"inbox/\" and \"processed/\" folders:", err)
 	}
 
-	// Call this so existing files are handled at startup
 	if err := utils.ProcessExistingFiles(constants.InboxPath); err != nil {
 		log.Fatal("Failed to process existing files:", err)
 	}

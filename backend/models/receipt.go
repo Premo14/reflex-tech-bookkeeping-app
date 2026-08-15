@@ -23,7 +23,6 @@ type Expense struct {
 	// GORM automatically uses the ExpenseID field in the Receipt struct as the foreign key.
 	Receipts []Receipt
 
-	// Standard timestamps (good practice to have)
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -52,8 +51,6 @@ func (e *Expense) BeforeCreate(tx *gorm.DB) (err error) {
 	return nil
 }
 
-// BeforeCreate is a GORM hook that runs automatically before a Receipt is saved
-// It is required that GORM hooks return an error
 func (r *Receipt) BeforeCreate(tx *gorm.DB) (err error) {
 	if r.ID == "" {
 		r.ID = uuid.New().String()

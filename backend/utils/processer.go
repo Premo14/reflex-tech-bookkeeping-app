@@ -16,14 +16,14 @@ import (
 func processFile(filePath string) error {
 	fileExt := strings.ToLower(filepath.Ext(filePath))
 
-	// 1. Is it supported?
+	// Is it supported?
 	if !constants.IsAllowedReceiptExt(fileExt) && !constants.IsAllowedBankStatementExt(fileExt) {
 		// Delete it from the inbox and return an error.
 		os.Remove(filePath)
 		return fmt.Errorf("file extension %s not allowed", fileExt)
 	}
 
-	// 2. Generate UUID & Build Processed Path
+	// Generate UUID & Build Processed Path
 	fileID := uuid.New().String()
 
 	// If it's a HEIC, we know the final extension will be .png
@@ -35,7 +35,7 @@ func processFile(filePath string) error {
 	processedDir := constants.ProcessedPath
 	processedPath := filepath.Join(processedDir, fileID+finalExt)
 
-	// 3. Handle the File System operations
+	// Handle the File System operations
 	if fileExt == ".heic" {
 		// Convert the HEIC directly into the processed folder
 		if err := ConvertHeicToPng(filePath, processedPath); err != nil {
@@ -50,16 +50,20 @@ func processFile(filePath string) error {
 		}
 	}
 
-	// 4. Save to the Database
-	receipt := models.Receipt{
-		ID:          fileID,
-		DocumentURI: processedPath,
-		FileExt:     finalExt,
-	}
-
-	// Save to Postgres
-	if err := db.DB.Create(&receipt).Error; err != nil {
-		return err
+	// If ext is ofx, then save as BankStatement
+	if fileExt == ".ofx" {
+		ParseOfx(processedPath, fileID) // ParseOfx() saves to the database
+	} else { // otherwise it is a receipt
+		// Save to the Database
+		receipt := models.Receipt{
+			ID:          fileID,
+			DocumentURI: processedPath,
+			FileExt:     finalExt,
+		}
+		// Save to Postgres
+		if err := db.DB.Create(&receipt).Error; err != nil {
+			return err
+		}
 	}
 
 	log.Println("Successfully processed and saved receipt:", fileID)

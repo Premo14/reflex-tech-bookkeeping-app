@@ -10,7 +10,10 @@ require (
 	gorm.io/gorm v1.31.2
 )
 
+require github.com/aclindsa/xml v0.0.0-20201125035057-bbd5c9ec99ac // indirect
+
 require (
+	github.com/aclindsa/ofxgo v0.1.3
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gofiber/schema v1.8.0 // indirect

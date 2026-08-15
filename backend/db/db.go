@@ -50,5 +50,7 @@ func Connect() {
 	DB.AutoMigrate(
 		&models.Expense{},
 		&models.Receipt{},
+		&models.BankStatement{},
+		&models.BankTransaction{},
 	)
 }
