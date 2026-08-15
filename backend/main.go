@@ -4,10 +4,11 @@ import (
 	"log"
 	"reflex-tech-bookkeeping-app-api/constants"
 	"reflex-tech-bookkeeping-app-api/db"
+	"reflex-tech-bookkeeping-app-api/routes"
 	"reflex-tech-bookkeeping-app-api/utils"
-	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/static"
 )
 
 func main() {
@@ -28,17 +29,11 @@ func main() {
 
 	app := fiber.New()
 
-	app.Get("/", func(c fiber.Ctx) error {
-		return c.Status(fiber.StatusOK).JSON(fiber.Map{
-			"status":    "success",
-			"message":   "Service is up and running",
-			"timestamp": time.Now().Format(time.RFC3339),
-		})
-	})
+	// Expose the processed/ folder so the frontend can display receipt images
+	app.Get("/images/*", static.New(constants.ProcessedPath))
 
-	app.Get("/receipts", func(c fiber.Ctx) error {
-		return nil
-	})
+	// Wire up all the API routes from our routes/ folder!
+	routes.SetupRoutes(app)
 
 	log.Fatal(app.Listen(":8080"))
 }

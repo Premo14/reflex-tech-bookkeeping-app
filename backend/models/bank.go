@@ -32,7 +32,7 @@ type BankTransaction struct {
 	BankStatementID string `gorm:"type:uuid;index;not null"`
 
 	// The actual transaction data
-	Date            time.Time `gorm:"not null"`
+	Date            time.Time `gorm:"not null;index"`
 	Description     string
 	Amount          float64
 	TransactionType string // e.g. "DEBIT" or "DEP"
@@ -41,9 +41,8 @@ type BankTransaction struct {
 	// We make it UNIQUE so we can't accidentally import it twice.
 	FITID string `gorm:"unique;not null"`
 
-	// Link this to an AI-extracted "Expense" (from a receipt)
-	// It's a pointer because it won't be matched immediately.
-	ExpenseID *string `gorm:"type:uuid;index"`
+	Expenses             []Expense
+	ReconciliationStatus string
 
 	CreatedAt time.Time
 	UpdatedAt time.Time

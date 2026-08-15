@@ -17,8 +17,10 @@ var (
 )
 
 /*
-debouceEvent() creates a delay to ensure heic files are completely
-downloaded to disk before performing processing them.
+debounceEvent ensures we don't try to process a file while it is still actively downloading or being written to disk.
+When a file is created or written to, the OS fires many rapid events. This function creates a "delay" timer.
+If another event fires for the same file, it resets the timer. The file is only processed once the timer
+finally expires (meaning the file has stopped changing and is safe to read).
 */
 func debouceEvent(filePath string, delay time.Duration) {
 	mu.Lock()
@@ -45,8 +47,9 @@ func debouceEvent(filePath string, delay time.Duration) {
 }
 
 /*
-fsnotify is utilized to watch the documents/inbox/ folder for events
-e.g. adding a new file to the folder
+Watcher initializes the fsnotify file watcher to monitor the documents/inbox/ folder.
+It listens for Create or Write events and passes the files to the debounceEvent function.
+This allows the app to respond to newly dropped OFX or image files in real-time.
 */
 func Watcher() error {
 	watcher, err := fsnotify.NewWatcher()
@@ -54,19 +57,30 @@ func Watcher() error {
 		return err
 	}
 
+	// Start a new goroutine (background thread) so the watcher runs indefinitely
+	// without blocking the rest of the application.
 	go func() {
+		// An infinite loop to continuously listen for events.
 		for {
+			// It waits here and blocks the loop until it receives a message from one of the channels.
 			select {
+
+			// 1. If we receive a message on the watcher.Events channel:
 			case event, ok := <-watcher.Events:
+				// If `ok` is false, it means the channel was closed. We should exit the thread.
 				if !ok {
 					return
 				}
+
 				log.Println("event:", event)
+
+				// We only care if a file was newly created or written to.
+				// (We ignore things like fsnotify.Remove or fsnotify.Chmod)
 				if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
 					debouceEvent(event.Name, 2*time.Second)
-
-					// log.Println("modified file:", event.Name) // debug only
 				}
+
+			// 2. If we receive a message on the watcher.Errors channel:
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
@@ -76,6 +90,7 @@ func Watcher() error {
 		}
 	}()
 
+	// Tell the watcher which specific directory to monitor
 	err = watcher.Add(constants.InboxPath)
 	if err != nil {
 		return err
@@ -97,10 +112,9 @@ func CreateDirsIfNotExists() error {
 }
 
 /*
-fsnotify is event-driven, if files are already in the inbox/ folder
-on startup it will not process those files.
-This function processes the documents/inbox/ folder on startup in case
-files already exist in inbox/ after a crash or reset.
+ProcessExistingFiles sweeps the documents/inbox/ folder on server startup.
+Because the fsnotify watcher is strictly event-driven, it will miss any files that were dropped into the inbox
+while the server was offline or restarting. This function acts as a safety net to process that backlog.
 */
 func ProcessExistingFiles(inboxPath string) error {
 	contents, err := os.ReadDir(inboxPath)

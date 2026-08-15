@@ -12,8 +12,10 @@ import (
 )
 
 /*
-Parses OFX file (Bank Statement) and saves the BankStatement and BankTransaction(s)
-to the database
+ParseOfx reads an Open Financial Exchange (.ofx) file and extracts the Bank Statement and its Transactions.
+Because users might download overlapping date ranges from their bank (e.g. July 1-15, then July 10-20),
+this function is designed to be completely idempotent. It uses the bank's unique FITID to safely
+ignore duplicate transactions, allowing the user to upload as many statements as they want without breaking the math.
 */
 func ParseOfx(filePath, bankStatementID string) {
 	f, err := os.Open(filePath)
@@ -54,7 +56,7 @@ func ParseOfx(filePath, bankStatementID string) {
 		EndDate:     stmtResp.BankTranList.DtEnd.Time,
 	}
 
-	// Save the statement to the database so we get its UUID
+	// Save the statement to the database so we get its UUID and have a record of the upload
 	if err := db.DB.Create(&bankStatement).Error; err != nil {
 		log.Println("Error creating BankStatement:", err)
 		return
@@ -79,11 +81,12 @@ func ParseOfx(filePath, bankStatementID string) {
 	}
 
 	if len(dbTransactions) > 0 {
-		// Bulk Insert the transactions into Postgres
-		// Use OnConflict to quietly ignore any transactions we've already imported
+		// Bulk Insert the transactions into Postgres for speed.
+		// The `clause.OnConflict` is the magic here. GORM maps the struct field `FITID` to the column `fit_id`.
+		// If Postgres sees a transaction with a `fit_id` it already has, it silently skips it (DoNothing: true).
 		err = db.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "fit_id"}}, // GORM mapped FITID to fit_id
-			DoNothing: true,                              // Just skip it
+			Columns:   []clause.Column{{Name: "fit_id"}},
+			DoNothing: true,
 		}).Create(&dbTransactions).Error
 
 		if err != nil {
@@ -92,4 +95,7 @@ func ParseOfx(filePath, bankStatementID string) {
 			log.Printf("Successfully imported %d transactions from OFX\n", len(dbTransactions))
 		}
 	}
+	// Now that the database has fresh bank transactions, trigger the reconciliation engine
+	// to see if any waiting Expenses (receipts) can finally be linked
+	RunReconciliation()
 }

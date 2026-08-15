@@ -13,6 +13,14 @@ import (
 	"github.com/google/uuid"
 )
 
+/*
+processFile acts as the routing and sanitization layer for newly uploaded files.
+When the Watcher detects a new file in the inbox, this function takes over to:
+1. Validate the file extension against our allowed whitelist.
+2. Rename the file to a secure UUID to prevent path-traversal attacks and collisions.
+3. If it's a HEIC file (from an iPhone), convert it to PNG so browsers can display it.
+4. Route the file: OFX files go to the bank parser, image/pdf files get saved as Receipts in the DB.
+*/
 func processFile(filePath string) error {
 	fileExt := strings.ToLower(filepath.Ext(filePath))
 

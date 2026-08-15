@@ -48,6 +48,7 @@ func Connect() {
 	}
 
 	DB.AutoMigrate(
+		&models.AccountingPeriod{},
 		&models.Expense{},
 		&models.Receipt{},
 		&models.BankStatement{},

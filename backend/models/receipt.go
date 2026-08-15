@@ -9,7 +9,6 @@ import (
 
 // Expense represents the AI-extracted data for a transaction.
 type Expense struct {
-	// GORM will use this as the primary key
 	ID string `gorm:"primaryKey;type:uuid"`
 
 	// AI Extracted fields
@@ -22,6 +21,9 @@ type Expense struct {
 	// A single Expense can have multiple Receipts (e.g. a photo and a PDF).
 	// GORM automatically uses the ExpenseID field in the Receipt struct as the foreign key.
 	Receipts []Receipt
+
+	// A receipt can only be linked to one bank transaction
+	BankTransactionID *string
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
