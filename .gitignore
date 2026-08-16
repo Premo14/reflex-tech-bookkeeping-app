@@ -31,4 +31,4 @@ go.work.sum
  .idea/
  .vscode/
 
-/document-data/*
+document-data/**

@@ -78,6 +78,9 @@ func ParseOfx(filePath, bankStatementID string) {
 			FITID:           string(tx.FiTID),
 		}
 		dbTransactions = append(dbTransactions, dbTx)
+
+		// Autonomously ensure the AccountingPeriod exists for this transaction's month/year
+		GetOrCreateAccountingPeriod(dbTx.Date)
 	}
 
 	if len(dbTransactions) > 0 {
