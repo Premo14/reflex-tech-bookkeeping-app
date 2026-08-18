@@ -2,60 +2,43 @@ package models
 
 import (
 	"time"
-
-	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // Expense represents the AI-extracted data for a transaction.
 type Expense struct {
-	ID string `gorm:"primaryKey;type:uuid"`
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 
 	// AI Extracted fields
-	Timestamp   time.Time
-	Vendor      string
-	Description string
-	Amount      float64
-	Tender      string
+	Timestamp   time.Time `json:"timestamp"`
+	Vendor      string    `json:"vendor"`
+	Description string    `json:"description"`
+	Amount      float64   `json:"amount"`
+	Tender      string    `json:"tender"`
 
-	// A single Expense can have multiple Receipts (e.g. a photo and a PDF).
-	// GORM automatically uses the ExpenseID field in the Receipt struct as the foreign key.
-	Receipts []Receipt
+	// one expense can have multiple receipts (e.g. photo and pdf)
+	Receipts []Receipt `json:"receipts"`
 
 	// A receipt can only be linked to one bank transaction
-	BankTransactionID *string
+	BankTransactionID      *uint            `json:"bankTransactionId"`
+	SuggestedTransactionID *uint            `json:"suggestedTransactionId"`
+	SuggestedTransaction   *BankTransaction `gorm:"foreignKey:SuggestedTransactionID" json:"suggestedTransaction"`
 
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // Receipt represents a physical file on disk (image, pdf, etc).
 type Receipt struct {
-	ID string `gorm:"primaryKey;type:uuid"`
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 
-	// Foreign key linking back to the Expense.
-	// It's a pointer (*string) because when a file is first uploaded,
-	// it won't have an Expense associated with it yet until the AI runs.
-	ExpenseID *string `gorm:"type:uuid;index"`
+	// pointer because new uploads don't have an expense yet
+	ExpenseID *uint `gorm:"index" json:"expenseId"`
 
 	// File metadata
-	DocumentURI string `gorm:"not null"` // e.g. "/app/documents/processed/a3f2...png"
-	FileExt     string `gorm:"not null"` // e.g. ".png"
+	DocumentURI string `gorm:"not null" json:"documentUri"` // e.g. "/app/documents/processed/a3f2...png"
+	FileExt     string `gorm:"not null" json:"fileExt"`     // e.g. ".png"
+	FileHash    string `gorm:"unique" json:"fileHash"`      // SHA-256 hash to prevent duplicates
 
-	CreatedAt time.Time
-	UpdatedAt time.Time
-}
-
-// BeforeCreate is a GORM hook that runs automatically before an Expense is saved
-// It is required that GORM hooks return an error
-func (e *Expense) BeforeCreate(tx *gorm.DB) (err error) {
-	e.ID = uuid.New().String()
-	return nil
-}
-
-func (r *Receipt) BeforeCreate(tx *gorm.DB) (err error) {
-	if r.ID == "" {
-		r.ID = uuid.New().String()
-	}
-	return nil
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }

@@ -1,11 +1,12 @@
 package controllers
 
 import (
+	"fmt"
 	"path/filepath"
 	"reflex-tech-bookkeeping-app-api/constants"
+	"time"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/google/uuid"
 )
 
 // UploadFile receives a file from the frontend and saves it to the inbox.
@@ -22,7 +23,7 @@ func UploadFile(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Unsupported file type"})
 	}
 
-	safeFileName := uuid.New().String() + ext
+	safeFileName := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
 	savePath := filepath.Join(constants.InboxPath, safeFileName)
 
 	if err := c.SaveFile(file, savePath); err != nil {
@@ -30,7 +31,6 @@ func UploadFile(c fiber.Ctx) error {
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"status":  "success",
-		"message": "File uploaded and sent to the processing queue.",
+		"status": "success",
 	})
 }

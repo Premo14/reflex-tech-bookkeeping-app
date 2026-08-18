@@ -1,7 +1,10 @@
 package utils
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -9,18 +12,26 @@ import (
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
 	"strings"
-
-	"github.com/google/uuid"
+	"time"
 )
 
-/*
-processFile acts as the routing and sanitization layer for newly uploaded files.
-When the Watcher detects a new file in the inbox, this function takes over to:
-1. Validate the file extension against our allowed whitelist.
-2. Rename the file to a secure UUID to prevent path-traversal attacks and collisions.
-3. If it's a HEIC file (from an iPhone), convert it to PNG so browsers can display it.
-4. Route the file: OFX files go to the bank parser, image/pdf files get saved as Receipts in the DB.
-*/
+func hashFile(filePath string) (string, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// processFile routes incoming files from the inbox.
+// it checks extensions, hashes to prevent duplicates, handles HEIC conversion,
+// and routes ofx files to the parser or images to the db.
 func processFile(filePath string) error {
 	fileExt := strings.ToLower(filepath.Ext(filePath))
 
@@ -31,8 +42,22 @@ func processFile(filePath string) error {
 		return fmt.Errorf("file extension %s not allowed", fileExt)
 	}
 
-	// Generate UUID & Build Processed Path
-	fileID := uuid.New().String()
+	// Generate hash
+	fileHash, err := hashFile(filePath)
+	if err != nil {
+		return err
+	}
+
+	// If it's a receipt, check if hash already exists
+	if !constants.IsAllowedBankStatementExt(fileExt) {
+		var existing models.Receipt
+		if err := db.DB.Where("file_hash = ?", fileHash).First(&existing).Error; err == nil {
+			// Found duplicate!
+			os.Remove(filePath)
+			log.Printf("Duplicate file upload detected (hash: %s). Rejected.", fileHash)
+			return nil
+		}
+	}
 
 	// If it's a HEIC, we know the final extension will be .png
 	finalExt := fileExt
@@ -40,40 +65,46 @@ func processFile(filePath string) error {
 		finalExt = ".png"
 	}
 
-	processedDir := constants.ProcessedPath
-	processedPath := filepath.Join(processedDir, fileID+finalExt)
-
-	// Handle the File System operations
-	if fileExt == ".heic" {
-		// Convert the HEIC directly into the processed folder
-		if err := ConvertHeicToPng(filePath, processedPath); err != nil {
-			return err
-		}
-		// Conversion worked, delete original from inbox
-		os.Remove(filePath)
-	} else {
-		// It's a PDF, PNG, JPG, etc. Just move it to the processed folder
-		if err := os.Rename(filePath, processedPath); err != nil {
-			return err
-		}
-	}
-
 	// If ext is ofx, then save as BankStatement
 	if fileExt == ".ofx" {
-		ParseOfx(processedPath, fileID) // ParseOfx() saves to the database
+		tempPath := filepath.Join(constants.ProcessedPath, fmt.Sprintf("%d%s", time.Now().UnixNano(), finalExt))
+		if err := os.Rename(filePath, tempPath); err != nil {
+			return err
+		}
+		ParseOfx(tempPath)
 	} else { // otherwise it is a receipt
-		// Save to the Database
+		// Save to the Database first to get the auto-increment ID
 		receipt := models.Receipt{
-			ID:          fileID,
-			DocumentURI: processedPath,
+			DocumentURI: "", // placeholder
 			FileExt:     finalExt,
+			FileHash:    fileHash,
 		}
 		// Save to Postgres
 		if err := db.DB.Create(&receipt).Error; err != nil {
 			return err
 		}
+
+		processedPath := filepath.Join(constants.ProcessedPath, fmt.Sprintf("%d%s", receipt.ID, finalExt))
+
+		// Handle the File System operations
+		if fileExt == ".heic" {
+			// Convert the HEIC directly into the processed folder
+			if err := ConvertHeicToPng(filePath, processedPath); err != nil {
+				return err
+			}
+			// Conversion worked, delete original from inbox
+			os.Remove(filePath)
+		} else {
+			// It's a PDF, PNG, JPG, etc. Just move it to the processed folder
+			if err := os.Rename(filePath, processedPath); err != nil {
+				return err
+			}
+		}
+
+		receipt.DocumentURI = processedPath
+		db.DB.Save(&receipt)
 	}
 
-	log.Println("Successfully processed and saved receipt:", fileID)
+	log.Println("Successfully processed and saved file")
 	return nil
 }

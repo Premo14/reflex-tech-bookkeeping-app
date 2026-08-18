@@ -34,7 +34,20 @@ func SetupRoutes(app *fiber.App) {
 
 	// General Browsing
 	api.Get("/transactions", controllers.GetTransactions)
-	
+	api.Get("/transactions/:id", controllers.GetTransaction)
+	api.Patch("/transactions/:id", controllers.UpdateTransaction)
+	api.Delete("/transactions/:id", controllers.DeleteTransaction)
+
+	api.Get("/expenses/:id", controllers.GetExpense)
+	api.Patch("/expenses/:id", controllers.UpdateExpense)
+	api.Delete("/expenses/:id", controllers.DeleteExpense)
+
 	// Mark Expense as Cash
 	api.Patch("/expenses/:id/cash", controllers.MarkExpenseAsCash)
+	
+	// Unlinked items for manual linking
+	api.Get("/reconciliation/unlinked", controllers.GetUnlinkedItems)
+	
+	// Unlink Expense
+	api.Post("/reconciliation/unlink", controllers.UnlinkExpense)
 }

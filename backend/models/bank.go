@@ -2,66 +2,47 @@ package models
 
 import (
 	"time"
-
-	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // BankStatement represents the raw OFX file and its metadata
 type BankStatement struct {
-	ID string `gorm:"primaryKey;type:uuid"`
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 
-	DocumentURI string `gorm:"not null"` // Path to the OFX file in processed/
-	FileExt     string `gorm:"not null"` // ".ofx"
+	DocumentURI string `gorm:"not null" json:"documentUri"` // Path to the OFX file in processed/
+	FileExt     string `gorm:"not null" json:"fileExt"`     // ".ofx"
 
 	// Metadata about the statement itself
-	AccountID string // e.g. "50106954S:05"
-	BankID    string // e.g. "221376539"
-	StartDate time.Time
-	EndDate   time.Time
+	AccountID string    `json:"accountId"` // e.g. "50106954S:05"
+	BankID    string    `json:"bankId"`    // e.g. "221376539"
+	StartDate time.Time `json:"startDate"`
+	EndDate   time.Time `json:"endDate"`
 	// A statement contains many transactions
-	Transactions []BankTransaction `gorm:"foreignKey:BankStatementID"`
+	Transactions []BankTransaction `gorm:"foreignKey:BankStatementID" json:"transactions"`
 
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // BankTransaction represents each transaction line of the bank statement
 type BankTransaction struct {
-	ID              string `gorm:"primaryKey;type:uuid"`
-	BankStatementID string `gorm:"type:uuid;index;not null"`
+	ID              uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	BankStatementID uint `gorm:"index;not null" json:"bankStatementId"`
 
 	// The actual transaction data
-	Date            time.Time `gorm:"not null;index"`
-	Description     string
-	Amount          float64
-	TransactionType string // e.g. "DEBIT" or "DEP"
+	Date            time.Time `gorm:"not null;index" json:"date"`
+	Description     string    `json:"description"`
+	Amount          float64   `json:"amount"`
+	TransactionType string    `json:"transactionType"` // e.g. "DEBIT" or "DEP"
 
-	// CRITICAL: The bank's unique ID for this transaction.
-	// We make it UNIQUE so we can't accidentally import it twice.
-	FITID string `gorm:"unique;not null"`
+	// bank's unique id for the tx
+	// make it unique to avoid duplicate imports
+	FITID string `gorm:"unique;not null" json:"fitId"`
 
-	Expenses             []Expense
-	ReconciliationStatus string
+	Expenses             []Expense `gorm:"foreignKey:BankTransactionID" json:"expenses"`
+	ReconciliationStatus string    `json:"reconciliationStatus"`
+	SuggestedExpenseID   *uint     `json:"suggestedExpenseId"`
+	SuggestedExpense     *Expense  `gorm:"foreignKey:SuggestedExpenseID;constraint:-" json:"suggestedExpense"`
 
-	CreatedAt time.Time
-	UpdatedAt time.Time
-}
-
-// BeforeCreate is a GORM hook that runs automatically before a BankStatement is saved
-// It is required that GORM hooks return an error
-func (bs *BankStatement) BeforeCreate(tx *gorm.DB) error {
-	if bs.ID == "" {
-		bs.ID = uuid.New().String()
-	}
-
-	return nil
-}
-
-func (bt *BankTransaction) BeforeCreate(tx *gorm.DB) error {
-	if bt.ID == "" {
-		bt.ID = uuid.New().String()
-	}
-
-	return nil
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }

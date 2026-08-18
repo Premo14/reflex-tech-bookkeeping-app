@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"fmt"
 	"math"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
@@ -10,18 +9,12 @@ import (
 	"time"
 )
 
-/*
-RunReconciliation is the core matching engine of the application.
-It runs completely autonomously in two main passes to link AI-extracted Expenses to BankTransactions.
-- Pass 1: Sweeps for exact 1-to-1 matches (highest priority).
-- Pass 2: Uses a recursive subset-sum algorithm to find combinations of split expenses on the same day that equal the bank transaction.
-Finally, it recalculates the ReconciliationStatus for every transaction to flag mathematical imbalances.
-*/
+// RunReconciliation links expenses to bank transactions.
+// pass 1: exact 1-to-1 matches
+// pass 2: recursive subset-sum for split expenses
+// pass 3: recalculates status flags
 func RunReconciliation() {
-	// 1. Deduplicate identical expenses before trying to match anything
-	DeduplicateExpenses()
-
-	// 2. Fetch all Expenses that have NO associated BankTransaction
+	// 1. Fetch all Expenses that have NO associated BankTransaction
 	var unmatchedExpenses []models.Expense
 	db.DB.Where("bank_transaction_id IS NULL").Find(&unmatchedExpenses)
 
@@ -30,7 +23,7 @@ func RunReconciliation() {
 	db.DB.Preload("Expenses").Find(&allTransactions)
 
 	// We only want to try matching against transactions that are NOT already fully matched
-	// (So we filter for UNMATCHED or PARTIAL)
+	// (So we filter for UNMATCHED)
 	var availableTransactions []*models.BankTransaction
 	for i := range allTransactions {
 		tx := &allTransactions[i]
@@ -41,9 +34,7 @@ func RunReconciliation() {
 		}
 	}
 
-	// ==========================================
-	// PASS 1: Single Transaction Matches (Highest Priority)
-	// ==========================================
+	// pass 1: direct matches
 	for i := range unmatchedExpenses {
 		expense := &unmatchedExpenses[i]
 		// Skip if it got matched during the loop
@@ -65,10 +56,20 @@ func RunReconciliation() {
 		// If we found a confident exact-amount match, link them!
 		if bestScore >= 80 && bestMatch != nil {
 			expense.BankTransactionID = &bestMatch.ID
+			expense.SuggestedTransactionID = nil // clear suggestion
+			bestMatch.SuggestedExpenseID = nil
 			bestMatch.Expenses = append(bestMatch.Expenses, *expense)
 
-			// Update expense in DB
-			db.DB.Save(expense)
+			// Update expense and tx in DB (Omit associations to prevent GORM duplicating expenses)
+			db.DB.Omit("Receipts").Save(expense)
+			db.DB.Omit("Expenses").Save(bestMatch)
+		} else if bestScore > 0 && bestMatch != nil {
+			// Not confident enough for a hard link, but we have a best guess (Soft Link)
+			expense.SuggestedTransactionID = &bestMatch.ID
+			bestMatch.SuggestedExpenseID = &expense.ID
+
+			db.DB.Omit("Receipts").Save(expense)
+			db.DB.Omit("Expenses").Save(bestMatch)
 		}
 	}
 
@@ -76,16 +77,15 @@ func RunReconciliation() {
 	var remainingExpenses []models.Expense
 	db.DB.Where("bank_transaction_id IS NULL").Find(&remainingExpenses)
 
-	// ==========================================
-	// PASS 2: Split Transaction Matches
-	// ==========================================
-	// Here we look for combinations of expenses on the exact same day that add up perfectly to the bank transaction
+	// pass 2: split transaction matches
+	// find combinations of same-day expenses that equal the tx amount
 	for _, tx := range availableTransactions {
 		sum := calculateExpenseSum(tx.Expenses)
-		remainingAmountNeeded := tx.Amount - sum
+		targetAmount := math.Abs(tx.Amount)
+		remainingAmountNeeded := targetAmount - sum
 
-		if math.Abs(remainingAmountNeeded) <= 0.01 {
-			continue // It's already matched
+		if remainingAmountNeeded <= 0.01 {
+			continue // It's already matched or overmatched
 		}
 
 		// Find all remaining expenses on the exact same day
@@ -102,7 +102,7 @@ func RunReconciliation() {
 			for _, m := range matches {
 				m.BankTransactionID = &tx.ID
 				db.DB.Save(&m)
-				
+
 				// Mark as claimed so we don't use it for the next tx
 				for k := range remainingExpenses {
 					if remainingExpenses[k].ID == m.ID {
@@ -113,9 +113,7 @@ func RunReconciliation() {
 		}
 	}
 
-	// ==========================================
-	// PASS 3: Calculate and Update Reconciliation Status
-	// ==========================================
+	// pass 3: calc reconciliation status
 	UpdateReconciliationStatuses()
 }
 
@@ -137,33 +135,19 @@ func daysDifference(date1, date2 time.Time) int {
 	return int(math.Abs(d2.Sub(d1).Hours() / 24))
 }
 
-/*
-UpdateReconciliationStatuses iterates through every BankTransaction and verifies that the sum
-of all attached Expenses exactly equals the BankTransaction Amount.
-It assigns one of four statuses:
-- "MATCHED": The math balances perfectly.
-- "PARTIAL": The attached expenses don't add up to the total transaction amount yet.
-- "OVERMATCHED": The attached expenses exceed the bank transaction amount (requires user review).
-- "UNMATCHED": No expenses are attached.
-*/
+// UpdateReconciliationStatuses verifies tx amount equals sum of attached expenses.
 func UpdateReconciliationStatuses() {
 	var transactions []models.BankTransaction
 	db.DB.Preload("Expenses").Find(&transactions)
 
 	for _, tx := range transactions {
 		sum := calculateExpenseSum(tx.Expenses)
-		
+
 		status := "UNMATCHED"
 		if len(tx.Expenses) > 0 {
-			diff := tx.Amount - sum
+			diff := math.Abs(tx.Amount) - sum
 			if math.Abs(diff) < 0.01 {
 				status = "MATCHED"
-			} else if math.Abs(sum) < math.Abs(tx.Amount) {
-				// E.g. Sum is -50, Amount is -100
-				status = "PARTIAL"
-			} else {
-				// E.g. Sum is -150, Amount is -100
-				status = "OVERMATCHED"
 			}
 		}
 
@@ -174,49 +158,10 @@ func UpdateReconciliationStatuses() {
 	}
 }
 
-/*
-DeduplicateExpenses defends against users uploading the exact same receipt multiple times.
-Before attempting to match any expenses to the bank, it groups unmatched expenses by a unique
-signature (Vendor + Amount + Date). If it finds identical duplicates, it safely deletes the
-redundant expense rows, but transfers their physical Receipt files over to the survivor to
-ensure no image data is ever lost.
-*/
-func DeduplicateExpenses() {
-	var expenses []models.Expense
-	db.DB.Where("bank_transaction_id IS NULL").Preload("Receipts").Find(&expenses)
-
-	// We use a map to group expenses by a unique signature: "Vendor_Amount_YYYY-MM-DD"
-	seen := make(map[string]*models.Expense)
-
-	for i := range expenses {
-		e := &expenses[i]
-		dateStr := e.Timestamp.Format("2006-01-02")
-		amountStr := fmt.Sprintf("%.2f", e.Amount)
-		// E.g. "walmart_-9.45_2026-08-14"
-		signature := normalizeString(e.Vendor) + "_" + amountStr + "_" + dateStr
-
-		if survivor, exists := seen[signature]; exists {
-			// It's a duplicate! Move its physical receipts over to the survivor
-			for _, receipt := range e.Receipts {
-				receipt.ExpenseID = &survivor.ID
-				db.DB.Save(&receipt)
-			}
-			// Delete the duplicate expense row
-			db.DB.Delete(e)
-		} else {
-			seen[signature] = e
-		}
-	}
-}
-
-/*
-findSubsetSum is a recursive algorithm that explores combinations of expenses to solve the "Split Receipt" problem.
-For example, if a BankTransaction is $100, but the user uploaded two $50 receipts, this function finds that
-the specific combination of those two receipts matches the $100 target perfectly.
-*/
+// findSubsetSum explores combinations of expenses to find a subset that equals the target amount.
 func findSubsetSum(expenses []models.Expense, target float64) []models.Expense {
 	var bestSubset []models.Expense
-	
+
 	var search func(index int, currentSum float64, currentSubset []models.Expense) bool
 	search = func(index int, currentSum float64, currentSubset []models.Expense) bool {
 		// Base case: check if we hit the target
@@ -224,7 +169,7 @@ func findSubsetSum(expenses []models.Expense, target float64) []models.Expense {
 			bestSubset = append([]models.Expense{}, currentSubset...)
 			return true
 		}
-		
+
 		// If we reached the end of the array, stop
 		if index >= len(expenses) {
 			return false
@@ -252,7 +197,7 @@ func calculateMatchScore(expense models.Expense, bankTx models.BankTransaction) 
 
 	// A. Exact Amount (+50)
 	// Be careful with float comparison! It's usually safer to compare differences less than 0.01
-	if math.Abs(expense.Amount-bankTx.Amount) < 0.01 {
+	if math.Abs(expense.Amount-math.Abs(bankTx.Amount)) < 0.01 {
 		score += 50
 	}
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
 
@@ -11,13 +12,9 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-/*
-ParseOfx reads an Open Financial Exchange (.ofx) file and extracts the Bank Statement and its Transactions.
-Because users might download overlapping date ranges from their bank (e.g. July 1-15, then July 10-20),
-this function is designed to be completely idempotent. It uses the bank's unique FITID to safely
-ignore duplicate transactions, allowing the user to upload as many statements as they want without breaking the math.
-*/
-func ParseOfx(filePath, bankStatementID string) {
+// ParseOfx reads an .ofx file to extract the bank statement and transactions.
+// it uses the bank's FITID to safely ignore duplicates so users can upload overlapping date ranges.
+func ParseOfx(filePath string) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		fmt.Printf("can't open file: %v\n", err)
@@ -47,7 +44,6 @@ func ParseOfx(filePath, bankStatementID string) {
 
 	// Create the BankStatement object
 	bankStatement := models.BankStatement{
-		ID:          bankStatementID, // This is the fileID passed from processFile
 		DocumentURI: filePath,
 		FileExt:     ".ofx",
 		AccountID:   stmtResp.BankAcctFrom.AcctID.String(),
@@ -56,10 +52,17 @@ func ParseOfx(filePath, bankStatementID string) {
 		EndDate:     stmtResp.BankTranList.DtEnd.Time,
 	}
 
-	// Save the statement to the database so we get its UUID and have a record of the upload
+	// save statement to get its ID
 	if err := db.DB.Create(&bankStatement).Error; err != nil {
 		log.Println("Error creating BankStatement:", err)
 		return
+	}
+
+	// rename ofx file to match new ID
+	newFilePath := filepath.Join(filepath.Dir(filePath), fmt.Sprintf("%d%s", bankStatement.ID, filepath.Ext(filePath)))
+	if err := os.Rename(filePath, newFilePath); err == nil {
+		bankStatement.DocumentURI = newFilePath
+		db.DB.Save(&bankStatement)
 	}
 
 	// Loop over the transactions
@@ -79,14 +82,13 @@ func ParseOfx(filePath, bankStatementID string) {
 		}
 		dbTransactions = append(dbTransactions, dbTx)
 
-		// Autonomously ensure the AccountingPeriod exists for this transaction's month/year
+		// ensure accounting period exists for this tx
 		GetOrCreateAccountingPeriod(dbTx.Date)
 	}
 
 	if len(dbTransactions) > 0 {
-		// Bulk Insert the transactions into Postgres for speed.
-		// The `clause.OnConflict` is the magic here. GORM maps the struct field `FITID` to the column `fit_id`.
-		// If Postgres sees a transaction with a `fit_id` it already has, it silently skips it (DoNothing: true).
+		// bulk insert transactions.
+		// onconflict ignores duplicates based on fit_id
 		err = db.DB.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "fit_id"}},
 			DoNothing: true,
@@ -98,7 +100,6 @@ func ParseOfx(filePath, bankStatementID string) {
 			log.Printf("Successfully imported %d transactions from OFX\n", len(dbTransactions))
 		}
 	}
-	// Now that the database has fresh bank transactions, trigger the reconciliation engine
-	// to see if any waiting Expenses (receipts) can finally be linked
+	// trigger reconciliation to link any waiting expenses
 	RunReconciliation()
 }

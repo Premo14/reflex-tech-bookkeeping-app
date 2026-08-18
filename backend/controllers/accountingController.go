@@ -24,7 +24,7 @@ func GetAccountingPeriods(c fiber.Ctx) error {
 // CloseAccountingPeriod attempts to close a month if there are no flagged items
 func CloseAccountingPeriod(c fiber.Ctx) error {
 	type CloseRequest struct {
-		PeriodID string
+		PeriodID uint `json:"periodId"`
 	}
 
 	var req CloseRequest
@@ -32,13 +32,13 @@ func CloseAccountingPeriod(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid payload"})
 	}
 
-	//  Fetch the Accounting Period so we know WHICH month/year to check
+	//  Fetch the Accounting Period so we know which month/year to check
 	var period models.AccountingPeriod
 	if err := db.DB.Where("id = ?", req.PeriodID).First(&period).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "accounting period not found"})
 	}
 
-	//  Verify that ALL BankTransactions in that specific month/year are MATCHED
+	//  Verify that all BankTransactions in that specific month/year are MATCHED
 	var unmatchedTxCount int64
 	db.DB.Model(&models.BankTransaction{}).
 		Where("EXTRACT(month FROM date) = ? AND EXTRACT(year FROM date) = ?", period.Month, period.Year).
@@ -51,7 +51,7 @@ func CloseAccountingPeriod(c fiber.Ctx) error {
 		})
 	}
 
-	// Verify that ALL Expenses in that specific month/year are linked
+	// Verify that all Expenses in that specific month/year are linked
 	var orphanedExpenseCount int64
 	db.DB.Model(&models.Expense{}).
 		Where("EXTRACT(month FROM timestamp) = ? AND EXTRACT(year FROM timestamp) = ?", period.Month, period.Year).

@@ -43,19 +43,17 @@ func GetFlaggedItems(c fiber.Ctx) error {
 	expenseQuery.Order("timestamp DESC").Preload("Receipts").Find(&expenses)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"status": "success",
-		"flaggedItems": fiber.Map{
-			"transactions": txs,
-			"expenses":     expenses,
-		},
+		"status":       "success",
+		"transactions": txs,
+		"expenses":     expenses,
 	})
 }
 
 // LinkExpenseToTransaction manually forces an Expense to link to a BankTransaction
 func LinkExpenseToTransaction(c fiber.Ctx) error {
 	type LinkRequest struct {
-		ExpenseID     string `json:"expenseId"`
-		TransactionID string `json:"transactionId"`
+		ExpenseID     uint `json:"expenseId"`
+		TransactionID uint `json:"transactionId"`
 	}
 
 	var req LinkRequest
@@ -83,6 +81,32 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 	})
 }
 
+// UnlinkExpense unlinks an Expense from a BankTransaction
+func UnlinkExpense(c fiber.Ctx) error {
+	type UnlinkRequest struct {
+		ExpenseID uint `json:"expenseId"`
+	}
+
+	var req UnlinkRequest
+	if err := c.Bind().JSON(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid payload"})
+	}
+
+	var expenseToUnlink models.Expense
+	if err := db.DB.Where("id = ?", req.ExpenseID).First(&expenseToUnlink).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "expense not found"})
+	}
+
+	expenseToUnlink.BankTransactionID = nil
+	db.DB.Save(&expenseToUnlink)
+
+	utils.UpdateReconciliationStatuses()
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status": "successfully unlinked expense",
+	})
+}
+
 // MarkExpenseAsCash flags an Expense as "Cash" (e.g. by setting Tender = "cash")
 // so it doesn't need to be reconciled to the bank.
 func MarkExpenseAsCash(c fiber.Ctx) error {
@@ -102,5 +126,26 @@ func MarkExpenseAsCash(c fiber.Ctx) error {
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status": "successfully marked expense tender as cash",
+	})
+}
+
+// GetUnlinkedItems fetches all unlinked items across all time,
+// useful for populating dropdowns on the manual link UI.
+func GetUnlinkedItems(c fiber.Ctx) error {
+	var txs []models.BankTransaction
+	db.DB.Where("reconciliation_status != ?", "MATCHED").
+		Order("date DESC").
+		Find(&txs)
+
+	var expenses []models.Expense
+	db.DB.Where("bank_transaction_id IS NULL AND tender != 'cash'").
+		Order("timestamp DESC").
+		Preload("Receipts").
+		Find(&expenses)
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status":       "success",
+		"transactions": txs,
+		"expenses":     expenses,
 	})
 }

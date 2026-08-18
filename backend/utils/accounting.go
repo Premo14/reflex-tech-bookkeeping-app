@@ -7,21 +7,18 @@ import (
 	"time"
 )
 
-/*
-GetOrCreateAccountingPeriod automatically ensures an AccountingPeriod exists for a given date.
-It extracts the Month and Year, queries the database, and if it doesn't exist, it creates it
-with an initial status of "OPEN".
-*/
+// GetOrCreateAccountingPeriod checks if a period exists for the date,
+// and if not, creates a new OPEN period.
 func GetOrCreateAccountingPeriod(date time.Time) *models.AccountingPeriod {
 	year := date.Year()
 	month := int(date.Month())
 
 	var period models.AccountingPeriod
-	
+
 	// Try to find the existing period
 	err := db.DB.Where("year = ? AND month = ?", year, month).First(&period).Error
 	if err == nil {
-		return &period // Found it!
+		return &period
 	}
 
 	// If it doesn't exist, create it autonomously

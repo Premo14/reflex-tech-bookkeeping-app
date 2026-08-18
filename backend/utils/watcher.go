@@ -16,12 +16,8 @@ var (
 	mu     sync.Mutex // Mutex ensures the map is safe for concurrent access
 )
 
-/*
-debounceEvent ensures we don't try to process a file while it is still actively downloading or being written to disk.
-When a file is created or written to, the OS fires many rapid events. This function creates a "delay" timer.
-If another event fires for the same file, it resets the timer. The file is only processed once the timer
-finally expires (meaning the file has stopped changing and is safe to read).
-*/
+// debounceEvent delays processing until a file is fully written to disk.
+// it resets the timer on every write event.
 func debouceEvent(filePath string, delay time.Duration) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -33,7 +29,7 @@ func debouceEvent(filePath string, delay time.Duration) {
 
 	// Create a new timer that will fire after the delay
 	timers[filePath] = time.AfterFunc(delay, func() {
-		// --- THIS CODE RUNS AFTER THE FILE HAS STOPPED CHANGING ---
+		// run after file has stopped changing
 		log.Println("File finished writing, ready to convert:", filePath)
 
 		if err := processFile(filePath); err != nil {
@@ -46,11 +42,7 @@ func debouceEvent(filePath string, delay time.Duration) {
 	})
 }
 
-/*
-Watcher initializes the fsnotify file watcher to monitor the documents/inbox/ folder.
-It listens for Create or Write events and passes the files to the debounceEvent function.
-This allows the app to respond to newly dropped OFX or image files in real-time.
-*/
+// Watcher listens for new files in documents/inbox/ and passes them to debounceEvent.
 func Watcher() error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -111,11 +103,7 @@ func CreateDirsIfNotExists() error {
 	return nil
 }
 
-/*
-ProcessExistingFiles sweeps the documents/inbox/ folder on server startup.
-Because the fsnotify watcher is strictly event-driven, it will miss any files that were dropped into the inbox
-while the server was offline or restarting. This function acts as a safety net to process that backlog.
-*/
+// ProcessExistingFiles processes any files dropped in the inbox while the server was offline.
 func ProcessExistingFiles(inboxPath string) error {
 	contents, err := os.ReadDir(inboxPath)
 	if err != nil {

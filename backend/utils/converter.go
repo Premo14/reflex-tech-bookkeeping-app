@@ -7,12 +7,8 @@ import (
 	"github.com/adrium/goheif"
 )
 
-/*
-ConvertHeicToPng is a necessary utility because standard web browsers cannot natively display HEIC images
-(the default photo format for modern iPhones), nor can image translators. When a user uploads an iPhone photo of a
-receipt, we use this function to decode the HEIC file and encode it into a standard PNG format that our frontend
-can render.
-*/
+// ConvertHeicToPng decodes iphone HEIC images and saves them as PNGs
+// so they can be viewed in a standard browser.
 func ConvertHeicToPng(inputPath, outputPath string) error {
 
 	// Open the original HEIC file

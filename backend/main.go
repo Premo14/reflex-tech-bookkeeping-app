@@ -8,6 +8,7 @@ import (
 	"reflex-tech-bookkeeping-app-api/utils"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/gofiber/fiber/v3/middleware/static"
 )
 
@@ -29,10 +30,14 @@ func main() {
 
 	app := fiber.New()
 
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: []string{"http://localhost:5173"},
+		AllowHeaders: []string{"Origin, Content-Type, Accept"},
+	}))
+
 	// Expose the processed/ folder so the frontend can display receipt images
 	app.Get("/images/*", static.New(constants.ProcessedPath))
 
-	// Wire up all the API routes from our routes/ folder!
 	routes.SetupRoutes(app)
 
 	log.Fatal(app.Listen(":8080"))
