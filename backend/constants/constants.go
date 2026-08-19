@@ -19,7 +19,6 @@ var allowedReceiptExt = map[string]struct{}{
 	".jpeg": {},
 	".heic": {},
 	".pdf":  {},
-	".html": {},
 }
 
 // Checks if extension is allowed by receipts
