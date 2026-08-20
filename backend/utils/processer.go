@@ -66,7 +66,7 @@ func processFile(filePath string) error {
 	}
 
 	// If ext is ofx, then save as BankStatement
-	if fileExt == ".ofx" {
+	if constants.IsAllowedBankStatementExt(fileExt) {
 		tempPath := filepath.Join(constants.ProcessedPath, fmt.Sprintf("%d%s", time.Now().UnixNano(), finalExt))
 		if err := os.Rename(filePath, tempPath); err != nil {
 			return err

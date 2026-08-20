@@ -9,7 +9,7 @@ type BankStatement struct {
 	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 
 	DocumentURI string `gorm:"not null" json:"documentUri"` // Path to the OFX file in processed/
-	FileExt     string `gorm:"not null" json:"fileExt"`     // ".ofx"
+	FileExt     string `gorm:"not null" json:"fileExt"`     // ".ofx" or ".qfx"
 
 	// Metadata about the statement itself
 	AccountID string    `json:"accountId"` // e.g. "50106954S:05"

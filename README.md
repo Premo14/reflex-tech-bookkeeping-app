@@ -32,13 +32,13 @@ A single-entry bookkeeping system designed to minimize manual data entry. It ing
 - **Frontend:** React, TypeScript, Tailwind CSS, React Router, Vite
 - **Key Libraries:**
   - `goheif`: Natively decodes iPhone `.heic` images into standard `.png` formats for browser compatibility.
-  - `parseOfx`: Idempotently parses Open Financial Exchange (`.ofx`) bank statements.
+  - `parseOfx`: Idempotently parses Open Financial Exchange (`.ofx`) & Intuit's version of OFX (`.qfx`) bank statements.
 
 ## Birds Eye View
-1. **File Ingestion:** Users drop receipt files or `.ofx` bank statements into an inbox folder (via UI upload or local folder syncing).
+1. **File Ingestion:** Users drop receipt files or `.ofx/.qfx` bank statements into an inbox folder (via UI upload or local folder syncing).
 2. **File Processing Pipeline:** A background watcher debounces rapid OS write events, verifies extensions, handles HEIC image conversions, and hashes files to prevent duplicate uploads.
 3. **AI Image Processing (The Current Hole):** *Currently, the AI extraction from receipt images to structured data is mocked. This is the main missing piece.* Once implemented, it will read a physical receipt and extract the Vendor, Amount, Date, and Tender type.
-4. **Bank Parsing:** Open Financial Exchange (`.ofx`) files are parsed into database bank transactions. The system automatically ignores duplicates using the bank's unique `FITID`.
+4. **Bank Parsing:** Open Financial Exchange (`.ofx/.qfx`) files are parsed into database bank transactions. The system automatically ignores duplicates using the bank's unique `FITID`.
 5. **Reconciliation Engine:** A multi-pass algorithm attempts to autonomously link extracted expenses (receipts) to bank transactions.
 6. **Accounting Periods:** The app dynamically manages open/closed accounting periods, strictly preventing the closing of a month if there are unresolved orphaned expenses or unmatched transactions.
 

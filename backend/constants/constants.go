@@ -36,6 +36,7 @@ calling IsAllowedBankStatementExt()
 */
 var allowedBankStatementExt = map[string]struct{}{
 	".ofx": {},
+	".qfx": {},
 }
 
 // Checks if extension is allowed by bank statements

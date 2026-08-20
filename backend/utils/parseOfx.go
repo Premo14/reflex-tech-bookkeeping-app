@@ -12,9 +12,11 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// ParseOfx reads an .ofx file to extract the bank statement and transactions.
+// ParseOfx reads an .ofx or .qfx file to extract the bank statement and transactions.
 // it uses the bank's FITID to safely ignore duplicates so users can upload overlapping date ranges.
 func ParseOfx(filePath string) {
+	fileExt := filepath.Ext(filePath)
+
 	f, err := os.Open(filePath)
 	if err != nil {
 		fmt.Printf("can't open file: %v\n", err)
@@ -45,7 +47,7 @@ func ParseOfx(filePath string) {
 	// Create the BankStatement object
 	bankStatement := models.BankStatement{
 		DocumentURI: filePath,
-		FileExt:     ".ofx",
+		FileExt:     fileExt,
 		AccountID:   stmtResp.BankAcctFrom.AcctID.String(),
 		BankID:      stmtResp.BankAcctFrom.BankID.String(),
 		StartDate:   stmtResp.BankTranList.DtStart.Time,
