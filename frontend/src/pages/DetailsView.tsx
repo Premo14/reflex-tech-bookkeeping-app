@@ -202,6 +202,7 @@ export default function DetailsView() {
                   <label className="block text-xs font-medium text-zinc-500 mb-1">Type</label>
                   <p className="text-zinc-300">{tx.transactionType}</p>
                 </div>
+
               </div>
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center py-12 text-zinc-500 text-center">

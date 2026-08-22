@@ -70,7 +70,7 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
 
           {/* Right side: Amount & Status */}
           <div className="flex flex-col items-end gap-2">
-            <span className={`font-semibold ${tx.amount < 0 ? 'text-white' : 'text-emerald-400'}`}>
+            <span className={`font-semibold ${tx.amount < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
               {formatMoney(tx.amount)}
             </span>
             <div className="flex gap-2 items-center">

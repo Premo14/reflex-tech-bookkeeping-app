@@ -80,7 +80,7 @@ export default function Sidebar({ periods, isSidebarOpen, setIsSidebarOpen }: Si
                 className="w-full flex justify-between items-center text-left font-medium text-zinc-400 hover:text-white py-2 transition-colors"
               >
                 <span>{year}</span>
-                <span className="text-xs">{openYears[year] ? "▼" : "▶"}</span>
+                <svg className={`w-3 h-3 transition-transform duration-200 ${openYears[year] ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 5l7 7-7 7" /></svg>
               </button>
               
               {openYears[year] && (

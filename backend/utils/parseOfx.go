@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
 
@@ -30,17 +31,36 @@ func ParseOfx(filePath string) {
 		return
 	}
 
-	// OFX files can theoretically contain multiple statements, but usually just have one.
-	// We check if there's at least one Bank response:
-	if len(resp.Bank) == 0 {
-		log.Println("No bank statement found in OFX")
-		return
-	}
+	var accountID string
+	var bankID string
+	var startDate time.Time
+	var endDate time.Time
+	var transactions []ofxgo.Transaction
 
-	// Cast the generic response to a StatementResponse
-	stmtResp, ok := resp.Bank[0].(*ofxgo.StatementResponse)
-	if !ok {
-		log.Println("Could not parse StatementResponse")
+	if len(resp.Bank) > 0 {
+		stmtResp, ok := resp.Bank[0].(*ofxgo.StatementResponse)
+		if !ok {
+			log.Println("Could not parse StatementResponse")
+			return
+		}
+		accountID = stmtResp.BankAcctFrom.AcctID.String()
+		bankID = stmtResp.BankAcctFrom.BankID.String()
+		startDate = stmtResp.BankTranList.DtStart.Time
+		endDate = stmtResp.BankTranList.DtEnd.Time
+		transactions = stmtResp.BankTranList.Transactions
+	} else if len(resp.CreditCard) > 0 {
+		ccStmtResp, ok := resp.CreditCard[0].(*ofxgo.CCStatementResponse)
+		if !ok {
+			log.Println("Could not parse CCStatementResponse")
+			return
+		}
+		accountID = ccStmtResp.CCAcctFrom.AcctID.String()
+		bankID = "" // Credit cards typically don't have a routing/bank ID in OFX
+		startDate = ccStmtResp.BankTranList.DtStart.Time
+		endDate = ccStmtResp.BankTranList.DtEnd.Time
+		transactions = ccStmtResp.BankTranList.Transactions
+	} else {
+		log.Println("No bank or credit card statement found in OFX")
 		return
 	}
 
@@ -48,10 +68,10 @@ func ParseOfx(filePath string) {
 	bankStatement := models.BankStatement{
 		DocumentURI: filePath,
 		FileExt:     fileExt,
-		AccountID:   stmtResp.BankAcctFrom.AcctID.String(),
-		BankID:      stmtResp.BankAcctFrom.BankID.String(),
-		StartDate:   stmtResp.BankTranList.DtStart.Time,
-		EndDate:     stmtResp.BankTranList.DtEnd.Time,
+		AccountID:   accountID,
+		BankID:      bankID,
+		StartDate:   startDate,
+		EndDate:     endDate,
 	}
 
 	// save statement to get its ID
@@ -69,7 +89,7 @@ func ParseOfx(filePath string) {
 
 	// Loop over the transactions
 	var dbTransactions []models.BankTransaction
-	for _, tx := range stmtResp.BankTranList.Transactions {
+	for _, tx := range transactions {
 		// Convert tx.TrnAmt (which is an ofxgo.Amount) to a float64
 		val, _ := tx.TrnAmt.Float64()
 		// Combine Name and Memo for a full description

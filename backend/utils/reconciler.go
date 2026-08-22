@@ -136,18 +136,25 @@ func daysDifference(date1, date2 time.Time) int {
 }
 
 // UpdateReconciliationStatuses verifies tx amount equals sum of attached expenses.
+// Positive-amount transactions (deposits/income) are auto-matched since they need no receipt.
 func UpdateReconciliationStatuses() {
 	var transactions []models.BankTransaction
 	db.DB.Preload("Expenses").Find(&transactions)
 
 	for _, tx := range transactions {
-		sum := calculateExpenseSum(tx.Expenses)
+		var status string
 
-		status := "UNMATCHED"
-		if len(tx.Expenses) > 0 {
-			diff := math.Abs(tx.Amount) - sum
-			if math.Abs(diff) < 0.01 {
-				status = "MATCHED"
+		// Deposits (positive amounts) auto-match — no expense receipt required
+		if tx.Amount > 0 {
+			status = "MATCHED"
+		} else {
+			sum := calculateExpenseSum(tx.Expenses)
+			status = "UNMATCHED"
+			if len(tx.Expenses) > 0 {
+				diff := math.Abs(tx.Amount) - sum
+				if math.Abs(diff) < 0.01 {
+					status = "MATCHED"
+				}
 			}
 		}
 
