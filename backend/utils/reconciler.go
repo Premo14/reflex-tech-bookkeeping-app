@@ -14,31 +14,45 @@ import (
 // pass 2: recursive subset-sum for split expenses
 // pass 3: recalculates status flags
 func RunReconciliation() {
-	// 1. Fetch all Expenses that have NO associated BankTransaction
+	// Fetch all Expenses that have no confirmed row in the join table.
+	// Previously this was "bank_transaction_id IS NULL" — now we check the join table
+	// directly, since the FK field no longer exists on the Expense struct.
 	var unmatchedExpenses []models.Expense
-	db.DB.Where("bank_transaction_id IS NULL").Find(&unmatchedExpenses)
+	db.DB.Where("id NOT IN (?)",
+		db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed"),
+	).Find(&unmatchedExpenses)
 
-	// 3. Fetch all BankTransactions
+	// Fetch all BankTransactions, then manually load each one's confirmed expenses.
+	// We can't use Preload("Expenses") without a status condition here, because that
+	// would include suggested links and inflate the sum used for match-checking.
 	var allTransactions []models.BankTransaction
-	db.DB.Preload("Expenses").Find(&allTransactions)
+	db.DB.Find(&allTransactions)
+	for i := range allTransactions {
+		db.DB.
+			Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
+			Where("ebt.bank_transaction_id = ? AND ebt.status = ?", allTransactions[i].ID, "confirmed").
+			Find(&allTransactions[i].Expenses)
+	}
 
-	// We only want to try matching against transactions that are NOT already fully matched
-	// (So we filter for UNMATCHED)
+	// Only consider transactions that are not already fully reconciled.
 	var availableTransactions []*models.BankTransaction
 	for i := range allTransactions {
 		tx := &allTransactions[i]
 		sum := calculateExpenseSum(tx.Expenses)
-		// We use 0.01 for safe float comparison
-		if tx.ReconciliationStatus == "" || math.Abs(sum-tx.Amount) > 0.01 {
+		if tx.ReconciliationStatus == "" || math.Abs(sum-math.Abs(tx.Amount)) > 0.01 {
 			availableTransactions = append(availableTransactions, tx)
 		}
 	}
 
+	// Track expenses confirmed during this pass so we don't attempt to re-match them.
+	confirmedInPass1 := map[uint]bool{}
+
 	// pass 1: direct matches
 	for i := range unmatchedExpenses {
 		expense := &unmatchedExpenses[i]
-		// Skip if it got matched during the loop
-		if expense.BankTransactionID != nil {
+
+		// Skip if this expense was already confirmed earlier in this same loop.
+		if confirmedInPass1[expense.ID] {
 			continue
 		}
 
@@ -53,29 +67,44 @@ func RunReconciliation() {
 			}
 		}
 
-		// If we found a confident exact-amount match, link them!
+		// If we found a confident exact-amount match, link them.
 		if bestScore >= 80 && bestMatch != nil {
-			expense.BankTransactionID = &bestMatch.ID
-			expense.SuggestedTransactionID = nil // clear suggestion
-			bestMatch.SuggestedExpenseID = nil
+			// Delete first in case a "suggested" row for this pair already exists,
+			// so we don't hit the composite PK constraint on insert.
+			db.DB.Where("expense_id = ? AND bank_transaction_id = ?", expense.ID, bestMatch.ID).
+				Delete(&models.ExpenseBankTransaction{})
+			db.DB.Create(&models.ExpenseBankTransaction{
+				ExpenseID:         expense.ID,
+				BankTransactionID: bestMatch.ID,
+				Status:            "confirmed",
+			})
+
+			// Mark in-memory so we don't re-process this expense, and update
+			// the in-memory Expenses slice so availability checks stay accurate.
+			confirmedInPass1[expense.ID] = true
 			bestMatch.Expenses = append(bestMatch.Expenses, *expense)
 
-			// Update expense and tx in DB (Omit associations to prevent GORM duplicating expenses)
-			db.DB.Omit("Receipts").Save(expense)
-			db.DB.Omit("Expenses").Save(bestMatch)
 		} else if bestScore > 0 && bestMatch != nil {
-			// Not confident enough for a hard link, but we have a best guess (Soft Link)
-			expense.SuggestedTransactionID = &bestMatch.ID
-			bestMatch.SuggestedExpenseID = &expense.ID
-
-			db.DB.Omit("Receipts").Save(expense)
-			db.DB.Omit("Expenses").Save(bestMatch)
+			// Not confident enough for a hard link — write a suggested row instead.
+			// Same delete-first pattern to avoid PK conflicts.
+			db.DB.Where("expense_id = ? AND bank_transaction_id = ?", expense.ID, bestMatch.ID).
+				Delete(&models.ExpenseBankTransaction{})
+			db.DB.Create(&models.ExpenseBankTransaction{
+				ExpenseID:         expense.ID,
+				BankTransactionID: bestMatch.ID,
+				Status:            "suggested",
+			})
 		}
 	}
 
-	// Re-fetch unmatched expenses for Pass 2 (since Pass 1 linked some)
+	// Re-fetch remaining unconfirmed expenses for Pass 2 (since Pass 1 linked some).
 	var remainingExpenses []models.Expense
-	db.DB.Where("bank_transaction_id IS NULL").Find(&remainingExpenses)
+	db.DB.Where("id NOT IN (?)",
+		db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed"),
+	).Find(&remainingExpenses)
+
+	// Track expenses claimed in Pass 2 to prevent double-use across transactions.
+	claimedInPass2 := map[uint]bool{}
 
 	// pass 2: split transaction matches
 	// find combinations of same-day expenses that equal the tx amount
@@ -88,27 +117,28 @@ func RunReconciliation() {
 			continue // It's already matched or overmatched
 		}
 
-		// Find all remaining expenses on the exact same day
+		// Find all remaining unclaimed expenses on the exact same day.
 		var sameDayExpenses []models.Expense
 		for _, e := range remainingExpenses {
-			if e.BankTransactionID == nil && daysDifference(e.Timestamp, tx.Date) == 0 {
+			if !claimedInPass2[e.ID] && daysDifference(e.Timestamp, tx.Date) == 0 {
 				sameDayExpenses = append(sameDayExpenses, e)
 			}
 		}
 
-		// Check if any combination of these same-day expenses adds up exactly to the remaining amount
+		// Check if any combination of these same-day expenses adds up exactly to the remaining amount.
 		matches := findSubsetSum(sameDayExpenses, remainingAmountNeeded)
 		if len(matches) > 0 {
 			for _, m := range matches {
-				m.BankTransactionID = &tx.ID
-				db.DB.Save(&m)
-
-				// Mark as claimed so we don't use it for the next tx
-				for k := range remainingExpenses {
-					if remainingExpenses[k].ID == m.ID {
-						remainingExpenses[k].BankTransactionID = &tx.ID
-					}
-				}
+				// Delete-then-create, same pattern as Pass 1.
+				db.DB.Where("expense_id = ? AND bank_transaction_id = ?", m.ID, tx.ID).
+					Delete(&models.ExpenseBankTransaction{})
+				db.DB.Create(&models.ExpenseBankTransaction{
+					ExpenseID:         m.ID,
+					BankTransactionID: tx.ID,
+					Status:            "confirmed",
+				})
+				// Mark as claimed so we don't assign this expense to the next tx.
+				claimedInPass2[m.ID] = true
 			}
 		}
 	}
@@ -135,14 +165,27 @@ func daysDifference(date1, date2 time.Time) int {
 	return int(math.Abs(d2.Sub(d1).Hours() / 24))
 }
 
-// UpdateReconciliationStatuses verifies tx amount equals sum of attached expenses.
+// UpdateReconciliationStatuses verifies tx amount equals sum of attached confirmed expenses.
 // Positive-amount transactions (deposits/income) are auto-matched since they need no receipt.
 func UpdateReconciliationStatuses() {
 	var transactions []models.BankTransaction
-	db.DB.Preload("Expenses").Find(&transactions)
+	db.DB.Find(&transactions)
 
-	for _, tx := range transactions {
+	for i := range transactions {
+		tx := &transactions[i]
+
+		// Load only confirmed expenses for this transaction via a direct join.
+		db.DB.
+			Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
+			Where("ebt.bank_transaction_id = ? AND ebt.status = ?", tx.ID, "confirmed").
+			Find(&tx.Expenses)
+
+		if tx.ReconciliationStatus == "PENDING_CLOSED" {
+			continue // Do not update PENDING_CLOSED items until month is reopened
+		}
+
 		var status string
+		var hasSuggestions bool
 
 		// Deposits (positive amounts) auto-match — no expense receipt required
 		if tx.Amount > 0 {
@@ -156,11 +199,61 @@ func UpdateReconciliationStatuses() {
 					status = "MATCHED"
 				}
 			}
+
+			if status == "UNMATCHED" {
+				var count int64
+				db.DB.Model(&models.ExpenseBankTransaction{}).
+					Where("bank_transaction_id = ? AND status = ?", tx.ID, "suggested").
+					Count(&count)
+				if count > 0 {
+					hasSuggestions = true
+				}
+			}
 		}
 
-		if tx.ReconciliationStatus != status {
+		if tx.ReconciliationStatus != status || tx.HasSuggestions != hasSuggestions {
 			tx.ReconciliationStatus = status
-			db.DB.Save(&tx)
+			tx.HasSuggestions = hasSuggestions
+			db.DB.Save(tx)
+		}
+
+		if status == "MATCHED" {
+			db.DB.Where("bank_transaction_id = ? AND status = ?", tx.ID, "suggested").Delete(&models.ExpenseBankTransaction{})
+		}
+	}
+
+	var expenses []models.Expense
+	db.DB.Find(&expenses)
+	for i := range expenses {
+		exp := &expenses[i]
+
+		if exp.Status == "PENDING_CLOSED" {
+			continue
+		}
+
+		var countConfirmed, countSuggested int64
+		db.DB.Model(&models.ExpenseBankTransaction{}).
+			Where("expense_id = ? AND status = ?", exp.ID, "confirmed").Count(&countConfirmed)
+
+		db.DB.Model(&models.ExpenseBankTransaction{}).
+			Where("expense_id = ? AND status = ?", exp.ID, "suggested").Count(&countSuggested)
+
+		status := "UNMATCHED"
+		hasSuggestions := false
+		if countConfirmed > 0 {
+			status = "MATCHED"
+		} else if countSuggested > 0 {
+			hasSuggestions = true
+		}
+
+		if exp.ReconciliationStatus != status || exp.HasSuggestions != hasSuggestions {
+			exp.ReconciliationStatus = status
+			exp.HasSuggestions = hasSuggestions
+			db.DB.Save(exp)
+		}
+
+		if status == "MATCHED" {
+			db.DB.Where("expense_id = ? AND status = ?", exp.ID, "suggested").Delete(&models.ExpenseBankTransaction{})
 		}
 	}
 }

@@ -19,7 +19,7 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
     // 2. Search
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      if (!tx.description.toLowerCase().includes(q) && !Math.abs(tx.amount).toString().includes(q)) {
+      if (!tx.description.toLowerCase().includes(q) && !tx.amount.toString().includes(q)) {
         return false;
       }
     }
@@ -30,7 +30,7 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
   const sortedTransactions = [...filteredTransactions].sort((a, b) => {
     let cmp = 0;
     if (sortField === "amount") {
-      cmp = Math.abs(a.amount) - Math.abs(b.amount);
+      cmp = a.amount - b.amount;
     } else if (sortField === "description") {
       cmp = a.description.localeCompare(b.description);
     } else if (sortField === "type") {
@@ -74,7 +74,7 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
               {formatMoney(tx.amount)}
             </span>
             <div className="flex gap-2 items-center">
-              {tx.reconciliationStatus === 'UNMATCHED' && tx.suggestedExpenseId && (
+              {tx.reconciliationStatus === 'UNMATCHED' && tx.hasSuggestions && (
                 <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border bg-blue-500/10 text-blue-400 border-blue-500/20">
                   SUGGESTION FOUND
                 </span>
@@ -82,7 +82,7 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
               <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wider uppercase border ${
                 tx.reconciliationStatus === 'MATCHED'
                   ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                  : 'bg-red-500/10 text-red-400 border-red-500/20' // UNMATCHED
+                  : 'bg-red-500/10 text-red-400 border-red-500/20'
               }`}>
                 {tx.reconciliationStatus || "UNKNOWN"}
               </span>

@@ -47,11 +47,18 @@ func Connect() {
 		log.Fatal("Failed to connect to database.", err)
 	}
 
+	// Tell GORM to use the custom join table struct for both sides of the many2many.
+	// This must happen before AutoMigrate so that GORM creates the join table with
+	// the Status column rather than a plain pivot table with just the two FK columns.
+	DB.SetupJoinTable(&models.Expense{}, "BankTransactions", &models.ExpenseBankTransaction{})
+	DB.SetupJoinTable(&models.BankTransaction{}, "Expenses", &models.ExpenseBankTransaction{})
+
 	DB.AutoMigrate(
 		&models.AccountingPeriod{},
 		&models.BankStatement{},
 		&models.BankTransaction{},
 		&models.Expense{},
 		&models.Receipt{},
+		&models.ExpenseBankTransaction{},
 	)
 }

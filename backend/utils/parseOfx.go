@@ -94,14 +94,21 @@ func ParseOfx(filePath string) {
 		val, _ := tx.TrnAmt.Float64()
 		// Combine Name and Memo for a full description
 		fullDesc := string(tx.Name) + " " + string(tx.Memo)
+		statementID := bankStatement.ID // take address for the *uint nullable field
 		dbTx := models.BankTransaction{
-			BankStatementID: bankStatement.ID,
+			BankStatementID: &statementID,
 			Date:            tx.DtPosted.Time,
 			Description:     fullDesc,
 			Amount:          val,
 			TransactionType: fmt.Sprintf("%v", tx.TrnType),
 			FITID:           string(tx.FiTID),
 		}
+		reconStatus := "UNMATCHED"
+		if IsMonthClosed(dbTx.Date.Year(), int(dbTx.Date.Month())) {
+			reconStatus = "PENDING_CLOSED"
+		}
+		
+		dbTx.ReconciliationStatus = reconStatus
 		dbTransactions = append(dbTransactions, dbTx)
 
 		// ensure accounting period exists for this tx

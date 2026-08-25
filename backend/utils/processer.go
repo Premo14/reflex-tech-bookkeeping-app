@@ -52,7 +52,7 @@ func processFile(filePath string) error {
 	if !constants.IsAllowedBankStatementExt(fileExt) {
 		var existing models.Receipt
 		if err := db.DB.Where("file_hash = ?", fileHash).First(&existing).Error; err == nil {
-			// Found duplicate!
+			// Found duplicate
 			os.Remove(filePath)
 			log.Printf("Duplicate file upload detected (hash: %s). Rejected.", fileHash)
 			return nil
@@ -75,7 +75,7 @@ func processFile(filePath string) error {
 	} else { // otherwise it is a receipt
 		// Save to the Database first to get the auto-increment ID
 		receipt := models.Receipt{
-			DocumentURI: "", // placeholder
+			DocumentURI: "",
 			FileExt:     finalExt,
 			FileHash:    fileHash,
 		}
@@ -103,6 +103,7 @@ func processFile(filePath string) error {
 
 		receipt.DocumentURI = processedPath
 		db.DB.Save(&receipt)
+
 	}
 
 	log.Println("Successfully processed and saved file")

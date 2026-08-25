@@ -14,14 +14,15 @@ type Expense struct {
 	Description string    `json:"description"`
 	Amount      float64   `json:"amount"`
 	Tender      string    `json:"tender"`
+	Status      string    `gorm:"default:'OPEN'" json:"status"` // "OPEN" or "PENDING_CLOSED"
 
 	// one expense can have multiple receipts (e.g. photo and pdf)
 	Receipts []Receipt `json:"receipts"`
 
-	// A receipt can only be linked to one bank transaction
-	BankTransactionID      *uint            `json:"bankTransactionId"`
-	SuggestedTransactionID *uint            `json:"suggestedTransactionId"`
-	SuggestedTransaction   *BankTransaction `gorm:"foreignKey:SuggestedTransactionID" json:"suggestedTransaction"`
+	BankTransactions []BankTransaction `gorm:"many2many:expense_bank_transactions;" json:"bankTransactions"`
+
+	ReconciliationStatus string `json:"reconciliationStatus"`
+	HasSuggestions       bool   `json:"hasSuggestions"`
 
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -35,9 +36,9 @@ type Receipt struct {
 	ExpenseID *uint `gorm:"index" json:"expenseId"`
 
 	// File metadata
-	DocumentURI string `gorm:"not null" json:"documentUri"` // e.g. "/app/documents/processed/a3f2...png"
-	FileExt     string `gorm:"not null" json:"fileExt"`     // e.g. ".png"
-	FileHash    string `gorm:"unique" json:"fileHash"`      // SHA-256 hash to prevent duplicates
+	DocumentURI string `gorm:"not null" json:"documentUri"`
+	FileExt     string `gorm:"not null" json:"fileExt"`
+	FileHash    string `gorm:"unique" json:"fileHash"`
 
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`

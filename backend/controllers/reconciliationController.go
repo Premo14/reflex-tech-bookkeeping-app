@@ -32,7 +32,10 @@ func GetFlaggedItems(c fiber.Ctx) error {
 	var expenses []models.Expense
 	expenseQuery := db.DB.Model(&models.Expense{})
 
-	expenseQuery = expenseQuery.Where("bank_transaction_id IS NULL AND tender != 'cash'")
+	// An expense is "orphaned" if it has no confirmed row in the join table and is not cash.
+	expenseQuery = expenseQuery.
+		Where("tender != 'cash'").
+		Where("id NOT IN (?)", db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed"))
 
 	if year != "" {
 		expenseQuery = expenseQuery.Where("EXTRACT(YEAR FROM timestamp) = ?", year)
@@ -71,8 +74,38 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "expense not found"})
 	}
 
-	expenseToLink.BankTransactionID = &txToLink.ID
-	db.DB.Save(&expenseToLink)
+	if utils.IsMonthClosed(txToLink.Date.Year(), int(txToLink.Date.Month())) || utils.IsMonthClosed(expenseToLink.Timestamp.Year(), int(expenseToLink.Timestamp.Month())) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot modify links for items in a closed accounting period."})
+	}
+
+	// Constraint: an expense with multiple receipt files may only link to one transaction.
+	// Allowing more would create a many-receipts ↔ many-transactions web, which we explicitly prevent.
+	var receiptCount int64
+	db.DB.Model(&models.Receipt{}).Where("expense_id = ?", req.ExpenseID).Count(&receiptCount)
+	if receiptCount > 1 {
+		var confirmedLinkCount int64
+		db.DB.Model(&models.ExpenseBankTransaction{}).
+			Where("expense_id = ? AND status = ?", req.ExpenseID, "confirmed").
+			Count(&confirmedLinkCount)
+		if confirmedLinkCount >= 1 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "this expense has multiple receipt files and is already linked to a transaction — split-payment links are only allowed for single-receipt expenses",
+			})
+		}
+	}
+
+	// Delete any existing row for this pair first (could be a prior "suggested" entry)
+	// to avoid hitting the composite primary key constraint on the insert below.
+	db.DB.Where("expense_id = ? AND bank_transaction_id = ?", req.ExpenseID, req.TransactionID).
+		Delete(&models.ExpenseBankTransaction{})
+
+	// Create the confirmed link in the join table.
+	// Previously this set expense.BankTransactionID — that field no longer exists.
+	db.DB.Create(&models.ExpenseBankTransaction{
+		ExpenseID:         req.ExpenseID,
+		BankTransactionID: req.TransactionID,
+		Status:            "confirmed",
+	})
 
 	utils.UpdateReconciliationStatuses()
 
@@ -81,10 +114,13 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 	})
 }
 
-// UnlinkExpense unlinks an Expense from a BankTransaction
+// UnlinkExpense removes a specific confirmed link between an Expense and a BankTransaction
 func UnlinkExpense(c fiber.Ctx) error {
 	type UnlinkRequest struct {
 		ExpenseID uint `json:"expenseId"`
+		// TransactionID is required because an expense can be linked to multiple
+		// transactions (split payments), so we need to know which specific link to remove.
+		TransactionID uint `json:"transactionId"`
 	}
 
 	var req UnlinkRequest
@@ -92,13 +128,27 @@ func UnlinkExpense(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid payload"})
 	}
 
-	var expenseToUnlink models.Expense
-	if err := db.DB.Where("id = ?", req.ExpenseID).First(&expenseToUnlink).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "expense not found"})
+	var tx models.BankTransaction
+	if err := db.DB.First(&tx, req.TransactionID).Error; err == nil {
+		if utils.IsMonthClosed(tx.Date.Year(), int(tx.Date.Month())) {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot unlink items in a closed accounting period."})
+		}
 	}
 
-	expenseToUnlink.BankTransactionID = nil
-	db.DB.Save(&expenseToUnlink)
+	var exp models.Expense
+	if err := db.DB.First(&exp, req.ExpenseID).Error; err == nil {
+		if utils.IsMonthClosed(exp.Timestamp.Year(), int(exp.Timestamp.Month())) {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot unlink items in a closed accounting period."})
+		}
+	}
+
+	// Delete the specific join row for this expense+transaction pair.
+	result := db.DB.Where("expense_id = ? AND bank_transaction_id = ?", req.ExpenseID, req.TransactionID).
+		Delete(&models.ExpenseBankTransaction{})
+
+	if result.RowsAffected == 0 {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "link not found"})
+	}
 
 	utils.UpdateReconciliationStatuses()
 
@@ -121,6 +171,10 @@ func MarkExpenseAsCash(c fiber.Ctx) error {
 		})
 	}
 
+	if utils.IsMonthClosed(expense.Timestamp.Year(), int(expense.Timestamp.Month())) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot modify an expense in a closed accounting period."})
+	}
+
 	expense.Tender = "cash"
 	db.DB.Save(&expense)
 
@@ -138,7 +192,9 @@ func GetUnlinkedItems(c fiber.Ctx) error {
 		Find(&txs)
 
 	var expenses []models.Expense
-	db.DB.Where("bank_transaction_id IS NULL AND tender != 'cash'").
+	// Same join-table approach as GetFlaggedItems — no confirmed link and not cash.
+	db.DB.Where("tender != 'cash'").
+		Where("id NOT IN (?)", db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed")).
 		Order("timestamp DESC").
 		Preload("Receipts").
 		Find(&expenses)
@@ -149,4 +205,3 @@ func GetUnlinkedItems(c fiber.Ctx) error {
 		"expenses":     expenses,
 	})
 }
-

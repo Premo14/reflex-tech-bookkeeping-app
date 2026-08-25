@@ -30,14 +30,21 @@ func SetupRoutes(app *fiber.App) {
 
 	// Month Close
 	api.Get("/accounting-periods", controllers.GetAccountingPeriods)
+	api.Post("/accounting-periods", controllers.CreateAccountingPeriod)
 	api.Post("/accounting-periods/close", controllers.CloseAccountingPeriod)
+	api.Post("/accounting-periods/reopen", controllers.ReopenAccountingPeriod)
+	
+	api.Get("/pending-closed-items", controllers.GetPendingClosedItems)
 
 	// General Browsing
 	api.Get("/transactions", controllers.GetTransactions)
+	api.Post("/transactions", controllers.CreateTransaction) // manual entry
 	api.Get("/transactions/:id", controllers.GetTransaction)
 	api.Patch("/transactions/:id", controllers.UpdateTransaction)
 	api.Delete("/transactions/:id", controllers.DeleteTransaction)
 
+	api.Get("/expenses", controllers.GetExpenses) // fetch all expenses for ledger
+	api.Post("/expenses", controllers.CreateExpense) // manual entry
 	api.Get("/expenses/:id", controllers.GetExpense)
 	api.Patch("/expenses/:id", controllers.UpdateExpense)
 	api.Delete("/expenses/:id", controllers.DeleteExpense)

@@ -1,4 +1,4 @@
-import type { AccountingPeriod, BankTransaction, CloseAccountingPeriodResponse, FileUploadResponse, FlaggedItems, FlaggedItemsFilters, LinkExpenseResponse, MarkExpenseAsCashResponse, TransactionFilters, Expense } from "../types/models";
+import type { AccountingPeriod, BankTransaction, CloseAccountingPeriodResponse, CreateExpenseInput, CreateTransactionInput, ExpenseDetailResponse, FileUploadResponse, FlaggedItems, FlaggedItemsFilters, LinkExpenseResponse, MarkExpenseAsCashResponse, TransactionDetailResponse, TransactionFilters, Expense } from "../types/models";
 
 const API_BASE = "http://localhost:8080/api";
 
@@ -17,6 +17,22 @@ export async function getAccountingPeriods(): Promise<AccountingPeriod[]> {
   return data.accountPeriods || []
 }
 
+export async function createAccountingPeriod(year: number, month: number): Promise<AccountingPeriod> {
+  const res = await fetch(`${API_BASE}/accounting-periods`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ year, month })
+  })
+
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || errData.conflict || `Response status: ${res.status}`)
+  }
+
+  const data = await res.json()
+  return data.period
+}
+
 export async function closeAccountingPeriod(periodId: number): Promise<CloseAccountingPeriodResponse> {
   const res = await  fetch(`${API_BASE}/accounting-periods/close`, {
     method: "POST",
@@ -27,9 +43,29 @@ export async function closeAccountingPeriod(periodId: number): Promise<CloseAcco
   })
 
   if (!res.ok) {
-    throw new Error(`Response status: ${res.status}`)
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.conflict || errData.error || `Response status: ${res.status}`);
   }
 
+  return res.json()
+}
+
+export async function reopenAccountingPeriod(year: number, month: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/accounting-periods/reopen`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ year, month })
+  })
+
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || `Response status: ${res.status}`)
+  }
+}
+
+export async function getPendingClosedItems(): Promise<{ transactions: BankTransaction[], expenses: Expense[] }> {
+  const res = await fetch(`${API_BASE}/pending-closed-items`)
+  if (!res.ok) throw new Error(`Response status: ${res.status}`)
   return res.json()
 }
 
@@ -37,34 +73,28 @@ export async function closeAccountingPeriod(periodId: number): Promise<CloseAcco
 // transactions & expenses
 // ---------------------------------------------------------
 
-export async function getTransactions(
-  filters: TransactionFilters = {}
-): Promise<BankTransaction[]> {
-  const params = new URLSearchParams()
+export async function getTransactions(filters: TransactionFilters = {}): Promise<BankTransaction[]> {
+  const query = new URLSearchParams()
+  if (filters.year) query.append('year', filters.year.toString())
+  if (filters.month) query.append('month', filters.month.toString())
+  if (filters.search) query.append('search', filters.search)
 
-  if (filters.year !== undefined) {
-    params.set("year", filters.year.toString())
-  }
-
-  if (filters.month !== undefined) {
-    params.set("month", filters.month.toString())
-  }
-
-  if (filters.search !== undefined) {
-    params.set("search", filters.search)
-  }
-
-  const url = params
-    ? `${API_BASE}/transactions?${params}`
-    : `${API_BASE}/transactions`
-
-  const res = await fetch(url)
-  if (!res.ok) {
-    throw new Error(`Response status: ${res.status}`)
-  }
-
+  const res = await fetch(`${API_BASE}/transactions?${query.toString()}`)
+  if (!res.ok) throw new Error(`Response status: ${res.status}`)
   const data = await res.json()
   return data.transactions || []
+}
+
+export async function getExpenses(filters: TransactionFilters = {}): Promise<Expense[]> {
+  const query = new URLSearchParams()
+  if (filters.year) query.append('year', filters.year.toString())
+  if (filters.month) query.append('month', filters.month.toString())
+  if (filters.search) query.append('search', filters.search)
+
+  const res = await fetch(`${API_BASE}/expenses?${query.toString()}`)
+  if (!res.ok) throw new Error(`Response status: ${res.status}`)
+  const data = await res.json()
+  return data.expenses || []
 }
 
 // ---------------------------------------------------------
@@ -113,13 +143,15 @@ export async function linkExpenseToTransaction(expenseId: number, transactionId:
   return res.json()
 }
 
-export async function unlinkExpenseFromTransaction(expenseId: number): Promise<void> {
+export async function unlinkExpenseFromTransaction(expenseId: number, transactionId: number): Promise<void> {
   const res = await fetch(`${API_BASE}/reconciliation/unlink`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({expenseId})
+    // transactionId is required — an expense can link to multiple transactions
+    // (split payments), so the backend needs to know which specific link to remove.
+    body: JSON.stringify({ expenseId, transactionId })
   })
 
   if (!res.ok) {
@@ -197,6 +229,59 @@ export async function getUnlinkedItems(): Promise<{ transactions: BankTransactio
   if (!res.ok) throw new Error(`Response status: ${res.status}`)
   return res.json()
 }
+
+// Returns confirmed and suggested expense links separately for the details view.
+export async function getTransactionDetail(id: number): Promise<TransactionDetailResponse> {
+  const res = await fetch(`${API_BASE}/transactions/${id}`)
+  if (!res.ok) throw new Error(`Response status: ${res.status}`)
+  const data = await res.json()
+  return {
+    transaction: data.transaction,
+    confirmedExpenses: data.confirmedExpenses || [],
+    suggestedExpenses: data.suggestedExpenses || [],
+  }
+}
+
+// Returns confirmed and suggested transaction links separately for the details view.
+export async function getExpenseDetail(id: number): Promise<ExpenseDetailResponse> {
+  const res = await fetch(`${API_BASE}/expenses/${id}`)
+  if (!res.ok) throw new Error(`Response status: ${res.status}`)
+  const data = await res.json()
+  return {
+    expense: data.expense,
+    confirmedTransactions: data.confirmedTransactions || [],
+    suggestedTransactions: data.suggestedTransactions || [],
+  }
+}
+
+export async function createExpense(input: CreateExpenseInput): Promise<Expense> {
+  const res = await fetch(`${API_BASE}/expenses`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || `Response status: ${res.status}`)
+  }
+  const data = await res.json()
+  return data.expense
+}
+
+export async function createTransaction(input: CreateTransactionInput): Promise<BankTransaction> {
+  const res = await fetch(`${API_BASE}/transactions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || `Response status: ${res.status}`)
+  }
+  const data = await res.json()
+  return data.transaction
+}
+
 
 // ---------------------------------------------------------
 // file uploads

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflex-tech-bookkeeping-app-api/constants"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,18 @@ var (
 	timers = make(map[string]*time.Timer)
 	mu     sync.Mutex // Mutex ensures the map is safe for concurrent access
 )
+
+// isIgnoredFile returns true if the file is a Syncthing temporary file or metadata file.
+func isIgnoredFile(filename string) bool {
+	base := filepath.Base(filename)
+	if strings.HasPrefix(base, ".syncthing.") {
+		return true
+	}
+	if strings.HasPrefix(base, ".st") {
+		return true
+	}
+	return false
+}
 
 // debounceEvent delays processing until a file is fully written to disk.
 // it resets the timer on every write event.
@@ -69,7 +82,9 @@ func Watcher() error {
 				// We only care if a file was newly created or written to.
 				// (We ignore things like fsnotify.Remove or fsnotify.Chmod)
 				if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
-					debouceEvent(event.Name, 2*time.Second)
+					if !isIgnoredFile(event.Name) {
+						debouceEvent(event.Name, 2*time.Second)
+					}
 				}
 
 			// 2. If we receive a message on the watcher.Errors channel:
@@ -111,6 +126,9 @@ func ProcessExistingFiles(inboxPath string) error {
 	}
 
 	for _, content := range contents {
+		if content.IsDir() || isIgnoredFile(content.Name()) {
+			continue
+		}
 		if err := processFile(filepath.Join(inboxPath, content.Name())); err != nil {
 			log.Println("Error processing existing file:", err)
 		}

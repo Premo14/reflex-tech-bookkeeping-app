@@ -1,62 +1,48 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import type { BankTransaction, Expense } from "../types/models";
+import type { Expense } from "../types/models";
 
 interface ReceiptListProps {
-  transactions: BankTransaction[];
-  orphanedExpenses: Expense[];
+  expenses: Expense[];
   filter: string; // "ALL", "LINKED", "UNLINKED"
   searchQuery: string;
   sortField: string;
   sortOrder: "asc" | "desc";
 }
 
-export default function ReceiptList({ transactions, orphanedExpenses, filter, searchQuery, sortField, sortOrder }: ReceiptListProps) {
+export default function ReceiptList({ expenses, filter, searchQuery, sortField, sortOrder }: ReceiptListProps) {
 
-  // flatten expenses to find linked ones
   const allReceipts = useMemo(() => {
     
-    // 1. Get all linked expenses
-    const linked = transactions.flatMap(tx => 
-      (tx.expenses || []).map((exp: Expense) => ({
-        ...exp,
-        isLinked: true,
-        linkedTxDesc: tx.description
-      }))
-    );
-
-    // 2. Format unlinked expenses to match the shape
-    const unlinked = orphanedExpenses.map(exp => ({
+    // Map expenses to include isLinked helper
+    let combined = expenses.map(exp => ({
       ...exp,
-      isLinked: false,
-      linkedTxDesc: null
+      isLinked: exp.reconciliationStatus === "MATCHED",
+      linkedTxDesc: exp.bankTransactions && exp.bankTransactions.length > 0 ? exp.bankTransactions[0].description : null
     }));
-
-    // 3. Combine and filter
-    let combined = [...linked, ...unlinked];
     
-    // 3a. Status Filter
+    // Status Filter
     if (filter === "LINKED") {
       combined = combined.filter(exp => exp.isLinked);
     } else if (filter === "UNLINKED") {
       combined = combined.filter(exp => !exp.isLinked);
     }
 
-    // 3b. Search Filter
+    // Search Filter
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       combined = combined.filter(exp => 
         (exp.vendor?.toLowerCase() || "").includes(q) ||
         (exp.description?.toLowerCase() || "").includes(q) ||
-        Math.abs(exp.amount).toString().includes(q)
+        exp.amount.toString().includes(q)
       );
     }
 
-    // 4. Sort locally
+    // Sort locally
     return combined.sort((a, b) => {
       let cmp = 0;
       if (sortField === "amount") {
-        cmp = Math.abs(a.amount) - Math.abs(b.amount);
+        cmp = a.amount - b.amount;
       } else if (sortField === "description") {
         const nameA = a.vendor || a.description || "";
         const nameB = b.vendor || b.description || "";
@@ -67,7 +53,7 @@ export default function ReceiptList({ transactions, orphanedExpenses, filter, se
       return sortOrder === "asc" ? cmp : -cmp;
     });
 
-  }, [transactions, orphanedExpenses, filter, searchQuery, sortField, sortOrder]);
+  }, [expenses, filter, searchQuery, sortField, sortOrder]);
 
   if (allReceipts.length === 0) {
     return (
@@ -114,17 +100,18 @@ export default function ReceiptList({ transactions, orphanedExpenses, filter, se
               {formatMoney(receipt.amount)}
             </span>
             <div className="flex gap-2 items-center">
-              {!receipt.isLinked && receipt.suggestedTransactionId && (
+
+              {receipt.reconciliationStatus === 'UNMATCHED' && receipt.hasSuggestions && (
                 <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border bg-blue-500/10 text-blue-400 border-blue-500/20">
                   SUGGESTION FOUND
                 </span>
               )}
               <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wider uppercase border ${
-                receipt.isLinked
+                receipt.reconciliationStatus === 'MATCHED'
                   ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
                   : 'bg-zinc-800/50 text-zinc-400 border-zinc-700'
               }`}>
-                {receipt.isLinked ? "LINKED" : "UNLINKED"}
+                {receipt.reconciliationStatus === 'MATCHED' ? "LINKED" : "UNLINKED"}
               </span>
             </div>
           </div>

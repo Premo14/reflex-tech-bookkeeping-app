@@ -12,8 +12,8 @@ type BankStatement struct {
 	FileExt     string `gorm:"not null" json:"fileExt"`     // ".ofx" or ".qfx"
 
 	// Metadata about the statement itself
-	AccountID string    `json:"accountId"` // e.g. "50106954S:05"
-	BankID    string    `json:"bankId"`    // e.g. "221376539"
+	AccountID string    `json:"accountId"`
+	BankID    string    `json:"bankId"`
 	StartDate time.Time `json:"startDate"`
 	EndDate   time.Time `json:"endDate"`
 	// A statement contains many transactions
@@ -25,8 +25,9 @@ type BankStatement struct {
 
 // BankTransaction represents each transaction line of the bank statement
 type BankTransaction struct {
-	ID              uint `gorm:"primaryKey;autoIncrement" json:"id"`
-	BankStatementID uint `gorm:"index;not null" json:"bankStatementId"`
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	// Nullable so manually created transactions don't need to belong to an imported statement.
+	BankStatementID *uint `gorm:"index" json:"bankStatementId"`
 
 	// The actual transaction data
 	Date            time.Time `gorm:"not null;index" json:"date"`
@@ -38,10 +39,10 @@ type BankTransaction struct {
 	// make it unique to avoid duplicate imports
 	FITID string `gorm:"unique;not null" json:"fitId"`
 
-	Expenses             []Expense `gorm:"foreignKey:BankTransactionID" json:"expenses"`
-	ReconciliationStatus string    `json:"reconciliationStatus"`
-	SuggestedExpenseID   *uint     `json:"suggestedExpenseId"`
-	SuggestedExpense     *Expense  `gorm:"foreignKey:SuggestedExpenseID;constraint:-" json:"suggestedExpense"`
+	Expenses []Expense `gorm:"many2many:expense_bank_transactions;" json:"expenses"`
+
+	ReconciliationStatus string `json:"reconciliationStatus"`
+	HasSuggestions       bool   `json:"hasSuggestions"`
 
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`

@@ -15,6 +15,7 @@ import (
 func main() {
 
 	db.Connect()
+	utils.UpdateReconciliationStatuses()
 
 	if err := utils.CreateDirsIfNotExists(); err != nil {
 		log.Fatal("Failed to create watched \"inbox/\" and \"processed/\" folders:", err)

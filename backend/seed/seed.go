@@ -18,7 +18,7 @@ func main() {
 	db.Connect()
 
 	log.Println("Wiping database tables...")
-	if err := db.DB.Exec("TRUNCATE TABLE accounting_periods, expenses, receipts, bank_statements, bank_transactions CASCADE;").Error; err != nil {
+	if err := db.DB.Exec("TRUNCATE TABLE accounting_periods, expenses, receipts, bank_statements, bank_transactions, expense_bank_transactions CASCADE;").Error; err != nil {
 		log.Fatalf("Failed to truncate tables: %v", err)
 	}
 
