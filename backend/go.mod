@@ -1,6 +1,6 @@
 module reflex-tech-bookkeeping-app-api
 
-go 1.26.5
+go 1.27
 
 require (
 	github.com/adrium/goheif v0.0.0-20230113233934-ca402e77a786
