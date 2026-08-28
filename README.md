@@ -1,66 +1,103 @@
-# reflex-tech-bookkeeping-app
-Bookkeeping project for Reflex Technologies
+# Reflex Tech Bookkeeping App
 
-## Overview
-A single-entry bookkeeping system designed to minimize manual data entry. It ingests raw receipts and bank statements, extracts structured data, reconciles the two datasets automatically, and presents the results through a clean web interface. The primary goal is to fully automate the reconciliation process for monthly accounting periods.
+A single-entry bookkeeping system designed to minimize manual data entry. The application ingests raw receipts and bank statements, extracts structured data via a local AI pipeline, autonomously reconciles the two datasets, and presents the results through a web interface.
 
-## How to Run
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Backend API | Go, Fiber v3, GORM |
+| File Processor | Go, fasthttp |
+| Database | PostgreSQL |
+| Frontend | React, TypeScript, Tailwind CSS, Vite |
+| Containerization | Docker, Docker Compose |
+
+---
+
+## Dependencies
+
+### Backend
+- **[Fiber v3](https://github.com/gofiber/fiber)** — HTTP web framework
+- **[GORM](https://gorm.io/)** — ORM for PostgreSQL
+- **[goheif](https://github.com/adrium/goheif)** — Decodes iPhone `.heic` images to `.png`
+- **[ofxgo](https://github.com/aclindsa/ofxgo)** — Parses `.ofx` and `.qfx` bank statement files
+- **[fsnotify](https://github.com/fsnotify/fsnotify)** — File system watcher for the inbox
+
+### File Processor
+- **[fasthttp](https://github.com/valyala/fasthttp)** — High-performance HTTP server and client
+- **[Tesseract OCR](https://github.com/tesseract-ocr/tesseract)** — CPU-based OCR engine for extracting text from receipt images and PDFs
+- **[Poppler Utils](https://poppler.freedesktop.org/)** — PDF-to-image conversion via `pdftoppm`
+- **[Ollama](https://ollama.com/)** — Local LLM runtime serving `llama3.1:8b`
+- **[llama3.1:8b](https://ollama.com/library/llama3.1)** — Text-only language model used to structure raw OCR output into typed JSON
+
+### Frontend
+- **[React](https://react.dev/)** — UI framework
+- **[React Router](https://reactrouter.com/)** — Client-side routing
+- **[Tailwind CSS](https://tailwindcss.com/)** — Utility-first CSS framework
+
+---
+
+## Running the Application
 
 ### Prerequisites
-- [Docker & Docker Compose](https://docs.docker.com/get-docker/) installed.
-- (Optional for development) [Node.js](https://nodejs.org/) & [Go](https://go.dev/) installed.
+- Docker & Docker Compose
+- Go 1.21+
+- Ollama with `llama3.1:8b` pulled (`ollama pull llama3.1:8b`)
+- Tesseract OCR (`sudo apt-get install tesseract-ocr`)
+- Poppler Utils (`sudo apt-get install poppler-utils`)
 
-### Running the App
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   cd reflex-tech-bookkeeping-app
-   ```
+### Start the Docker Services
+```bash
+docker compose up -d
+```
 
-2. Start the services using Docker:
-   ```bash
-   docker compose up -d
-   ```
+### Start the File Processor
+```bash
+cd file-processor
+go run main.go
+```
 
-3. Access the application:
-   - **Frontend UI:** [http://localhost:5173](http://localhost:5173)
-   - **Backend API:** [http://localhost:8080](http://localhost:8080)
+### Service Endpoints
 
-## Tech Stack & Key Dependencies
-- **Backend:** Go, Fiber (API Framework), GORM (ORM)
-- **Database:** PostgreSQL
-- **Frontend:** React, TypeScript, Tailwind CSS, React Router, Vite
-- **Key Libraries:**
-  - `goheif`: Natively decodes iPhone `.heic` images into standard `.png` formats for browser compatibility.
-  - `parseOfx`: Idempotently parses Open Financial Exchange (`.ofx`) & Intuit's version of OFX (`.qfx`) bank statements.
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:5173 |
+| Backend API | http://localhost:8080 |
+| File Processor | http://localhost:8081 |
 
-## Birds Eye View
-1. **File Ingestion:** Users drop receipt files or `.ofx/.qfx` bank statements into an inbox folder (via UI upload or local folder syncing).
-2. **File Processing Pipeline:** A background watcher debounces rapid OS write events, verifies extensions, handles HEIC image conversions, and hashes files to prevent duplicate uploads.
-3. **AI Image Processing (The Current Hole):** *Currently, the AI extraction from receipt images to structured data is mocked. This is the main missing piece.* Once implemented, it will read a physical receipt and extract the Vendor, Amount, Date, and Tender type.
-4. **Bank Parsing:** Open Financial Exchange (`.ofx/.qfx`) files are parsed into database bank transactions. The system automatically ignores duplicates using the bank's unique `FITID`.
-5. **Reconciliation Engine:** A multi-pass algorithm attempts to autonomously link extracted expenses (receipts) to bank transactions.
-6. **Accounting Periods:** The app dynamically manages open/closed accounting periods, strictly preventing the closing of a month if there are unresolved orphaned expenses or unmatched transactions.
+---
 
-## Business-Level Logic: The Scoring System & Reconciliation
-The core matching engine runs autonomously in three main passes to link expenses to transactions:
+## How It Works
 
-- **Pass 1: The Scoring System (Direct Matches)**
-  The app calculates a match score for each expense against available bank transactions:
-  - **Amount:** Exact match = +50 points
-  - **Date Window:** Same day = +30 points, 1 day apart = +20 points, 2-4 days apart = +10 points
-  - **String Similarity:** Extracted vendor name found in bank transaction description = +20 points
-  - **Outcome:** A score of `80+` results in an automatic hard link. A score `> 0` results in a soft link (Suggested Match) for the user to approve manually in the UI.
+### 1. File Ingestion
+Receipt files (`.png`, `.jpg`, `.jpeg`, `.heic`, `.pdf`) and bank statements (`.ofx`, `.qfx`) are dropped into an inbox folder via the UI upload or by mapping the SMB share to a local network scanner.
 
-- **Pass 2: Split Transactions (Subset-Sum Algorithm)**
-  If there are remaining unmatched bank transactions, the app uses a recursive subset-sum algorithm. It finds specific combinations of multiple split receipts on the same day that add up perfectly to the target bank transaction amount.
+### 2. File Processing Pipeline
+A background file watcher monitors the inbox. On each new file event, it debounces rapid OS write bursts, validates the file extension, generates a SHA-256 hash to reject duplicates, converts `.heic` images to `.png`, and moves the file to a `processed/` directory. A database record is created for each receipt.
 
-- **Pass 3: Status Flags**
-  Finally, the system verifies that the sum of all attached expenses equals the bank transaction amount, marking it as `MATCHED` or `UNMATCHED`.
+### 3. AI Extraction Pipeline
+Once a receipt is saved, it is forwarded to the File Processor service on port `8081`. For PDFs, `pdftoppm` converts each page to a PNG image. Tesseract OCR runs sequentially on each page image and the extracted text is concatenated into a single string. That string is sent to `llama3.1:8b` via Ollama, which returns a structured `Expense` JSON object. The expense is saved to the database and linked to the receipt.
 
-## Database Management & Mocking
-Since the AI processing step is currently skipped, you can seed the database with mock expenses to test the reconciliation engine:
+### 4. Bank Statement Parsing
+`.ofx` and `.qfx` files are parsed into `BankTransaction` records. Duplicate transactions are automatically rejected using the bank-issued `FITID` unique identifier.
+
+### 5. Reconciliation Engine
+A multi-pass algorithm autonomously attempts to link expenses to bank transactions:
+
+- **Pass 1 — Scoring (Direct Matches):** Each expense is scored against available transactions. Points are awarded for an exact amount match (+50), date proximity (+10 to +30), and vendor name similarity (+20). Scores of 80+ are auto-linked. Scores above 0 are flagged as suggested matches for manual review.
+- **Pass 2 — Split Transactions:** A recursive subset-sum algorithm identifies combinations of multiple expenses on the same day that sum to an unmatched transaction amount.
+- **Pass 3 — Status Flags:** Each transaction is marked `MATCHED` or `UNMATCHED` based on whether the sum of its linked expenses equals its total amount.
+
+### 6. Accounting Periods
+The app manages open and closed accounting periods. A period cannot be closed if unresolved orphaned expenses or unmatched transactions remain.
+
+---
+
+## Database Seeding
+To populate the database with mock expenses for isolated testing of the reconciliation engine:
 ```bash
 docker exec -it backend sh -c "cd seed && go run seed.go"
 ```
-*Note: This command truncates all existing data and re-seeds it from scratch.*
+> **Warning:** This truncates all existing data before re-seeding.
