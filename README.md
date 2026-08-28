@@ -92,12 +92,3 @@ A multi-pass algorithm autonomously attempts to link expenses to bank transactio
 
 ### 6. Accounting Periods
 The app manages open and closed accounting periods. A period cannot be closed if unresolved orphaned expenses or unmatched transactions remain.
-
----
-
-## Database Seeding
-To populate the database with mock expenses for isolated testing of the reconciliation engine:
-```bash
-docker exec -it backend sh -c "cd seed && go run seed.go"
-```
-> **Warning:** This truncates all existing data before re-seeding.
