@@ -1,6 +1,6 @@
 # Reflex Tech Bookkeeping App
 
-A single-entry bookkeeping system designed to minimize manual data entry. The application ingests raw receipts and bank statements, extracts structured data via a local AI pipeline, autonomously reconciles the two datasets, and presents the results through a web interface.
+A single-entry bookkeeping system designed to minimize manual data entry. The application ingests raw receipts and bank statements, extracts structured data via a local AI pipeline, reconciles the two datasets, and presents the results through a web interface.
 
 ---
 
