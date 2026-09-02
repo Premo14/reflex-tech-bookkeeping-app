@@ -21,7 +21,7 @@ A single-entry bookkeeping system designed to eliminate manual data entry. The a
 
 ### Step 1 — Getting Files Into the App
 
-Files enter the system through **three ingestion paths**:
+Files enter the system through **four ingestion paths**:
 
 **A. Web UI Upload**
 Users upload receipt images or bank statement files directly through the browser. The frontend sends the file to the backend API (`POST /upload`), which saves it into the `document-data/inbox/` folder.
@@ -31,6 +31,9 @@ A Samba container exposes the same `document-data/inbox/` folder as a network sh
 
 **C. Direct File System Drop**
 Because the backend continuously monitors the folder, users or automated scripts running on the host machine can simply move or copy files directly into the `document-data/inbox/` directory.
+
+**D. Syncthing & Synctrain (Mobile Sync)**
+Users can use Syncthing and Synctrain to automatically sync receipt photos taken on their mobile devices directly to the `document-data/inbox/` folder on the server.
 
 ---
 
