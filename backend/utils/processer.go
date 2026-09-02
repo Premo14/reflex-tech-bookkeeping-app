@@ -109,9 +109,9 @@ func processFile(filePath string) error {
 
 		err := sendReceiptToScript(processedPath, &receipt)
 		if err != nil {
-			log.Println("❌ Failed to send receipt to remote server:", err)
+			log.Println("Failed to send receipt to remote server:", err)
 		} else {
-			log.Println("✅ Successfully processed and sent receipt to remote server")
+			log.Println("Successfully processed and sent receipt to remote server")
 		}
 
 	}
@@ -121,10 +121,6 @@ func processFile(filePath string) error {
 
 /*
 sends the file path of the saved receipt to a CI/CD pipeline
-that sends the file to tesseract for image processing. once
-tesseract sends data back, that data is sent to llama3.1:8b,
-a text-based AI model that will send back structured JSON in
-form of an Expense{} struct.
 */
 func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 	scriptUrl := "http://100.82.63.108:8081/process"
@@ -141,9 +137,9 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 
 	// Create a form file field named "document"
 	formFile := client.AcquireFile(func(f *client.File) {
-		f.SetFieldName("document")              // form field name expected by the server
-		f.SetName(filepath.Base(filePath))      // filename sent to server
-		f.SetReader(file)                       // reading from the os.Open file
+		f.SetFieldName("document")         // form field name expected by the server
+		f.SetName(filepath.Base(filePath)) // filename sent to server
+		f.SetReader(file)                  // reading from the os.Open file
 	})
 	defer client.ReleaseFile(formFile)
 
@@ -184,7 +180,7 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 	amountStr := fmt.Sprintf("%v", raw.Amount)
 	amountStr = strings.TrimPrefix(amountStr, "$")
 	amountStr = strings.ReplaceAll(amountStr, ",", "")
-	
+
 	var finalAmount float64
 	fmt.Sscanf(amountStr, "%f", &finalAmount)
 
@@ -200,7 +196,7 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 
 	// Save the brand new Expense to your Postgres database
 	if err := db.DB.Create(&newExpense).Error; err != nil {
-		log.Println("❌ Failed to save expense to DB:", err)
+		log.Println("Failed to save expense to DB:", err)
 		return err
 	}
 
@@ -211,7 +207,7 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 	receipt.ExpenseID = &newExpense.ID
 	db.DB.Save(receipt)
 
-	log.Printf("🧾 Successfully extracted & saved Expense: Vendor='%s', Amount=%.2f\n", newExpense.Vendor, newExpense.Amount)
+	log.Printf(" Successfully extracted & saved Expense: Vendor='%s', Amount=%.2f\n", newExpense.Vendor, newExpense.Amount)
 
 	return nil
 }
