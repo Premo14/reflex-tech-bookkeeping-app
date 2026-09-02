@@ -107,11 +107,15 @@ func processFile(filePath string) error {
 		receipt.DocumentURI = processedPath
 		db.DB.Save(&receipt)
 
-		sendReceiptToScript(processedPath, &receipt)
+		err := sendReceiptToScript(processedPath, &receipt)
+		if err != nil {
+			log.Println("❌ Failed to send receipt to remote server:", err)
+		} else {
+			log.Println("✅ Successfully processed and sent receipt to remote server")
+		}
 
 	}
 
-	log.Println("Successfully processed and saved file")
 	return nil
 }
 
@@ -123,7 +127,7 @@ a text-based AI model that will send back structured JSON in
 form of an Expense{} struct.
 */
 func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
-	scriptUrl := "http://localhost:8081/process"
+	scriptUrl := "http://100.82.63.108:8081/process"
 
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -137,8 +141,8 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 
 	// Create a form file field named "document"
 	formFile := client.AcquireFile(func(f *client.File) {
-		f.SetName("document")                   // form field name
-		f.SetFieldName(filepath.Base(filePath)) // filename sent to server
+		f.SetFieldName("document")              // form field name expected by the server
+		f.SetName(filepath.Base(filePath))      // filename sent to server
 		f.SetReader(file)                       // reading from the os.Open file
 	})
 	defer client.ReleaseFile(formFile)
@@ -152,23 +156,62 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 		return err
 	}
 
-	// Unmarshal the JSON response into a new Expense struct
-	var newExpense models.Expense
-	err = json.Unmarshal(resp.Body(), &newExpense)
-	if err != nil {
-		return err
+	if resp.StatusCode() != 200 {
+		return fmt.Errorf("AI script failed with status %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 
-	if resp.StatusCode() != 200 {
-		return fmt.Errorf("AI script failed with status: %d", resp.StatusCode())
+	// Read the response body and strip any markdown backticks that the LLM might have added
+	rawBody := string(resp.Body())
+	rawBody = strings.TrimPrefix(strings.TrimSpace(rawBody), "```json")
+	rawBody = strings.TrimPrefix(strings.TrimSpace(rawBody), "```")
+	rawBody = strings.TrimSuffix(strings.TrimSpace(rawBody), "```")
+	rawBody = strings.TrimSpace(rawBody)
+
+	// Unmarshal the JSON response into an intermediate struct
+	var raw struct {
+		Timestamp   string      `json:"timestamp"`
+		Vendor      string      `json:"vendor"`
+		Description string      `json:"description"`
+		Amount      interface{} `json:"amount"`
+		Tender      string      `json:"tender"`
+	}
+	err = json.Unmarshal([]byte(rawBody), &raw)
+	if err != nil {
+		return fmt.Errorf("failed to parse JSON from AI: %w", err)
+	}
+
+	// Clean the amount in case it came back as "$181.13" or "181.13"
+	amountStr := fmt.Sprintf("%v", raw.Amount)
+	amountStr = strings.TrimPrefix(amountStr, "$")
+	amountStr = strings.ReplaceAll(amountStr, ",", "")
+	
+	var finalAmount float64
+	fmt.Sscanf(amountStr, "%f", &finalAmount)
+
+	parsedTime, _ := time.Parse(time.RFC3339, raw.Timestamp)
+
+	newExpense := models.Expense{
+		Timestamp:   parsedTime,
+		Vendor:      raw.Vendor,
+		Description: raw.Description,
+		Amount:      finalAmount,
+		Tender:      raw.Tender,
 	}
 
 	// Save the brand new Expense to your Postgres database
-	db.DB.Create(&newExpense)
+	if err := db.DB.Create(&newExpense).Error; err != nil {
+		log.Println("❌ Failed to save expense to DB:", err)
+		return err
+	}
+
+	// Ensure an accounting period exists for this expense's date
+	GetOrCreateAccountingPeriod(newExpense.Timestamp)
 
 	// Link the Receipt just uploaded to this new Expense
 	receipt.ExpenseID = &newExpense.ID
 	db.DB.Save(receipt)
+
+	log.Printf("🧾 Successfully extracted & saved Expense: Vendor='%s', Amount=%.2f\n", newExpense.Vendor, newExpense.Amount)
 
 	return nil
 }

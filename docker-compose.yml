@@ -45,17 +45,17 @@ services:
     container_name: scanner-smb
     image: dperson/samba
     environment:
-      - USERID=1000 # Matches the backend user so file permissions align
-      - GROUPID=1000
+      - USERID=999 # Free up 1000 for the scanner user
+      - GROUPID=999
     ports:
       - "139:139"
       - "445:445"
     volumes:
       # We map the exact same inbox folder that the backend is watching
       - ./document-data/inbox:/mnt/inbox
-    # Creates user 'scanner' with password 'password123'
+    # Creates user 'scanner' with password 'password123' and UID/GID 1000
     # Creates a share named 'inbox' pointing to /mnt/inbox
-    command: '-u "scanner;password123" -s "inbox;/mnt/inbox;yes;no;no;scanner"'
+    command: '-u "scanner;password123;1000;scanner;1000" -s "inbox;/mnt/inbox;yes;no;no;scanner"'
     restart: unless-stopped
 
 networks:

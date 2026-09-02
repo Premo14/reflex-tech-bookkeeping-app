@@ -682,16 +682,40 @@ export default function DetailsView() {
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
               </button>
             </div>
-            <div className="p-4 flex-1 overflow-auto flex items-center justify-center bg-zinc-950 min-h-75">
+            <div className="p-4 flex-1 overflow-auto bg-zinc-950 min-h-[50vh]">
               {(() => {
                 const receipts = (type === "receipt" ? expense : currentLinkedExpense)?.receipts;
                 return receipts && receipts.length > 0 ? (
-                  <div className="text-center space-y-4">
-                    <p className="text-zinc-500 italic">File: {receipts[0].documentUri.split('/').pop()}</p>
-                    <p className="text-xs text-zinc-600">In production, this would display the PDF/Image natively.</p>
+                  <div className="w-full flex flex-col items-center gap-8 py-4">
+                    {receipts.map((receipt) => {
+                      const filename = receipt.documentUri.split('/').pop();
+                      const fileUrl = `http://localhost:8080/images/${filename}`;
+                      const isPdf = receipt.fileExt.toLowerCase() === '.pdf';
+
+                      return (
+                        <div key={receipt.id} className="w-full flex flex-col items-center">
+                          {isPdf ? (
+                            <iframe 
+                              src={fileUrl} 
+                              className="w-full h-[75vh] rounded-md bg-white border border-zinc-700" 
+                              title={`Receipt ${receipt.id}`} 
+                            />
+                          ) : (
+                            <img 
+                              src={fileUrl} 
+                              alt={`Receipt ${receipt.id}`} 
+                              className="max-w-full max-h-[75vh] object-contain rounded-md border border-zinc-700" 
+                            />
+                          )}
+                          <p className="text-zinc-500 text-xs mt-2">{filename}</p>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
-                  <p className="text-zinc-500">No physical receipt attached.</p>
+                  <div className="h-full flex items-center justify-center text-zinc-500 min-h-[50vh]">
+                    <p>No physical receipt attached.</p>
+                  </div>
                 );
               })()}
             </div>
