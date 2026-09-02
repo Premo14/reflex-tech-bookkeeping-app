@@ -21,13 +21,16 @@ A single-entry bookkeeping system designed to eliminate manual data entry. The a
 
 ### Step 1 — Getting Files Into the App
 
-Files enter the system through **two ingestion paths**:
+Files enter the system through **three ingestion paths**:
 
 **A. Web UI Upload**
 Users upload receipt images or bank statement files directly through the browser. The frontend sends the file to the backend API (`POST /upload`), which saves it into the `document-data/inbox/` folder.
 
 **B. Network Scanner (SMB Share)**
 A Samba container exposes the same `document-data/inbox/` folder as a network share named `inbox` (accessible via `\\<server-ip>\inbox`). A physical document scanner, smartphone scanning app, or any networked device can drop files directly into this share. Credentials: `scanner / password123`.
+
+**C. Direct File System Drop**
+Because the backend continuously monitors the folder, users or automated scripts running on the host machine can simply move or copy files directly into the `document-data/inbox/` directory.
 
 ---
 
