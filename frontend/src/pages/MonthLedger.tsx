@@ -12,7 +12,7 @@ export default function MonthLedger() {
   const [transactions, setTransactions] = useState<BankTransaction[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [currentPeriod, setCurrentPeriod] = useState<AccountingPeriod | null>(null);
-  const [activeTab, setActiveTab] = useState<'transactions' | 'receipts'>('transactions');
+  const [activeTab, setActiveTab] = useState<'transactions' | 'receipts'>('receipts');
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState("ALL");
   const [sortField, setSortField] = useState("date");
@@ -259,11 +259,11 @@ export default function MonthLedger() {
 
             {/* TABS */}
             <div className="flex bg-zinc-950 p-1 rounded-lg border border-zinc-800 self-stretch md:self-auto">
-              <button onClick={() => handleTabChange('transactions')} className={`flex-1 md:flex-none px-6 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'transactions' ? 'bg-zinc-800 text-white shadow' : 'text-zinc-400 hover:text-zinc-200'}`}>
-                Transactions
-              </button>
               <button onClick={() => handleTabChange('receipts')} className={`flex-1 md:flex-none px-6 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'receipts' ? 'bg-zinc-800 text-white shadow' : 'text-zinc-400 hover:text-zinc-200'}`}>
                 Receipts
+              </button>
+              <button onClick={() => handleTabChange('transactions')} className={`flex-1 md:flex-none px-6 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'transactions' ? 'bg-zinc-800 text-white shadow' : 'text-zinc-400 hover:text-zinc-200'}`}>
+                Transactions
               </button>
             </div>
 
