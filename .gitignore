@@ -29,6 +29,8 @@ go.work.sum
 
 tmp/
 
+docs/
+
 # Editor/IDE
  .idea
  .vscode
