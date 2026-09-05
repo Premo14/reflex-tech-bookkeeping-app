@@ -25,7 +25,7 @@ func Connect() {
 		dbUser = "user"
 	}
 
-	dbPass := os.Getenv("POSTGRES_PASS")
+	dbPass := os.Getenv("POSTGRES_PASSWORD")
 	if dbPass == "" {
 		dbPass = "pass"
 	}

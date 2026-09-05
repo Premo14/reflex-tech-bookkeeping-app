@@ -123,8 +123,10 @@ func processFile(filePath string) error {
 sends the file path of the saved receipt to a CI/CD pipeline
 */
 func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
-	// "http://100.82.63.108:8081/process" or "http://localhost:8081/process"
-	scriptUrl := "http://100.82.63.108:8081/process"
+	scriptUrl := os.Getenv("FILE_PROCESSOR_URL")
+	if scriptUrl == "" {
+		scriptUrl = "http://file-processor:8081/process"
+	}
 
 	file, err := os.Open(filePath)
 	if err != nil {

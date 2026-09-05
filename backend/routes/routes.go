@@ -11,7 +11,7 @@ func SetupRoutes(app *fiber.App) {
 	api := app.Group("/api")
 
 	// Health Check
-	api.Get("/", func(c fiber.Ctx) error {
+	app.Get("/health", func(c fiber.Ctx) error {
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{
 			"status":    "success",
 			"message":   "Service is up and running",
@@ -33,7 +33,7 @@ func SetupRoutes(app *fiber.App) {
 	api.Post("/accounting-periods", controllers.CreateAccountingPeriod)
 	api.Post("/accounting-periods/close", controllers.CloseAccountingPeriod)
 	api.Post("/accounting-periods/reopen", controllers.ReopenAccountingPeriod)
-	
+
 	api.Get("/pending-closed-items", controllers.GetPendingClosedItems)
 
 	// General Browsing
@@ -43,7 +43,7 @@ func SetupRoutes(app *fiber.App) {
 	api.Patch("/transactions/:id", controllers.UpdateTransaction)
 	api.Delete("/transactions/:id", controllers.DeleteTransaction)
 
-	api.Get("/expenses", controllers.GetExpenses) // fetch all expenses for ledger
+	api.Get("/expenses", controllers.GetExpenses)    // fetch all expenses for ledger
 	api.Post("/expenses", controllers.CreateExpense) // manual entry
 	api.Get("/expenses/:id", controllers.GetExpense)
 	api.Patch("/expenses/:id", controllers.UpdateExpense)
@@ -51,10 +51,10 @@ func SetupRoutes(app *fiber.App) {
 
 	// Mark Expense as Cash
 	api.Patch("/expenses/:id/cash", controllers.MarkExpenseAsCash)
-	
+
 	// Unlinked items for manual linking
 	api.Get("/reconciliation/unlinked", controllers.GetUnlinkedItems)
-	
+
 	// Unlink Expense
 	api.Post("/reconciliation/unlink", controllers.UnlinkExpense)
 }

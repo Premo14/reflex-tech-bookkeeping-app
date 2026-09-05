@@ -1,45 +1,57 @@
 services:
   frontend:
     container_name: reflex-tech-bookkeping-app-frontend
-    build: 
+    build:
       context: ./frontend
       dockerfile: Dockerfile.dev
-    environment:
-      - POSTGRES_HOST=postgres
-    ports:
-      - "${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
     volumes:
       - ./frontend:/app
+      - /app/node_modules
     restart: unless-stopped
-    
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5173 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   backend:
     container_name: backend
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
-    ports:
-      - "${BACKEND_PORT:-8080}:${BACKEND_PORT:-8080}"
+    env_file: .env
     environment:
-      - DOCUMENTS_PATH=${DOCUMENTS_PATH:-/app/documents}
       - CGO_ENABLED=1
     volumes:
       - ./backend:/app
-      - ./document-data:/app/documents
-    user: "1000:1000"
+      - ${DOCUMENT_DATA_PATH:-./document-data}:/app/documents
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      file-processor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   postgres:
     container_name: postgres
     image: postgres:18.4-alpine3.24
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pass}
-      POSTGRES_DB: ${POSTGRES_DB:-reflex-tech-bookkeeping-app-postgres-db}
-    ports:
-      - "${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
+    env_file: .env
     volumes:
       - postgres-data:/var/lib/postgresql
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   scanner-smb:
     container_name: scanner-smb
@@ -48,15 +60,67 @@ services:
       - USERID=999 # Free up 1000 for the scanner user
       - GROUPID=999
     ports:
+      # SMB must be exposed so the physical scanner on the LAN can connect
       - "139:139"
       - "445:445"
     volumes:
-      # We map the exact same inbox folder that the backend is watching
-      - ./document-data/inbox:/mnt/inbox
+      # Shares the same bind mount the backend watches
+      - ${DOCUMENT_DATA_PATH:-./document-data}/inbox:/mnt/inbox
     # Creates user 'scanner' with password 'password123' and UID/GID 1000
     # Creates a share named 'inbox' pointing to /mnt/inbox
     command: '-u "scanner;password123;1000;scanner;1000" -s "inbox;/mnt/inbox;yes;no;no;scanner"'
     restart: unless-stopped
+
+  file-processor:
+    container_name: file-processor
+    build:
+      context: ./file-processor
+      dockerfile: Dockerfile.dev
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  ollama:
+    container_name: ollama
+    build: ./ollama
+    volumes:
+      - ollama-data:/root/.ollama   # /root/.ollama is where Ollama stores models
+    restart: unless-stopped
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -q 'llama3.1' && ollama list | grep -q 'qwen2.5vl'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 600s   # 10 min window for first-time model downloads
+
+  nginx:
+    container_name: nginx
+    image: nginx:alpine
+    ports:
+      - "5173:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
 
 networks:
   default:
@@ -65,3 +129,5 @@ networks:
 volumes:
   postgres-data:
     name: postgres-data
+  ollama-data:
+    name: ollama-data

@@ -1,6 +1,6 @@
 import type { AccountingPeriod, BankTransaction, CloseAccountingPeriodResponse, CreateExpenseInput, CreateTransactionInput, ExpenseDetailResponse, FileUploadResponse, FlaggedItems, FlaggedItemsFilters, LinkExpenseResponse, MarkExpenseAsCashResponse, TransactionDetailResponse, TransactionFilters, Expense } from "../types/models";
 
-const API_BASE = "http://localhost:8080/api";
+const API_BASE = "/api";
 
 // ---------------------------------------------------------
 // accounting periods
