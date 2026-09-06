@@ -154,41 +154,46 @@ Once closed, all records for that period become **read-only** — edits, links, 
 
 ## Architecture Overview
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │                        Browser                          │
 │              React + TypeScript + Tailwind              │
-│           (localhost:5173 via Vite dev server)          │
+│                 http://localhost:5173                   │
 └──────────────────────┬──────────────────────────────────┘
-                       │ HTTP REST
+                       │ HTTP (via Nginx)
 ┌──────────────────────▼──────────────────────────────────┐
-│                  Backend API (Go)                        │
-│         Fiber v3 · GORM · fsnotify · ofxgo              │
-│                   localhost:8080                         │
+│                   Nginx (Docker)                        │
+│     Routes `/` to Frontend, `/api/` to Backend          │
+│               Exposed on port 5173                      │
+└─────────┬───────────────────────────────┬───────────────┘
+          │ /                             │ /api/ & /images/
+┌─────────▼───────────────┐     ┌─────────▼───────────────┐
+│     Frontend (Docker)   │     │      Backend (Docker)   │
+│       Vite dev server   │     │    Go Fiber · fsnotify  │
+│        (Internal)       │     │       (Internal)        │
+└─────────────────────────┘     └─────────┬───────────────┘
+                                          │ HTTP POST /process
+┌─────────────────────────────────────────▼───────────────┐
+│                 File Processor (Docker)                 │
+│         Go · Pillow · Tesseract · pdftoppm              │
+│                       (Internal)                        │
 └─────────┬───────────────────────────────────────────────┘
-          │ multipart/form-data (POST /process)
+          │ HTTP /api/generate
 ┌─────────▼───────────────────────────────────────────────┐
-│              File Processor (Go)                         │
-│        fasthttp · Pillow · Tesseract · pdftoppm         │
-│                   localhost:8081                         │
-└─────────┬───────────────────────────────────────────────┘
-          │ /api/generate (JSON)
-┌─────────▼───────────────────────────────────────────────┐
-│                  Ollama (local LLM runtime)              │
+│                  Ollama (Docker)                        │
 │       qwen2.5vl:3b (images) · llama3.1:8b (text)        │
-│                   localhost:11434                        │
+│                       (Internal)                        │
 └─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
-│              PostgreSQL 18 (Docker)                      │
-│  Receipts · Expenses · BankTransactions · Periods       │
-│                   localhost:5432                         │
+│              PostgreSQL 18 (Docker)                     │
+│                 (Internal Only)                         │
 └─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
-│              Samba SMB Share (Docker)                    │
-│    \\<server-ip>\inbox  →  document-data/inbox/         │
-│            ports 139, 445                               │
+│              Samba SMB Share (Docker)                   │
+│    \\<server-ip>\inbox  →  DOCUMENT_DATA_PATH/inbox/ │
+│            Exposed on ports 139, 445                    │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -378,85 +383,49 @@ All endpoints are served from `http://localhost:8080`.
 
 ## Running the Application
 
+This is a production-grade development environment. The entire stack (including the AI models, OCR, Database, and Web servers) runs inside a unified Docker Compose network. There are absolutely no host-level dependencies other than Docker itself.
+
 ### Prerequisites
-
-**System dependencies** (must be installed on the host — not inside Docker):
-```bash
-# Tesseract OCR (for PDF text extraction)
-sudo apt-get install tesseract-ocr
-
-# Poppler utilities (for PDF-to-image conversion)
-sudo apt-get install poppler-utils
-
-# Python3 + Pillow (for image resizing in the file processor)
-pip3 install Pillow
-```
-
-**Ollama** — Install from [ollama.com](https://ollama.com), then pull the required models:
-```bash
-ollama pull qwen2.5vl:3b
-ollama pull llama3.1:8b
-```
-
-**Docker & Docker Compose** — Required to run the backend, frontend, database, and Samba share.
-
-**Go 1.27+** — Required to build and run the file processor.
-
----
+- **Docker & Docker Compose**
 
 ### 1. Configure Environment
 
-Create a `.env` file in the project root (or use the defaults):
+Copy the example environment file:
+```bash
+cp .env.example .env
+```
+
+If you want the inbox folder to live somewhere else (like your Desktop), update the `DOCUMENT_DATA_PATH` in `.env`:
 ```env
-POSTGRES_USER=user
-POSTGRES_PASSWORD=pass
-POSTGRES_DB=reflex-tech-bookkeeping-app-postgres-db
-POSTGRES_PORT=5432
-BACKEND_PORT=8080
-FRONTEND_PORT=5173
-DOCUMENTS_PATH=/app/documents
+DOCUMENT_DATA_PATH=/path/to/your/Desktop/document-data
 ```
 
----
+### 2. Start the Stack
 
-### 2. Start Docker Services
-
+Run the following command to build and boot the entire infrastructure:
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
-This starts:
-- `frontend` — React dev server on port 5173
-- `backend` — Go API server on port 8080
-- `postgres` — PostgreSQL 18 on port 5432
-- `scanner-smb` — Samba file share on ports 139 and 445
+**Note on first boot:** The `ollama` container will take several minutes to automatically download the AI models (`llama3.1:8b` and `qwen2.5vl:3b`). The `file-processor` and `backend` containers will automatically wait for this to finish before booting.
+
+### 3. Access the Application
+
+Once all containers are healthy, open your browser to:
+- **http://localhost:5173**
+
+You can drop receipts directly into the `DOCUMENT_DATA_PATH/inbox/` folder on your machine, or connect to the SMB share at `\\localhost\inbox` (User: `scanner`, Pass: `password123`).
 
 ---
 
-### 3. Start the File Processor
+## Service Endpoints
 
-The file processor runs **outside Docker** so it can access the local Ollama instance and system tools (Tesseract, Pillow, pdftoppm):
+Only Nginx and the SMB share are exposed to your host machine. Everything else communicates securely inside the internal Docker network.
 
-```bash
-cd /path/to/file-processor
-go run main.go
-# or run the pre-built binary:
-./file-processor
-```
-
-The processor listens on port `8081`.
-
----
-
-### Service Endpoints
-
-| Service | URL |
-|---------|-----|
-| Frontend | http://localhost:5173 |
-| Backend API | http://localhost:8080 |
-| File Processor | http://localhost:8081 |
-| PostgreSQL | localhost:5432 |
-| SMB Share (scanner drop) | `\\<host-ip>\inbox` |
+| Service | Access |
+|---------|--------|
+| Web App (via Nginx) | http://localhost:5173 |
+| SMB Share (scanner drop) | `\\localhost\inbox` |
 
 ---
 
@@ -467,11 +436,9 @@ The processor listens on port `8081`.
 | `POSTGRES_USER` | `user` | PostgreSQL username |
 | `POSTGRES_PASSWORD` | `pass` | PostgreSQL password |
 | `POSTGRES_DB` | `reflex-tech-bookkeeping-app-postgres-db` | Database name |
-| `POSTGRES_PORT` | `5432` | PostgreSQL port |
-| `BACKEND_PORT` | `8080` | Backend API port |
-| `FRONTEND_PORT` | `5173` | Frontend dev server port |
-| `DOCUMENTS_PATH` | `/app/documents` | Path inside the backend container where files are stored |
-| `OLLAMA_HOST` | `127.0.0.1:11434` | Ollama API host (file processor only — set if Ollama runs on a different machine) |
+| `DOCUMENT_DATA_PATH` | `./document-data` | Host path where the inbox/processed folders will be created |
+| `FILE_PROCESSOR_URL` | `http://file-processor:8081/process` | Internal Docker URL for the AI processor |
+| `OLLAMA_HOST` | `ollama:11434` | Internal Docker URL for Ollama |
 
 ---
 
