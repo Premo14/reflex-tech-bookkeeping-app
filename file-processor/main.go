@@ -78,32 +78,32 @@ func ollamaURL() string {
 // aliasing artifacts that crash Qwen.
 func resizeWithPIL(inputPath, outputPath string) error {
 	pyScript := `
-	import sys
-	from PIL import Image, ImageOps
+import sys
+from PIL import Image, ImageOps
 
-	input_path = sys.argv[1]
-	output_path = sys.argv[2]
+input_path = sys.argv[1]
+output_path = sys.argv[2]
 
-	# Open and fix EXIF orientation
-	img = Image.open(input_path)
-	img = ImageOps.exif_transpose(img)
+# Open and fix EXIF orientation
+img = Image.open(input_path)
+img = ImageOps.exif_transpose(img)
 
-	# Ensure RGB
-	if img.mode != 'RGB':
-		img = img.convert('RGB')
+# Ensure RGB
+if img.mode != 'RGB':
+	img = img.convert('RGB')
 
-	# To match exactly what worked for walmart-small.jpg, we target 1200px max.
-	# If it's a huge 4000px camera photo, we first step down to 2000px with BOX 
-	# to avoid aliasing artifacts, then do the final smooth LANCZOS down to 1200.
-	max_dim = max(img.size)
-	if max_dim > 2000:
-		img.thumbnail((2000, 2000), Image.BOX)
+# To match exactly what worked for walmart-small.jpg, we target 1200px max.
+# If it's a huge 4000px camera photo, we first step down to 2000px with BOX 
+# to avoid aliasing artifacts, then do the final smooth LANCZOS down to 1200.
+max_dim = max(img.size)
+if max_dim > 2000:
+	img.thumbnail((2000, 2000), Image.BOX)
 
-	if max_dim > 1200:
-		img.thumbnail((1200, 1200), Image.LANCZOS)
+if max_dim > 1200:
+	img.thumbnail((1200, 1200), Image.LANCZOS)
 
-	img.save(output_path, 'JPEG', quality=85)
-	`
+img.save(output_path, 'JPEG', quality=85)
+`
 	cmd := exec.Command("python3", "-c", pyScript, inputPath, outputPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
