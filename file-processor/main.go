@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/disintegration/imaging"
 	"github.com/valyala/fasthttp"
 )
 
@@ -73,41 +74,38 @@ func ollamaURL() string {
 	return host + "/api/generate"
 }
 
-// resizeWithPIL runs an inline Python script to use Pillow for resizing.
-// PIL correctly handles EXIF orientation and interpolates without the Moiré
-// aliasing artifacts that crash Qwen.
-func resizeWithPIL(inputPath, outputPath string) error {
-	pyScript := `
-import sys
-from PIL import Image, ImageOps
-
-input_path = sys.argv[1]
-output_path = sys.argv[2]
-
-# Open and fix EXIF orientation
-img = Image.open(input_path)
-img = ImageOps.exif_transpose(img)
-
-# Ensure RGB
-if img.mode != 'RGB':
-	img = img.convert('RGB')
-
-# To match exactly what worked for walmart-small.jpg, we target 1200px max.
-# If it's a huge 4000px camera photo, we first step down to 2000px with BOX 
-# to avoid aliasing artifacts, then do the final smooth LANCZOS down to 1200.
-max_dim = max(img.size)
-if max_dim > 2000:
-	img.thumbnail((2000, 2000), Image.BOX)
-
-if max_dim > 1200:
-	img.thumbnail((1200, 1200), Image.LANCZOS)
-
-img.save(output_path, 'JPEG', quality=85)
-`
-	cmd := exec.Command("python3", "-c", pyScript, inputPath, outputPath)
-	out, err := cmd.CombinedOutput()
+// resizeImage resizes the image using disintegration/imaging
+// This natively handles EXIF orientation and interpolates without aliasing artifacts.
+func resizeImage(inputPath, outputPath string) error {
+	// Open and fix EXIF orientation
+	img, err := imaging.Open(inputPath, imaging.AutoOrientation(true))
 	if err != nil {
-		return fmt.Errorf("PIL resize failed: %v - %s", err, string(out))
+		return fmt.Errorf("failed to open image: %w", err)
+	}
+
+	bounds := img.Bounds()
+	maxDim := bounds.Dx()
+	if bounds.Dy() > maxDim {
+		maxDim = bounds.Dy()
+	}
+
+	// If it's a huge 4000px camera photo, we first step down to 2000px with Box
+	// to avoid aliasing artifacts, then do the final smooth Lanczos down to 1200.
+	if maxDim > 2000 {
+		img = imaging.Fit(img, 2000, 2000, imaging.Box)
+		bounds = img.Bounds()
+		maxDim = bounds.Dx()
+		if bounds.Dy() > maxDim {
+			maxDim = bounds.Dy()
+		}
+	}
+
+	if maxDim > 1200 {
+		img = imaging.Fit(img, 1200, 1200, imaging.Lanczos)
+	}
+
+	if err := imaging.Save(img, outputPath, imaging.JPEGQuality(85)); err != nil {
+		return fmt.Errorf("failed to save image: %w", err)
 	}
 	return nil
 }
@@ -251,8 +249,8 @@ func process(ctx *fasthttp.RequestCtx) {
 		defer os.Remove(imgName)
 
 		resizedName := baseFileName + "_resized.jpg"
-		if err := resizeWithPIL(imgName, resizedName); err != nil {
-			log.Printf("⚠️ PIL resize failed: %v", err)
+		if err := resizeImage(imgName, resizedName); err != nil {
+			log.Printf("⚠️ Image resize failed: %v", err)
 			ctx.Error(fmt.Sprintf("Image resize failed: %v", err), fasthttp.StatusInternalServerError)
 			return
 		}
