@@ -689,7 +689,7 @@ export default function DetailsView() {
                   <div className="w-full flex flex-col items-center gap-8 py-4">
                     {receipts.map((receipt) => {
                       const filename = receipt.documentUri.split('/').pop();
-                      const fileUrl = `http://localhost:8080/images/${filename}`;
+                      const fileUrl = `/api/images/${filename}`;
                       const isPdf = receipt.fileExt.toLowerCase() === '.pdf';
 
                       return (
