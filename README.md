@@ -380,71 +380,64 @@ All endpoints are served from `http://localhost:8080`.
 
 ### Prerequisites
 
-**System dependencies** (must be installed on the host — not inside Docker):
-```bash
-# Tesseract OCR (for PDF text extraction)
-sudo apt-get install tesseract-ocr
+**Docker & Docker Compose** — The only dependency required on the host machine. Everything else (Ollama, the file processor, Tesseract, Poppler, Pillow, and all models) runs inside Docker containers and is set up automatically on first launch.
 
-# Poppler utilities (for PDF-to-image conversion)
-sudo apt-get install poppler-utils
-
-# Python3 + Pillow (for image resizing in the file processor)
-pip3 install Pillow
-```
-
-**Ollama** — Install from [ollama.com](https://ollama.com), then pull the required models:
-```bash
-ollama pull qwen2.5vl:3b
-ollama pull llama3.1:8b
-```
-
-**Docker & Docker Compose** — Required to run the backend, frontend, database, and Samba share.
-
-**Go 1.27+** — Required to build and run the file processor.
+Download Docker Desktop from [docker.com](https://www.docker.com/products/docker-desktop/).
 
 ---
 
 ### 1. Configure Environment
 
-Create a `.env` file in the project root (or use the defaults):
-```env
-POSTGRES_USER=user
-POSTGRES_PASSWORD=pass
-POSTGRES_DB=reflex-tech-bookkeeping-app-postgres-db
-POSTGRES_PORT=5432
-BACKEND_PORT=8080
-FRONTEND_PORT=5173
-DOCUMENTS_PATH=/app/documents
+Copy the example environment file and fill in your values:
+```bash
+cp .env.example .env
 ```
+
+The defaults work out of the box for local development. The only value you should change is `POSTGRES_PASSWORD`.
 
 ---
 
-### 2. Start Docker Services
+### 2. Start the App
 
+The application uses a GPU-aware launch script that auto-detects your hardware and starts the correct configuration automatically. On first launch, Ollama will pull the required AI models — this can take several minutes depending on your connection.
+
+**On Linux or macOS:**
 ```bash
-docker compose up -d
+./start.sh
 ```
 
+**On Windows (Command Prompt or double-click):**
+```bat
+start.bat
+```
+
+The script will detect your GPU and print what it found:
+
+| Detected Hardware | Ollama Mode |
+|-------------------|-------------|
+| NVIDIA GPU (`nvidia-smi` present) | CUDA — `docker-compose.nvidia.yml` overlay applied |
+| AMD GPU (`/dev/kfd` or `rocm-smi` present) | ROCm — `docker-compose.amd.yml` overlay applied |
+| No GPU / macOS | CPU fallback |
+
+> **AMD on Windows:** ROCm GPU passthrough into Docker is not yet officially supported on native Windows. If you have an AMD GPU and want to use it, run the app inside **WSL2** and use `./start.sh` instead.
+
+> **Manual override:** If you want to force a specific mode without using the script, you can run Docker Compose directly:
+> ```bash
+> # Force NVIDIA
+> docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d
+> # Force AMD (Linux only)
+> docker compose -f docker-compose.yml -f docker-compose.amd.yml up -d
+> # Force CPU
+> docker compose -f docker-compose.yml up -d
+> ```
+
 This starts:
+- `ollama` — Local LLM runtime (GPU-accelerated if detected). Pulls `llama3.1:8b` and `qwen2.5vl:3b` automatically on first run.
+- `file-processor` — Receipt/PDF processing service on port 8081
 - `frontend` — React dev server on port 5173
 - `backend` — Go API server on port 8080
 - `postgres` — PostgreSQL 18 on port 5432
 - `scanner-smb` — Samba file share on ports 139 and 445
-
----
-
-### 3. Start the File Processor
-
-The file processor runs **outside Docker** so it can access the local Ollama instance and system tools (Tesseract, Pillow, pdftoppm):
-
-```bash
-cd /path/to/file-processor
-go run main.go
-# or run the pre-built binary:
-./file-processor
-```
-
-The processor listens on port `8081`.
 
 ---
 
