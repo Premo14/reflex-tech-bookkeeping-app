@@ -53,12 +53,18 @@ func Connect() {
 	DB.SetupJoinTable(&models.Expense{}, "BankTransactions", &models.ExpenseBankTransaction{})
 	DB.SetupJoinTable(&models.BankTransaction{}, "Expenses", &models.ExpenseBankTransaction{})
 
+	// ChartAccount must migrate before the tables that reference it via FK
+	// (BankStatement, BankTransaction, Expense), so it goes first.
 	DB.AutoMigrate(
-		&models.AccountingPeriod{},
+		&models.ChartAccount{},
+		&models.AppSetting{},
 		&models.BankStatement{},
 		&models.BankTransaction{},
 		&models.Expense{},
 		&models.Receipt{},
 		&models.ExpenseBankTransaction{},
 	)
+
+	// Seed the chart of accounts if the table is empty (first boot or fresh DB).
+	SeedChartOfAccounts()
 }

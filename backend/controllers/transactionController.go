@@ -12,26 +12,37 @@ import (
 
 // GetTransactions fetches all BankTransactions along with their linked
 // Expenses and the physical Receipts, so the frontend can display them.
-// Expects optional query parameters: ?year=2026 & month=8 & search=walmart
+//
+// Optional query parameters:
+//   - ?periodId=123     filter to transactions within that period's date range
+//   - ?accountId=5      filter by ChartAccountID (which bank account)
+//   - ?search=walmart   ILIKE search on description
 func GetTransactions(c fiber.Ctx) error {
-	year := c.Query("year")
-	month := c.Query("month")
+	startDate := c.Query("startDate")
+	endDate := c.Query("endDate")
+	accountId := c.Query("accountId")
 	search := c.Query("search")
 
 	var txs []models.BankTransaction
 	query := db.DB.Model(&models.BankTransaction{})
 
-	if year != "" {
-		query = query.Where("EXTRACT(YEAR FROM date) = ?", year)
+	// Filter by date range if provided
+	if startDate != "" {
+		query = query.Where("date >= ?", startDate)
 	}
-	if month != "" {
-		query = query.Where("EXTRACT(MONTH FROM date) = ?", month)
+	if endDate != "" {
+		query = query.Where("date <= ?", endDate)
 	}
+
+	if accountId != "" {
+		query = query.Where("chart_account_id = ?", accountId)
+	}
+
 	if search != "" {
 		query = query.Where("description ILIKE ?", "%"+search+"%")
 	}
 
-	query.Order("date DESC").Preload("Expenses.Receipts").Find(&txs)
+	query.Order("date DESC").Preload("Expenses.Receipts").Preload("ChartAccount").Find(&txs)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":       "success",
@@ -45,7 +56,7 @@ func GetTransaction(c fiber.Ctx) error {
 	id := c.Params("id")
 	var tx models.BankTransaction
 
-	if err := db.DB.First(&tx, "id = ?", id).Error; err != nil {
+	if err := db.DB.Preload("ChartAccount").First(&tx, "id = ?", id).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Transaction not found"})
 	}
 
@@ -53,13 +64,14 @@ func GetTransaction(c fiber.Ctx) error {
 	var confirmedExpenses []models.Expense
 	db.DB.Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
 		Where("ebt.bank_transaction_id = ? AND ebt.status = ?", tx.ID, "confirmed").
-		Preload("Receipts").
+		Preload("Receipts").Preload("ChartAccount").
 		Find(&confirmedExpenses)
 
 	// Load suggested expenses — scoring system guesses awaiting user action.
 	var suggestedExpenses []models.Expense
 	db.DB.Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
 		Where("ebt.bank_transaction_id = ? AND ebt.status = ?", tx.ID, "suggested").
+		Preload("ChartAccount").
 		Find(&suggestedExpenses)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
@@ -71,18 +83,16 @@ func GetTransaction(c fiber.Ctx) error {
 }
 
 // CreateTransaction creates a manually entered bank transaction (no OFX import required).
-// bankStatementId is intentionally left null for manual entries.
+// BankStatementID is intentionally left null for manual entries.
 // The FITID is auto-generated to satisfy the unique constraint.
+// Optional chartAccountId can be provided to categorize the transaction.
 func CreateTransaction(c fiber.Ctx) error {
 	type createInput struct {
 		Date            time.Time `json:"date"`
 		Description     string    `json:"description"`
 		Amount          float64   `json:"amount"`
 		TransactionType string    `json:"transactionType"`
-		// Year/Month are sent by the frontend from the URL params so the backend
-		// can validate the date falls within the correct accounting period.
-		Year  int `json:"year"`
-		Month int `json:"month"`
+		ChartAccountID  *uint     `json:"chartAccountId"`
 	}
 
 	var input createInput
@@ -90,21 +100,11 @@ func CreateTransaction(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid input"})
 	}
 
-	// Validate the date falls within the requested year/month.
-	if input.Year > 0 && input.Month > 0 {
-		if input.Date.Year() != input.Year || int(input.Date.Month()) != input.Month {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "The transaction date must be within the selected month",
-			})
-		}
-
-		if utils.IsMonthClosed(input.Year, input.Month) {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot create a transaction in a closed accounting period."})
-		}
-	} else {
-		if utils.IsMonthClosed(input.Date.Year(), int(input.Date.Month())) {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot create a transaction in a closed accounting period."})
-		}
+	// Guard against creating transactions in a closed period
+	if utils.IsDateInClosedPeriod(input.Date) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Cannot create a transaction in a closed accounting period.",
+		})
 	}
 
 	tx := models.BankTransaction{
@@ -112,6 +112,7 @@ func CreateTransaction(c fiber.Ctx) error {
 		Description:     input.Description,
 		Amount:          input.Amount,
 		TransactionType: input.TransactionType,
+		ChartAccountID:  input.ChartAccountID,
 		// Synthetic FITID satisfies the unique constraint on manually entered rows.
 		FITID: fmt.Sprintf("MANUAL-%d", time.Now().UnixNano()),
 		// BankStatementID left nil — manual entries don't belong to an imported statement.
@@ -124,7 +125,7 @@ func CreateTransaction(c fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "success", "transaction": tx})
 }
 
-// UpdateTransaction allows updating fields on a transaction
+// UpdateTransaction allows updating fields on a transaction.
 func UpdateTransaction(c fiber.Ctx) error {
 	id := c.Params("id")
 	var tx models.BankTransaction
@@ -133,13 +134,17 @@ func UpdateTransaction(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Transaction not found"})
 	}
 
-	if tx.ReconciliationStatus != "PENDING_CLOSED" && utils.IsMonthClosed(tx.Date.Year(), int(tx.Date.Month())) {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot update a transaction in a closed accounting period."})
+	if utils.IsDateInClosedPeriod(tx.Date) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Cannot update a transaction in a closed accounting period.",
+		})
 	}
 
 	type updateInput struct {
-		Description string  `json:"description"`
-		Amount      float64 `json:"amount"`
+		Description    string  `json:"description"`
+		Amount         float64 `json:"amount"`
+		ChartAccountID *uint   `json:"chartAccountId"`
+		Notes          string  `json:"notes"`
 	}
 
 	var input updateInput
@@ -148,8 +153,10 @@ func UpdateTransaction(c fiber.Ctx) error {
 	}
 
 	db.DB.Model(&tx).Updates(map[string]interface{}{
-		"description": input.Description,
-		"amount":      input.Amount,
+		"description":      input.Description,
+		"amount":           input.Amount,
+		"chart_account_id": input.ChartAccountID,
+		"notes":            input.Notes,
 	})
 
 	utils.UpdateReconciliationStatuses()
@@ -157,7 +164,7 @@ func UpdateTransaction(c fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success", "transaction": tx})
 }
 
-// DeleteTransaction deletes a transaction and nullifies the BankTransactionID on its linked expenses
+// DeleteTransaction deletes a transaction and all its join table rows.
 func DeleteTransaction(c fiber.Ctx) error {
 	id := c.Params("id")
 	var tx models.BankTransaction
@@ -166,8 +173,10 @@ func DeleteTransaction(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Transaction not found"})
 	}
 
-	if tx.ReconciliationStatus != "PENDING_CLOSED" && utils.IsMonthClosed(tx.Date.Year(), int(tx.Date.Month())) {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot delete a transaction in a closed accounting period."})
+	if utils.IsDateInClosedPeriod(tx.Date) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Cannot delete a transaction in a closed accounting period.",
+		})
 	}
 
 	// Delete all join table rows for this transaction before deleting the transaction itself.

@@ -180,10 +180,6 @@ func UpdateReconciliationStatuses() {
 			Where("ebt.bank_transaction_id = ? AND ebt.status = ?", tx.ID, "confirmed").
 			Find(&tx.Expenses)
 
-		if tx.ReconciliationStatus == "PENDING_CLOSED" {
-			continue // Do not update PENDING_CLOSED items until month is reopened
-		}
-
 		var status string
 		var hasSuggestions bool
 
@@ -226,10 +222,6 @@ func UpdateReconciliationStatuses() {
 	db.DB.Find(&expenses)
 	for i := range expenses {
 		exp := &expenses[i]
-
-		if exp.Status == "PENDING_CLOSED" {
-			continue
-		}
 
 		var countConfirmed, countSuggested int64
 		db.DB.Model(&models.ExpenseBankTransaction{}).

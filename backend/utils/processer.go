@@ -189,6 +189,10 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 
 	parsedTime, _ := time.Parse(time.RFC3339, raw.Timestamp)
 
+	if IsDateInClosedPeriod(parsedTime) {
+		return fmt.Errorf("AI extracted a date (%s) that falls within a closed accounting period", parsedTime)
+	}
+
 	newExpense := models.Expense{
 		Timestamp:   parsedTime,
 		Vendor:      raw.Vendor,
@@ -202,9 +206,6 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 		log.Println("Failed to save expense to DB:", err)
 		return err
 	}
-
-	// Ensure an accounting period exists for this expense's date
-	GetOrCreateAccountingPeriod(newExpense.Timestamp)
 
 	// Link the Receipt just uploaded to this new Expense
 	receipt.ExpenseID = &newExpense.ID

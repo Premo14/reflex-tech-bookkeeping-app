@@ -1,5 +1,7 @@
-import { Link } from "react-router-dom";
+import React from "react";
 import type { BankTransaction } from "../types/models";
+import { Card } from "./ui/Card";
+import { Badge } from "./ui/Badge";
 
 interface TransactionListProps {
   transactions: BankTransaction[];
@@ -7,16 +9,13 @@ interface TransactionListProps {
   searchQuery: string;
   sortField: string;
   sortOrder: "asc" | "desc";
+  onSelect: (id: number) => void;
 }
 
-export default function TransactionList({ transactions, filter, searchQuery, sortField, sortOrder }: TransactionListProps) {
+export default function TransactionList({ transactions, filter, searchQuery, sortField, sortOrder, onSelect }: TransactionListProps) {
   
-  // local filter
   const filteredTransactions = transactions.filter(tx => {
-    // 1. Filter Status
     if (filter !== "ALL" && tx.reconciliationStatus !== filter) return false;
-    
-    // 2. Search
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       if (!tx.description.toLowerCase().includes(q) && !tx.amount.toString().includes(q)) {
@@ -26,7 +25,6 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
     return true;
   });
 
-  // sort locally
   const sortedTransactions = [...filteredTransactions].sort((a, b) => {
     let cmp = 0;
     if (sortField === "amount") {
@@ -35,7 +33,7 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
       cmp = a.description.localeCompare(b.description);
     } else if (sortField === "type") {
       cmp = (a.transactionType || "").localeCompare(b.transactionType || "");
-    } else { // default date
+    } else {
       cmp = new Date(a.date).getTime() - new Date(b.date).getTime();
     }
     return sortOrder === "asc" ? cmp : -cmp;
@@ -43,53 +41,70 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
 
   if (sortedTransactions.length === 0) {
     return (
-      <div className="text-center py-16 border-2 border-dashed border-zinc-800 rounded-xl">
+      <div className="text-center py-16 border border-dashed border-white/10 rounded-2xl bg-white/[0.02]">
         <p className="text-zinc-500">No transactions found matching this criteria.</p>
       </div>
     );
   }
 
-  // format currency
   const formatMoney = (amount: number) => {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
   };
 
   return (
     <div className="space-y-3">
-      {sortedTransactions.map(tx => (
-        <Link 
-          key={tx.id} 
-          to={`/details/transaction/${tx.id}`}
-          className="flex items-center justify-between p-4 bg-zinc-800/30 border border-zinc-800 rounded-xl hover:bg-zinc-800/60 transition-colors"
-        >
-          {/* Left side: Date & Desc */}
-          <div className="flex flex-col gap-1">
-            <span className="text-sm font-medium text-white">{tx.description || "Unknown Transaction"}</span>
-            <span className="text-xs text-zinc-500">{new Date(tx.date).toLocaleDateString()} &middot; {tx.transactionType}</span>
-          </div>
-
-          {/* Right side: Amount & Status */}
-          <div className="flex flex-col items-end gap-2">
-            <span className={`font-semibold ${tx.amount < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-              {formatMoney(tx.amount)}
+      {sortedTransactions.map((tx, index) => {
+        const detailItems = [];
+        detailItems.push(<span>{new Date(tx.date).toLocaleDateString()}</span>);
+        if (tx.transactionType) {
+          detailItems.push(<span>{tx.transactionType}</span>);
+        }
+        if (tx.chartAccount && tx.chartAccount.id) {
+          detailItems.push(
+            <span className="flex items-center gap-1.5">
+              <span className="text-emerald-400 font-mono tracking-tight">{tx.chartAccount.code}</span>
+              <span className="text-zinc-400 truncate max-w-[150px]">{tx.chartAccount.name}</span>
             </span>
-            <div className="flex gap-2 items-center">
-              {tx.reconciliationStatus === 'UNMATCHED' && tx.hasSuggestions && (
-                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border bg-blue-500/10 text-blue-400 border-blue-500/20">
-                  SUGGESTION FOUND
-                </span>
-              )}
-              <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wider uppercase border ${
-                tx.reconciliationStatus === 'MATCHED'
-                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                  : 'bg-red-500/10 text-red-400 border-red-500/20'
-              }`}>
-                {tx.reconciliationStatus || "UNKNOWN"}
-              </span>
+          );
+        }
+
+        return (
+          <Card 
+            key={tx.id} 
+            onClick={() => onSelect(tx.id)}
+            className="animate-card-cascade"
+            style={{ animationDelay: `${index * 120}ms` }}
+          >
+            <div className="flex flex-col gap-1 min-w-0 pr-4">
+              <span className="text-sm font-semibold text-zinc-100 truncate">{tx.description || "Unknown Transaction"}</span>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
+                {detailItems.map((item, i) => (
+                  <React.Fragment key={i}>
+                    {i > 0 && <span>&middot;</span>}
+                    {item}
+                  </React.Fragment>
+                ))}
+              </div>
             </div>
-          </div>
-        </Link>
-      ))}
+
+            <div className="flex flex-col items-end gap-2 shrink-0">
+              <span className={`font-bold ${tx.amount < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                {formatMoney(tx.amount)}
+              </span>
+              <div className="flex gap-2 items-center">
+                {tx.reconciliationStatus === 'UNMATCHED' && tx.hasSuggestions && (
+                  <Badge variant="info" size="sm">SUGGESTION FOUND</Badge>
+                )}
+                {tx.reconciliationStatus === 'MATCHED' ? (
+                  <Badge variant="success">LINKED</Badge>
+                ) : (
+                  <Badge variant="danger">UNLINKED</Badge>
+                )}
+              </div>
+            </div>
+          </Card>
+        );
+      })}
     </div>
   );
 }

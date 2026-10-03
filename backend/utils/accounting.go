@@ -1,38 +1,12 @@
 package utils
 
-import (
-	"log"
-	"reflex-tech-bookkeeping-app-api/db"
-	"reflex-tech-bookkeeping-app-api/models"
-	"time"
-)
-
-// GetOrCreateAccountingPeriod checks if a period exists for the date,
-// and if not, creates a new OPEN period.
-func GetOrCreateAccountingPeriod(date time.Time) *models.AccountingPeriod {
-	year := date.Year()
-	month := int(date.Month())
-
-	var period models.AccountingPeriod
-
-	// Try to find the existing period
-	err := db.DB.Where("year = ? AND month = ?", year, month).First(&period).Error
-	if err == nil {
-		return &period
-	}
-
-	// If it doesn't exist, create it autonomously
-	period = models.AccountingPeriod{
-		Year:   year,
-		Month:  month,
-		Status: "OPEN",
-	}
-
-	if err := db.DB.Create(&period).Error; err != nil {
-		log.Printf("Error autonomously creating AccountingPeriod for %d/%d: %v\n", month, year, err)
-		return nil
-	}
-
-	log.Printf("Autonomously opened new Accounting Period: %d/%d\n", month, year)
-	return &period
-}
+// accounting.go previously contained GetOrCreateAccountingPeriod, which auto-created
+// a monthly accounting period whenever a file was imported. This function has been
+// removed as part of the flexible statement periods redesign.
+//
+// Periods are now user-defined date ranges created manually via the API.
+// Transactions and expenses are imported freely without auto-period assignment —
+// they are always visible in the "All Periods" view and appear in any period
+// whose date range covers their date.
+//
+// See: controllers/accountingController.go for period CRUD endpoints.

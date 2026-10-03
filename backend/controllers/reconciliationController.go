@@ -8,41 +8,34 @@ import (
 	"github.com/gofiber/fiber/v3"
 )
 
-// GetFlaggedItems fetches all UNMATCHED or PARTIAL BankTransactions
-// and all orphaned Expenses, and returns them as JSON.
-// Expects optional query parameters: ?year=2026 & month=8
+// GetFlaggedItems fetches all UNMATCHED BankTransactions and all orphaned Expenses.
+//
+// Optional query parameters:
+//   - ?periodId=123    filter to items within that period's date range
 func GetFlaggedItems(c fiber.Ctx) error {
-
-	year := c.Query("year")
-	month := c.Query("month")
+	startDate := c.Query("startDate")
+	endDate := c.Query("endDate")
 
 	var txs []models.BankTransaction
-	txsQuery := db.DB.Model(&models.BankTransaction{})
-
-	txsQuery = txsQuery.Where("reconciliation_status != ?", "MATCHED")
-
-	if year != "" {
-		txsQuery = txsQuery.Where("EXTRACT(YEAR FROM date) = ?", year)
-	}
-	if month != "" {
-		txsQuery = txsQuery.Where("EXTRACT(MONTH FROM date) = ?", month)
-	}
-	txsQuery.Order("date DESC").Preload("Expenses.Receipts").Find(&txs)
+	txsQuery := db.DB.Model(&models.BankTransaction{}).
+		Where("reconciliation_status != ?", "MATCHED")
 
 	var expenses []models.Expense
-	expenseQuery := db.DB.Model(&models.Expense{})
-
-	// An expense is "orphaned" if it has no confirmed row in the join table and is not cash.
-	expenseQuery = expenseQuery.
+	expenseQuery := db.DB.Model(&models.Expense{}).
 		Where("tender != 'cash'").
 		Where("id NOT IN (?)", db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed"))
 
-	if year != "" {
-		expenseQuery = expenseQuery.Where("EXTRACT(YEAR FROM timestamp) = ?", year)
+	// Filter by date range if provided
+	if startDate != "" {
+		txsQuery = txsQuery.Where("date >= ?", startDate)
+		expenseQuery = expenseQuery.Where("timestamp >= ?", startDate)
 	}
-	if month != "" {
-		expenseQuery = expenseQuery.Where("EXTRACT(MONTH FROM timestamp) = ?", month)
+	if endDate != "" {
+		txsQuery = txsQuery.Where("date <= ?", endDate)
+		expenseQuery = expenseQuery.Where("timestamp <= ?", endDate)
 	}
+
+	txsQuery.Order("date DESC").Preload("Expenses.Receipts").Find(&txs)
 	expenseQuery.Order("timestamp DESC").Preload("Receipts").Find(&expenses)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
@@ -52,7 +45,7 @@ func GetFlaggedItems(c fiber.Ctx) error {
 	})
 }
 
-// LinkExpenseToTransaction manually forces an Expense to link to a BankTransaction
+// LinkExpenseToTransaction manually forces an Expense to link to a BankTransaction.
 func LinkExpenseToTransaction(c fiber.Ctx) error {
 	type LinkRequest struct {
 		ExpenseID     uint `json:"expenseId"`
@@ -74,8 +67,11 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "expense not found"})
 	}
 
-	if utils.IsMonthClosed(txToLink.Date.Year(), int(txToLink.Date.Month())) || utils.IsMonthClosed(expenseToLink.Timestamp.Year(), int(expenseToLink.Timestamp.Month())) {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot modify links for items in a closed accounting period."})
+	// Guard: neither side can be in a closed period
+	if utils.IsDateInClosedPeriod(txToLink.Date) || utils.IsDateInClosedPeriod(expenseToLink.Timestamp) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Cannot modify links for items in a closed accounting period.",
+		})
 	}
 
 	// Constraint: an expense with multiple receipt files may only link to one transaction.
@@ -100,7 +96,6 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 		Delete(&models.ExpenseBankTransaction{})
 
 	// Create the confirmed link in the join table.
-	// Previously this set expense.BankTransactionID — that field no longer exists.
 	db.DB.Create(&models.ExpenseBankTransaction{
 		ExpenseID:         req.ExpenseID,
 		BankTransactionID: req.TransactionID,
@@ -114,7 +109,7 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 	})
 }
 
-// UnlinkExpense removes a specific confirmed link between an Expense and a BankTransaction
+// UnlinkExpense removes a specific confirmed link between an Expense and a BankTransaction.
 func UnlinkExpense(c fiber.Ctx) error {
 	type UnlinkRequest struct {
 		ExpenseID uint `json:"expenseId"`
@@ -130,15 +125,19 @@ func UnlinkExpense(c fiber.Ctx) error {
 
 	var tx models.BankTransaction
 	if err := db.DB.First(&tx, req.TransactionID).Error; err == nil {
-		if utils.IsMonthClosed(tx.Date.Year(), int(tx.Date.Month())) {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot unlink items in a closed accounting period."})
+		if utils.IsDateInClosedPeriod(tx.Date) {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"error": "Cannot unlink items in a closed accounting period.",
+			})
 		}
 	}
 
 	var exp models.Expense
 	if err := db.DB.First(&exp, req.ExpenseID).Error; err == nil {
-		if utils.IsMonthClosed(exp.Timestamp.Year(), int(exp.Timestamp.Month())) {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot unlink items in a closed accounting period."})
+		if utils.IsDateInClosedPeriod(exp.Timestamp) {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"error": "Cannot unlink items in a closed accounting period.",
+			})
 		}
 	}
 
@@ -157,8 +156,7 @@ func UnlinkExpense(c fiber.Ctx) error {
 	})
 }
 
-// MarkExpenseAsCash flags an Expense as "Cash" (e.g. by setting Tender = "cash")
-// so it doesn't need to be reconciled to the bank.
+// MarkExpenseAsCash flags an Expense's tender as "cash" so it doesn't need reconciliation.
 func MarkExpenseAsCash(c fiber.Ctx) error {
 	id := c.Params("id")
 
@@ -171,8 +169,10 @@ func MarkExpenseAsCash(c fiber.Ctx) error {
 		})
 	}
 
-	if utils.IsMonthClosed(expense.Timestamp.Year(), int(expense.Timestamp.Month())) {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot modify an expense in a closed accounting period."})
+	if utils.IsDateInClosedPeriod(expense.Timestamp) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Cannot modify an expense in a closed accounting period.",
+		})
 	}
 
 	expense.Tender = "cash"
@@ -189,6 +189,7 @@ func GetUnlinkedItems(c fiber.Ctx) error {
 	var txs []models.BankTransaction
 	db.DB.Where("reconciliation_status != ?", "MATCHED").
 		Order("date DESC").
+		Preload("ChartAccount").
 		Find(&txs)
 
 	var expenses []models.Expense
@@ -196,7 +197,7 @@ func GetUnlinkedItems(c fiber.Ctx) error {
 	db.DB.Where("tender != 'cash'").
 		Where("id NOT IN (?)", db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed")).
 		Order("timestamp DESC").
-		Preload("Receipts").
+		Preload("Receipts").Preload("ChartAccount").
 		Find(&expenses)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{

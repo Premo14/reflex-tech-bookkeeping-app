@@ -1,0 +1,88 @@
+package db
+
+import (
+	"log"
+	"reflex-tech-bookkeeping-app-api/models"
+)
+
+// seedEntry is a helper struct for defining the default COA seed data.
+type seedEntry struct {
+	Code        string
+	Name        string
+	Type        string
+	Description string
+}
+
+// defaultAccounts is the standard small-business chart of accounts that gets seeded
+// on first boot. Users can add, rename, or deactivate accounts after setup —
+// these are sensible starting defaults, not enforced structure.
+//
+// Numbering follows the standard convention:
+//
+//	1xxx = Assets       (things the business owns)
+//	2xxx = Liabilities  (things the business owes)
+//	3xxx = Equity       (owner's stake)
+//	4xxx = Revenue      (money brought in)
+//	5xxx = Expenses     (costs to run the business)
+var defaultAccounts = []seedEntry{
+	// Assets
+	{Code: "1010", Name: "Checking Account", Type: "ASSET", Description: "Primary business checking account"},
+	{Code: "1020", Name: "Savings Account", Type: "ASSET", Description: "Business savings account"},
+	{Code: "1030", Name: "Cash on Hand", Type: "ASSET", Description: "Physical cash held by the business"},
+	{Code: "1100", Name: "Accounts Receivable", Type: "ASSET", Description: "Money owed to the business by customers"},
+	{Code: "1200", Name: "Inventory", Type: "ASSET", Description: "Goods held for sale"},
+	{Code: "1300", Name: "Equipment", Type: "ASSET", Description: "Business equipment and tools"},
+
+	// Liabilities
+	{Code: "2010", Name: "Accounts Payable", Type: "LIABILITY", Description: "Money the business owes to vendors"},
+	{Code: "2020", Name: "Credit Card", Type: "LIABILITY", Description: "Business credit card balance"},
+	{Code: "2030", Name: "Bank Loan", Type: "LIABILITY", Description: "Outstanding loan balances"},
+	{Code: "2100", Name: "Accrued Wages", Type: "LIABILITY", Description: "Wages earned but not yet paid"},
+
+	// Equity
+	{Code: "3010", Name: "Owner's Capital", Type: "EQUITY", Description: "Owner's investment in the business"},
+	{Code: "3020", Name: "Retained Earnings", Type: "EQUITY", Description: "Cumulative profit kept in the business"},
+
+	// Revenue
+	{Code: "4010", Name: "Sales Revenue", Type: "REVENUE", Description: "Income from product sales"},
+	{Code: "4020", Name: "Service Fees", Type: "REVENUE", Description: "Income from services rendered"},
+	{Code: "4030", Name: "Interest Income", Type: "REVENUE", Description: "Interest earned on accounts"},
+
+	// Expenses
+	{Code: "5010", Name: "Rent", Type: "EXPENSE", Description: "Office or workspace rent"},
+	{Code: "5020", Name: "Payroll", Type: "EXPENSE", Description: "Employee wages and salaries"},
+	{Code: "5030", Name: "Utilities", Type: "EXPENSE", Description: "Electricity, water, internet, etc."},
+	{Code: "5040", Name: "Advertising", Type: "EXPENSE", Description: "Marketing and advertising costs"},
+	{Code: "5050", Name: "Office Supplies", Type: "EXPENSE", Description: "Stationery, printer supplies, etc."},
+	{Code: "5060", Name: "Travel", Type: "EXPENSE", Description: "Business travel and transportation"},
+	{Code: "5070", Name: "Bank Fees", Type: "EXPENSE", Description: "Bank service charges and fees"},
+	{Code: "5080", Name: "Insurance", Type: "EXPENSE", Description: "Business insurance premiums"},
+	{Code: "5090", Name: "Meals & Entertainment", Type: "EXPENSE", Description: "Client meals and business entertainment"},
+	{Code: "5100", Name: "Professional Services", Type: "EXPENSE", Description: "Accountant, lawyer, consultant fees"},
+	{Code: "5110", Name: "Software & Subscriptions", Type: "EXPENSE", Description: "SaaS tools, software licenses"},
+}
+
+// SeedChartOfAccounts inserts the default accounts only when the chart_accounts table
+// is completely empty. This is safe to call on every startup — it no-ops if data exists.
+func SeedChartOfAccounts() {
+	var count int64
+	DB.Model(&models.ChartAccount{}).Count(&count)
+	if count > 0 {
+		return // already seeded, do nothing
+	}
+
+	log.Println("Seeding default Chart of Accounts...")
+	for _, entry := range defaultAccounts {
+		account := models.ChartAccount{
+			Code:        entry.Code,
+			Name:        entry.Name,
+			Type:        entry.Type,
+			Description: entry.Description,
+			Active:      true,
+		}
+		if err := DB.Create(&account).Error; err != nil {
+			log.Printf("Failed to seed account %s (%s): %v\n", entry.Code, entry.Name, err)
+		}
+	}
+	log.Printf("Seeded %d default chart of accounts entries.\n", len(defaultAccounts))
+}
