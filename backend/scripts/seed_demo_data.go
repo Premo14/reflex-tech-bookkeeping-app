@@ -41,7 +41,7 @@ func main() {
 		Amount:               -145.50,
 		TransactionType:      "DEBIT",
 		ReconciliationStatus: "UNMATCHED", // Engine will update
-		ChartAccountID:       &officeSupplies.ID,
+		CategoryAccountID:    &officeSupplies.ID,
 	})
 	db.DB.Create(&models.Expense{
 		Timestamp:            matchDate,
@@ -132,7 +132,7 @@ func main() {
 		Amount:               1500.00,
 		TransactionType:      "DEP",
 		ReconciliationStatus: "UNMATCHED", // Engine will set to MATCHED
-		ChartAccountID:       &sales.ID,
+		CategoryAccountID:    &sales.ID,
 	})
 
 	log.Println("Seeding Scenario 7: Cash Receipt (No Bank Tx Needed)")

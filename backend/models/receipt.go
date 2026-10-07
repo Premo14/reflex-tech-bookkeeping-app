@@ -11,6 +11,7 @@ type Expense struct {
 	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 
 	// AI-extracted (or manually entered) fields
+	IsManual    bool      `gorm:"default:false" json:"isManual"`
 	Timestamp   time.Time `json:"timestamp"`
 	Vendor      string    `json:"vendor"`
 	Description string    `json:"description"`
@@ -30,6 +31,9 @@ type Expense struct {
 	BankTransactions []BankTransaction `gorm:"many2many:expense_bank_transactions;" json:"bankTransactions"`
 
 	ReconciliationStatus string `json:"reconciliationStatus"`
+	ReviewStatus         string `json:"reviewStatus"` // PENDING, APPROVED, IGNORED
+	ExclusionReason      string `json:"exclusionReason"` // DUPLICATE, PERSONAL, ERROR, OTHER (set when excluded)
+	ExclusionNote        string `json:"exclusionNote"`
 	HasSuggestions       bool   `json:"hasSuggestions"`
 	Notes                string `json:"notes"` // Free-text memo/annotation field
 

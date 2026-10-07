@@ -37,14 +37,24 @@ type BankStatement struct {
 type BankTransaction struct {
 	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 
+	IsManual bool `gorm:"default:false" json:"isManual"`
+
 	// Nullable so manually created transactions don't need to belong to an imported statement.
 	BankStatementID *uint `gorm:"index" json:"bankStatementId"`
 
+	// The BANK/CREDIT-CARD account this transaction moved through (ASSET or LIABILITY).
 	// Denormalized from the parent BankStatement's ChartAccountID for fast per-account
 	// filtering without a JOIN to bank_statements. Set during OFX import alongside the statement.
 	// Nullable for backward compatibility and manual transactions without an assigned account.
 	ChartAccountID *uint        `json:"chartAccountId"`
 	ChartAccount   ChartAccount `gorm:"foreignKey:ChartAccountID" json:"chartAccount"`
+
+	// The CATEGORY this transaction is booked under (EXPENSE or REVENUE account).
+	// Kept separate from ChartAccountID because a bank transaction has two sides:
+	// where the money moved (above) and what it was for (this). Linked expenses must
+	// agree with this category, except on split transactions (several linked expenses).
+	CategoryAccountID *uint        `gorm:"index" json:"categoryAccountId"`
+	Category          ChartAccount `gorm:"foreignKey:CategoryAccountID" json:"category"`
 
 	// The actual transaction data
 	Date            time.Time `gorm:"not null;index" json:"date"`
@@ -59,6 +69,9 @@ type BankTransaction struct {
 	Expenses []Expense `gorm:"many2many:expense_bank_transactions;" json:"expenses"`
 
 	ReconciliationStatus string `json:"reconciliationStatus"`
+	ReviewStatus         string `json:"reviewStatus"` // PENDING, APPROVED, IGNORED
+	ExclusionReason      string `json:"exclusionReason"` // DUPLICATE, PERSONAL, ERROR, OTHER (set when excluded)
+	ExclusionNote        string `json:"exclusionNote"`
 	HasSuggestions       bool   `json:"hasSuggestions"`
 	Notes                string `json:"notes"` // Free-text memo/annotation field
 

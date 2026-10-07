@@ -126,8 +126,9 @@ func ParseOfx(filePath string) {
 		}
 
 		if IsDateInClosedPeriod(dbTx.Date) {
-			log.Printf("Skipping transaction %s because it falls within a closed period\n", dbTx.FITID)
-			continue
+			dbTx.ReviewStatus = "PENDING"
+		} else {
+			dbTx.ReviewStatus = "APPROVED"
 		}
 		dbTx.ReconciliationStatus = "UNMATCHED"
 

@@ -6,6 +6,7 @@ import (
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/utils"
 	"time"
+	"strconv"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -24,7 +25,7 @@ func GetTransactions(c fiber.Ctx) error {
 	search := c.Query("search")
 
 	var txs []models.BankTransaction
-	query := db.DB.Model(&models.BankTransaction{})
+	query := db.DB.Model(&models.BankTransaction{}).Where("review_status != ?", "IGNORED")
 
 	// Filter by date range if provided
 	if startDate != "" {
@@ -42,11 +43,29 @@ func GetTransactions(c fiber.Ctx) error {
 		query = query.Where("description ILIKE ?", "%"+search+"%")
 	}
 
-	query.Order("date DESC").Preload("Expenses.Receipts").Preload("ChartAccount").Find(&txs)
+	pageStr := c.Query("page", "1")
+	limitStr := c.Query("limit", "50")
+	page, _ := strconv.Atoi(pageStr)
+	limit, _ := strconv.Atoi(limitStr)
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 50
+	}
+	offset := (page - 1) * limit
+
+	var total int64
+	query.Count(&total)
+
+	query.Order("date DESC").Preload("Expenses.Receipts").Preload("ChartAccount").Preload("Category").Offset(offset).Limit(limit).Find(&txs)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":       "success",
 		"transactions": txs,
+		"total":        total,
+		"page":         page,
+		"limit":        limit,
 	})
 }
 
@@ -56,7 +75,7 @@ func GetTransaction(c fiber.Ctx) error {
 	id := c.Params("id")
 	var tx models.BankTransaction
 
-	if err := db.DB.Preload("ChartAccount").First(&tx, "id = ?", id).Error; err != nil {
+	if err := db.DB.Preload("ChartAccount").Preload("Category").First(&tx, "id = ?", id).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Transaction not found"})
 	}
 
@@ -93,6 +112,7 @@ func CreateTransaction(c fiber.Ctx) error {
 		Amount          float64   `json:"amount"`
 		TransactionType string    `json:"transactionType"`
 		ChartAccountID  *uint     `json:"chartAccountId"`
+		Notes           string    `json:"notes"`
 	}
 
 	var input createInput
@@ -112,15 +132,19 @@ func CreateTransaction(c fiber.Ctx) error {
 		Description:     input.Description,
 		Amount:          input.Amount,
 		TransactionType: input.TransactionType,
-		ChartAccountID:  input.ChartAccountID,
+		CategoryAccountID: input.ChartAccountID, // Mapped to CategoryAccountID
+		Notes:           input.Notes,
 		// Synthetic FITID satisfies the unique constraint on manually entered rows.
 		FITID: fmt.Sprintf("MANUAL-%d", time.Now().UnixNano()),
+		IsManual: true,
 		// BankStatementID left nil — manual entries don't belong to an imported statement.
 	}
 
 	if err := db.DB.Create(&tx).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create transaction"})
 	}
+
+	go utils.RunReconciliation()
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "success", "transaction": tx})
 }
@@ -153,13 +177,13 @@ func UpdateTransaction(c fiber.Ctx) error {
 	}
 
 	db.DB.Model(&tx).Updates(map[string]interface{}{
-		"description":      input.Description,
-		"amount":           input.Amount,
-		"chart_account_id": input.ChartAccountID,
-		"notes":            input.Notes,
+		"description":         input.Description,
+		"amount":              input.Amount,
+		"category_account_id": input.ChartAccountID,
+		"notes":               input.Notes,
 	})
 
-	utils.UpdateReconciliationStatuses()
+	go utils.RunReconciliation()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success", "transaction": tx})
 }
@@ -176,6 +200,12 @@ func DeleteTransaction(c fiber.Ctx) error {
 	if utils.IsDateInClosedPeriod(tx.Date) {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 			"error": "Cannot delete a transaction in a closed accounting period.",
+		})
+	}
+
+	if tx.BankStatementID != nil {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Cannot delete a bank transaction that was imported from an OFX file. Please exclude/ignore the transaction instead.",
 		})
 	}
 

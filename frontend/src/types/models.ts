@@ -38,6 +38,7 @@ export interface ExpenseBankTransaction {
 
 export interface Expense {
   id: number;
+  isManual: boolean;
   timestamp: string;
   vendor: string;
   description: string;
@@ -50,6 +51,9 @@ export interface Expense {
   bankTransactions?: BankTransaction[];
   receipts?: Receipt[];
   reconciliationStatus?: string;
+  reviewStatus?: string;
+  exclusionReason?: string;
+  exclusionNote?: string;
   hasSuggestions?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -65,6 +69,7 @@ export interface MarkExpenseAsCashResponse {
 
 export interface BankTransaction {
   id: number;
+  isManual: boolean;
   bankStatementId?: number;
   chartAccountId?: number;
   chartAccount?: ChartAccount;
@@ -74,6 +79,9 @@ export interface BankTransaction {
   transactionType: string;
   fitId: string;
   reconciliationStatus: string;
+  reviewStatus: string;
+  exclusionReason?: string;
+  exclusionNote?: string;
   hasSuggestions?: boolean;
   notes?: string;
   expenses?: Expense[];
@@ -106,6 +114,10 @@ export interface ProfitLossReport {
   netIncome: number;
   uncategorizedTxCount: number;
   uncategorizedExpCount: number;
+  excludedTxCount: number;
+  excludedTxTotal: number;
+  excludedExpCount: number;
+  excludedExpTotal: number;
 }
 
 // Input for creating a new expense manually (no file upload)
@@ -116,6 +128,7 @@ export interface CreateExpenseInput {
   amount: number;
   tender: string;
   chartAccountId?: number; // optional COA category
+  notes?: string;          // optional notes
 }
 
 // Input for creating a new bank transaction manually (no OFX import)
@@ -125,6 +138,7 @@ export interface CreateTransactionInput {
   amount: number;
   transactionType: string;
   chartAccountId?: number;  // optional COA account
+  notes?: string;           // optional notes
 }
 
 // Returned by GET /transactions/:id — separates confirmed from suggested expense links
@@ -146,12 +160,16 @@ export interface TransactionFilters {
   endDate?: string;
   accountId?: number;
   search?: string;
+  page?: number;
+  limit?: number;
 }
 
 export interface ExpenseFilters {
   startDate?: string;
   endDate?: string;
   accountId?: number;
+  page?: number;
+  limit?: number;
 }
 
 export interface FlaggedItems {
@@ -185,4 +203,45 @@ export interface UpdateChartAccountInput {
   parentId?: number;
   description?: string;
   active?: boolean;
+}
+export interface PeriodAuditLog {
+  id: number;
+  action: string;
+  previousDate: string;
+  newDate: string;
+  reason: string;
+  createdAt: string;
+}
+
+// One member of a link group (a bank transaction or an expense) affected by exclude/restore.
+export interface GroupItem {
+  type: "transaction" | "expense";
+  id: number;
+  label: string;
+  date: string;
+  amount: number;
+  reviewStatus: string;
+}
+
+export interface ExcludePreview {
+  items: GroupItem[];
+  blocked: boolean;
+  blockedReason: string;
+}
+
+export type ExclusionReason = "DUPLICATE" | "PERSONAL" | "ERROR" | "OTHER";
+
+export interface ClosePreflight {
+  date: string;
+  canClose: boolean;
+  unlinkedTxCount: number;
+  unlinkedExpCount: number;
+  pendingCount: number;
+  unlinkedTxSamples: GroupItem[];
+  unlinkedExpSamples: GroupItem[];
+  earliestBlockerDate: string;
+  excludedTxCount: number;
+  excludedExpCount: number;
+  excludedTxTotal: number;
+  excludedExpTotal: number;
 }

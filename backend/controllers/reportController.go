@@ -31,8 +31,9 @@ func GetProfitLoss(c fiber.Ctx) error {
 	var revenueLines []AccountLine
 	revQ := db.DB.Table("bank_transactions bt").
 		Select("ca.code as account_code, ca.name as account_name, COALESCE(SUM(bt.amount), 0) as total").
-		Joins("JOIN chart_accounts ca ON ca.id = bt.chart_account_id").
+		Joins("JOIN chart_accounts ca ON ca.id = bt.category_account_id").
 		Where("ca.type = ?", "REVENUE").
+		Where(inBooksClauseBT).
 		Group("ca.id, ca.code, ca.name").
 		Order("ca.code ASC")
 	if startDate != "" {
@@ -55,6 +56,7 @@ func GetProfitLoss(c fiber.Ctx) error {
 		Select("ca.code as account_code, ca.name as account_name, COALESCE(SUM(e.amount), 0) as total").
 		Joins("JOIN chart_accounts ca ON ca.id = e.chart_account_id").
 		Where("ca.type = ?", "EXPENSE").
+		Where(inBooksClauseExpAS).
 		Group("ca.id, ca.code, ca.name").
 		Order("ca.code ASC")
 	if startDate != "" {
@@ -73,17 +75,32 @@ func GetProfitLoss(c fiber.Ctx) error {
 
 	// Also count uncategorized transactions and expenses for completeness
 	var uncategorizedTxCount int64
-	uncatTxQ := db.DB.Model(&models.BankTransaction{}).Where("chart_account_id IS NULL OR chart_account_id NOT IN (?)",
+	uncatTxQ := db.DB.Model(&models.BankTransaction{}).Where(inBooksClause).Where("category_account_id IS NULL OR category_account_id NOT IN (?)",
 		db.DB.Table("chart_accounts").Select("id").Where("type IN ?", []string{"REVENUE", "EXPENSE"}))
 	if startDate != "" { uncatTxQ = uncatTxQ.Where("date >= ?", startDate) }
 	if endDate != ""   { uncatTxQ = uncatTxQ.Where("date <= ?", endDate) }
 	uncatTxQ.Count(&uncategorizedTxCount)
 
 	var uncategorizedExpCount int64
-	uncatExpQ := db.DB.Model(&models.Expense{}).Where("chart_account_id IS NULL")
+	uncatExpQ := db.DB.Model(&models.Expense{}).Where(inBooksClause).Where("chart_account_id IS NULL")
 	if startDate != "" { uncatExpQ = uncatExpQ.Where("timestamp >= ?", startDate) }
 	if endDate != ""   { uncatExpQ = uncatExpQ.Where("timestamp <= ?", endDate) }
 	uncatExpQ.Count(&uncategorizedExpCount)
+
+	// Disclosure: items excluded from the books in this date range (not counted above).
+	type exclAgg struct {
+		Count int64
+		Total float64
+	}
+	var exclTx, exclExp exclAgg
+	exTxQ := db.DB.Model(&models.BankTransaction{}).Select("COUNT(*) as count, COALESCE(SUM(ABS(amount)), 0) as total").Where("review_status = ?", "IGNORED")
+	if startDate != "" { exTxQ = exTxQ.Where("date >= ?", startDate) }
+	if endDate != ""   { exTxQ = exTxQ.Where("date <= ?", endDate) }
+	exTxQ.Scan(&exclTx)
+	exExpQ := db.DB.Model(&models.Expense{}).Select("COUNT(*) as count, COALESCE(SUM(amount), 0) as total").Where("review_status = ?", "IGNORED")
+	if startDate != "" { exExpQ = exExpQ.Where("timestamp >= ?", startDate) }
+	if endDate != ""   { exExpQ = exExpQ.Where("timestamp <= ?", endDate) }
+	exExpQ.Scan(&exclExp)
 
 	netIncome := totalRevenue - totalExpenses
 
@@ -113,5 +130,9 @@ func GetProfitLoss(c fiber.Ctx) error {
 		"netIncome":               netIncome,
 		"uncategorizedTxCount":    uncategorizedTxCount,
 		"uncategorizedExpCount":   uncategorizedExpCount,
+		"excludedTxCount":         exclTx.Count,
+		"excludedTxTotal":         exclTx.Total,
+		"excludedExpCount":        exclExp.Count,
+		"excludedExpTotal":        exclExp.Total,
 	})
 }

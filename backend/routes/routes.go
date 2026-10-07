@@ -31,6 +31,17 @@ func SetupRoutes(app *fiber.App) {
 	// Global Settings (Books Closed Date)
 	api.Get("/settings", controllers.GetSettings)
 	api.Post("/settings", controllers.UpdateSettings)
+	api.Get("/settings/audit-logs", controllers.GetAuditLogs)
+	api.Get("/settings/close-preflight", controllers.GetClosePreflight)
+	// Review Queue
+	api.Get("/review-queue", controllers.GetReviewQueue)
+	api.Post("/review-queue/resolve", controllers.ResolveQueueItems)
+
+	// Excluding items from the books (cascades through link groups)
+	api.Post("/items/exclude-preview", controllers.ExcludePreview)
+	api.Post("/items/exclude", controllers.ExcludeItem)
+	api.Post("/items/restore", controllers.RestoreItem)
+
 	// Bank Transactions
 	api.Get("/transactions", controllers.GetTransactions)
 	api.Post("/transactions", controllers.CreateTransaction) // manual entry
@@ -44,6 +55,8 @@ func SetupRoutes(app *fiber.App) {
 	api.Get("/expenses/:id", controllers.GetExpense)
 	api.Patch("/expenses/:id", controllers.UpdateExpense)
 	api.Delete("/expenses/:id", controllers.DeleteExpense)
+	api.Post("/expenses/:id/receipt", controllers.UploadReceiptToExpense) // manual receipt upload
+	api.Delete("/receipts/:id", controllers.DeleteReceipt)
 
 	// Mark Expense as Cash (bypasses reconciliation requirement)
 	api.Patch("/expenses/:id/cash", controllers.MarkExpenseAsCash)
@@ -51,6 +64,7 @@ func SetupRoutes(app *fiber.App) {
 	// Reconciliation
 	api.Get("/reconciliation/flagged", controllers.GetFlaggedItems)
 	api.Post("/reconciliation/link", controllers.LinkExpenseToTransaction)
+	api.Post("/reconciliation/create-and-link", controllers.CreateAndLink)
 	api.Post("/reconciliation/unlink", controllers.UnlinkExpense)
 	api.Get("/reconciliation/unlinked", controllers.GetUnlinkedItems)
 

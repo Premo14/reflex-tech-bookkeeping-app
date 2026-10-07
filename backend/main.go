@@ -37,7 +37,7 @@ func main() {
 	}))
 
 	// Expose the processed/ folder so the frontend can display receipt images
-	app.Get("/images/*", static.New(constants.ProcessedPath))
+	app.Get("/api/images/*", static.New(constants.ProcessedPath))
 
 	routes.SetupRoutes(app)
 

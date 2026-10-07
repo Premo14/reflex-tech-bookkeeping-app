@@ -43,13 +43,13 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
     return (
       <div className="w-full flex flex-col gap-1.5 text-left" ref={dropdownRef}>
         {label && (
-          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest pl-1">
+          <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest pl-1">
             {label}
           </label>
         )}
         <div className="relative">
           {icon && (
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none z-10">
+            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none z-10">
               {icon}
             </div>
           )}
@@ -68,7 +68,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
             `}
           >
             <span className="truncate">{selectedLabel}</span>
-            <svg className={`w-4 h-4 text-zinc-500 shrink-0 ml-2 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className={`w-4 h-4 text-zinc-400 shrink-0 ml-2 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
             </svg>
           </button>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface SidebarProps {
   startDate: string;
@@ -7,6 +7,8 @@ interface SidebarProps {
   setEndDate: (date: string) => void;
   isSidebarOpen: boolean;
   setIsSidebarOpen: (isOpen: boolean) => void;
+  pendingCount?: number;
+  onOpenReview?: (type: 'PENDING' | 'IGNORED') => void;
 }
 
 export default function Sidebar({
@@ -16,9 +18,22 @@ export default function Sidebar({
   setEndDate,
   isSidebarOpen,
   setIsSidebarOpen,
+  pendingCount = 0,
+  onOpenReview,
 }: SidebarProps) {
   const [activeFilter, setActiveFilter] = useState("ALL_TIME");
   const [showCustom, setShowCustom] = useState(false);
+
+  // Sync active filter if dates change externally (e.g. from SettingsModal View Unresolved Items)
+  useEffect(() => {
+    if (startDate === "" && endDate === "") {
+      setActiveFilter("ALL_TIME");
+      setShowCustom(false);
+    } else if (startDate === "" && endDate !== "") {
+      setActiveFilter("CUSTOM");
+      setShowCustom(true);
+    }
+  }, [startDate, endDate]);
 
   const setFilter = (filter: string) => {
     setActiveFilter(filter);
@@ -96,7 +111,28 @@ export default function Sidebar({
 
         <div className="flex-1 overflow-y-auto py-6">
           <div className="px-8 mb-3">
-            <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest">Date Filters</h2>
+            <h2 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Review Queue</h2>
+          </div>
+          <div className="px-4 space-y-1 mb-8">
+            <button
+              onClick={() => onOpenReview && onOpenReview('PENDING')}
+              className="w-full flex items-center justify-between text-left py-2.5 px-4 rounded-xl transition-all duration-200 text-zinc-400 font-medium hover:text-white hover:bg-white/5 border border-transparent"
+            >
+              <span className="text-sm">Action Required</span>
+              {pendingCount > 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-500 text-[10px] font-bold border border-amber-500/20">{pendingCount}</span>
+              )}
+            </button>
+            <button
+              onClick={() => onOpenReview && onOpenReview('IGNORED')}
+              className="w-full flex items-center justify-between text-left py-2.5 px-4 rounded-xl transition-all duration-200 text-zinc-400 font-medium hover:text-white hover:bg-white/5 border border-transparent"
+            >
+              <span className="text-sm">Ignored Items</span>
+            </button>
+          </div>
+
+          <div className="px-8 mb-3">
+            <h2 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Date Filters</h2>
           </div>
           
           <div className="px-4 space-y-1">
@@ -111,7 +147,7 @@ export default function Sidebar({
             <div className="mx-4 mt-4 p-4 bg-[#121212] border border-white/5 rounded-xl shadow-inner">
               <div className="space-y-4">
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5">Start Date</label>
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5">Start Date</label>
                   <input
                     type="date"
                     className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:border-emerald-500 transition-colors"
@@ -120,7 +156,7 @@ export default function Sidebar({
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5">End Date</label>
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5">End Date</label>
                   <input
                     type="date"
                     className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:border-emerald-500 transition-colors"

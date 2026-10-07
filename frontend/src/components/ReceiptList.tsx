@@ -44,7 +44,7 @@ export default function ReceiptList({ expenses, filter, searchQuery, sortField, 
   if (sortedExpenses.length === 0) {
     return (
       <div className="text-center py-16 border border-dashed border-white/10 rounded-2xl bg-white/[0.02]">
-        <p className="text-zinc-500">No expenses found matching this criteria.</p>
+        <p className="text-zinc-400">No expenses found matching this criteria.</p>
       </div>
     );
   }
@@ -83,8 +83,19 @@ export default function ReceiptList({ expenses, filter, searchQuery, sortField, 
                 <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-zinc-800 text-zinc-400 border border-zinc-700 tracking-wider">
                   {exp.tender}
                 </span>
+                {exp.isManual && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-orange-500/20 text-orange-400 border border-orange-500/30 tracking-wider">
+                    Manual
+                  </span>
+                )}
+                {(!exp.receipts || exp.receipts.length === 0) && (
+                  <span className="flex items-center gap-1 text-[10px] uppercase font-bold text-red-400 bg-red-400/10 px-1.5 py-0.5 rounded border border-red-400/20" title="No physical receipt attached">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                    No Receipt
+                  </span>
+                )}
               </div>
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500 mt-0.5">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400 mt-0.5">
                 {detailItems.map((item, i) => (
                   <React.Fragment key={i}>
                     {i > 0 && <span>&middot;</span>}
@@ -93,7 +104,7 @@ export default function ReceiptList({ expenses, filter, searchQuery, sortField, 
                 ))}
               </div>
               {exp.reconciliationStatus === 'MATCHED' && exp.bankTransactions && exp.bankTransactions.length > 0 && (
-                <div className="text-xs text-zinc-600 mt-1 truncate">
+                <div className="text-xs text-zinc-400 mt-1 truncate">
                   Linked to: {exp.bankTransactions.map(t => t.description).join(", ")}
                 </div>
               )}
@@ -107,11 +118,10 @@ export default function ReceiptList({ expenses, filter, searchQuery, sortField, 
                 {exp.reconciliationStatus === 'UNMATCHED' && exp.hasSuggestions && (
                   <Badge variant="info" size="sm">SUGGESTION FOUND</Badge>
                 )}
-                {exp.reconciliationStatus === 'MATCHED' ? (
-                  <Badge variant="success">LINKED</Badge>
-                ) : (
-                  <Badge variant="danger">UNLINKED</Badge>
-                )}
+                {exp.reconciliationStatus === 'MATCHED' && <Badge variant="success">LINKED</Badge>}
+                {exp.reconciliationStatus === 'PARTIALLY_MATCHED' && <Badge variant="warning">PARTIAL</Badge>}
+                {exp.reconciliationStatus === 'OVER_ALLOCATED' && <Badge variant="danger">OVER-ALLOCATED</Badge>}
+                {exp.reconciliationStatus === 'UNMATCHED' && <Badge variant="neutral">UNLINKED</Badge>}
               </div>
             </div>
           </Card>

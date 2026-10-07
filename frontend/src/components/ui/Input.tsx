@@ -11,13 +11,13 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
     return (
       <div className="w-full flex flex-col gap-1.5 text-left">
         {label && (
-          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest pl-1">
+          <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest pl-1">
             {label}
           </label>
         )}
         <div className="relative">
           {icon && (
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none z-10">
+            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none z-10">
               {icon}
             </div>
           )}

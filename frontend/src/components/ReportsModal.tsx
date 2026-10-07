@@ -73,7 +73,7 @@ export default function ReportsModal({ isOpen = true, onClose }: ReportsModalPro
         </div>
 
         {!report ? (
-          <div className="py-12 flex items-center justify-center text-zinc-500 flex-col">
+          <div className="py-12 flex items-center justify-center text-zinc-400 flex-col">
             <svg className="w-12 h-12 mb-4 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
             <p>Select dates and generate to view P&L</p>
           </div>
@@ -86,15 +86,15 @@ export default function ReportsModal({ isOpen = true, onClose }: ReportsModalPro
 
             {/* REVENUE */}
             <div>
-              <h4 className="text-sm font-bold text-zinc-500 uppercase tracking-wider mb-3">Revenue</h4>
+              <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3">Revenue</h4>
               <div className="space-y-1">
                 {report.revenue.map(line => (
                   <div key={line.accountCode} className="flex justify-between py-2 border-b border-white/5">
-                    <span className="text-zinc-300">{line.accountName} <span className="text-zinc-600 text-xs ml-2">{line.accountCode}</span></span>
+                    <span className="text-zinc-300">{line.accountName} <span className="text-zinc-400 text-xs ml-2">{line.accountCode}</span></span>
                     <span className="font-medium">{formatMoney(line.total)}</span>
                   </div>
                 ))}
-                {report.revenue.length === 0 && <div className="text-sm text-zinc-500 py-2 italic">No revenue recorded</div>}
+                {report.revenue.length === 0 && <div className="text-sm text-zinc-400 py-2 italic">No revenue recorded</div>}
               </div>
               <div className="flex justify-between py-3 mt-2 border-t border-white/10">
                 <span className="font-bold">Total Revenue</span>
@@ -104,15 +104,15 @@ export default function ReportsModal({ isOpen = true, onClose }: ReportsModalPro
 
             {/* EXPENSES */}
             <div>
-              <h4 className="text-sm font-bold text-zinc-500 uppercase tracking-wider mb-3">Operating Expenses</h4>
+              <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3">Operating Expenses</h4>
               <div className="space-y-1">
                 {report.expenses.map(line => (
                   <div key={line.accountCode} className="flex justify-between py-2 border-b border-white/5">
-                    <span className="text-zinc-300">{line.accountName} <span className="text-zinc-600 text-xs ml-2">{line.accountCode}</span></span>
+                    <span className="text-zinc-300">{line.accountName} <span className="text-zinc-400 text-xs ml-2">{line.accountCode}</span></span>
                     <span className="font-medium">{formatMoney(line.total)}</span>
                   </div>
                 ))}
-                {report.expenses.length === 0 && <div className="text-sm text-zinc-500 py-2 italic">No expenses recorded</div>}
+                {report.expenses.length === 0 && <div className="text-sm text-zinc-400 py-2 italic">No expenses recorded</div>}
               </div>
               <div className="flex justify-between py-3 mt-2 border-t border-white/10">
                 <span className="font-bold">Total Expenses</span>
@@ -140,6 +140,23 @@ export default function ReportsModal({ isOpen = true, onClose }: ReportsModalPro
                     There are {report.uncategorizedTxCount} transactions and {report.uncategorizedExpCount} expenses without a category in this period. 
                     These are excluded from the report above. Please categorize them in the Ledger.
                   </p>
+                </div>
+              </div>
+            )}
+
+            {/* EXCLUDED ITEMS FOOTNOTE */}
+            {(report.excludedExpCount > 0 || report.excludedTxCount > 0) && (
+              <div className="mt-4 bg-zinc-500/10 border border-zinc-500/20 p-4 rounded-xl flex items-start gap-3 backdrop-blur-md">
+                <svg className="w-5 h-5 text-zinc-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                <div>
+                  <h5 className="text-sm font-bold text-zinc-400">Excluded Items Footnote</h5>
+                  <p className="text-sm text-zinc-500 mt-1">
+                    This period contains intentionally excluded items that are omitted from the calculations above.
+                  </p>
+                  <ul className="text-sm text-zinc-500 mt-1 list-disc list-inside">
+                    {report.excludedTxCount > 0 && <li>{report.excludedTxCount} Excluded Transactions ({formatMoney(report.excludedTxTotal)})</li>}
+                    {report.excludedExpCount > 0 && <li>{report.excludedExpCount} Excluded Expenses ({formatMoney(report.excludedExpTotal)})</li>}
+                  </ul>
                 </div>
               </div>
             )}

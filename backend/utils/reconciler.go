@@ -18,15 +18,16 @@ func RunReconciliation() {
 	// Previously this was "bank_transaction_id IS NULL" — now we check the join table
 	// directly, since the FK field no longer exists on the Expense struct.
 	var unmatchedExpenses []models.Expense
+	// PENDING (closed-period review) and IGNORED (excluded) items never participate in matching.
 	db.DB.Where("id NOT IN (?)",
 		db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed"),
-	).Find(&unmatchedExpenses)
+	).Where("review_status IS NULL OR review_status = '' OR review_status = ?", "APPROVED").Find(&unmatchedExpenses)
 
 	// Fetch all BankTransactions, then manually load each one's confirmed expenses.
 	// We can't use Preload("Expenses") without a status condition here, because that
 	// would include suggested links and inflate the sum used for match-checking.
 	var allTransactions []models.BankTransaction
-	db.DB.Find(&allTransactions)
+	db.DB.Where("review_status IS NULL OR review_status = '' OR review_status = ?", "APPROVED").Find(&allTransactions)
 	for i := range allTransactions {
 		db.DB.
 			Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
@@ -101,7 +102,7 @@ func RunReconciliation() {
 	var remainingExpenses []models.Expense
 	db.DB.Where("id NOT IN (?)",
 		db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed"),
-	).Find(&remainingExpenses)
+	).Where("review_status IS NULL OR review_status = '' OR review_status = ?", "APPROVED").Find(&remainingExpenses)
 
 	// Track expenses claimed in Pass 2 to prevent double-use across transactions.
 	claimedInPass2 := map[uint]bool{}
@@ -121,6 +122,11 @@ func RunReconciliation() {
 		var sameDayExpenses []models.Expense
 		for _, e := range remainingExpenses {
 			if !claimedInPass2[e.ID] && daysDifference(e.Timestamp, tx.Date) == 0 {
+				if e.ChartAccountID != nil && tx.ChartAccountID != nil {
+					if *e.ChartAccountID != *tx.ChartAccountID {
+						continue
+					}
+				}
 				sameDayExpenses = append(sameDayExpenses, e)
 			}
 		}
@@ -230,10 +236,24 @@ func UpdateReconciliationStatuses() {
 		db.DB.Model(&models.ExpenseBankTransaction{}).
 			Where("expense_id = ? AND status = ?", exp.ID, "suggested").Count(&countSuggested)
 
-		status := "UNMATCHED"
+				status := "UNMATCHED"
 		hasSuggestions := false
+		
 		if countConfirmed > 0 {
-			status = "MATCHED"
+			var sum float64
+			db.DB.Model(&models.BankTransaction{}).
+				Joins("JOIN expense_bank_transactions ebt ON ebt.bank_transaction_id = bank_transactions.id").
+				Where("ebt.expense_id = ? AND ebt.status = 'confirmed'", exp.ID).
+				Select("COALESCE(SUM(ABS(bank_transactions.amount)), 0)").Scan(&sum)
+				
+			diff := exp.Amount - sum
+			if math.Abs(diff) < 0.01 {
+				status = "MATCHED"
+			} else if diff > 0.01 {
+				status = "PARTIALLY_MATCHED"
+			} else {
+				status = "OVER_ALLOCATED"
+			}
 		} else if countSuggested > 0 {
 			hasSuggestions = true
 		}
@@ -285,6 +305,13 @@ func findSubsetSum(expenses []models.Expense, target float64) []models.Expense {
 }
 
 func calculateMatchScore(expense models.Expense, bankTx models.BankTransaction) int {
+	// Guard against conflicting categories
+	if expense.ChartAccountID != nil && bankTx.ChartAccountID != nil {
+		if *expense.ChartAccountID != *bankTx.ChartAccountID {
+			return 0
+		}
+	}
+
 	score := 0
 
 	// A. Exact Amount (+50)

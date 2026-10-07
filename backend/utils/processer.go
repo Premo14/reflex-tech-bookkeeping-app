@@ -18,7 +18,8 @@ import (
 	"github.com/gofiber/fiber/v3/client"
 )
 
-func hashFile(filePath string) (string, error) {
+// HashFile exports the hash function
+func HashFile(filePath string) (string, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return "", err
@@ -46,7 +47,7 @@ func processFile(filePath string) error {
 	}
 
 	// Generate hash
-	fileHash, err := hashFile(filePath)
+	fileHash, err := HashFile(filePath)
 	if err != nil {
 		return err
 	}
@@ -212,6 +213,8 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 	db.DB.Save(receipt)
 
 	log.Printf(" Successfully extracted & saved Expense: Vendor='%s', Amount=%.2f\n", newExpense.Vendor, newExpense.Amount)
+
+	go RunReconciliation()
 
 	return nil
 }

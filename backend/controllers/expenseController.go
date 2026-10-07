@@ -6,6 +6,7 @@ import (
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/utils"
 	"time"
+	"strconv"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -52,6 +53,7 @@ func CreateExpense(c fiber.Ctx) error {
 		Amount         float64   `json:"amount"`
 		Tender         string    `json:"tender"`
 		ChartAccountID *uint     `json:"chartAccountId"`
+		Notes          string    `json:"notes"`
 	}
 
 	var input createInput
@@ -73,11 +75,17 @@ func CreateExpense(c fiber.Ctx) error {
 		Amount:         math.Abs(input.Amount), // always store positive amounts for expenses
 		Tender:         input.Tender,
 		ChartAccountID: input.ChartAccountID,
+		Notes:          input.Notes,
+		IsManual:       true,
+		ReconciliationStatus: "UNMATCHED",
+		ReviewStatus:   "APPROVED",
 	}
 
 	if err := db.DB.Create(&expense).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create expense"})
 	}
+
+	go utils.RunReconciliation()
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "success", "expense": expense})
 }
@@ -93,7 +101,7 @@ func GetExpenses(c fiber.Ctx) error {
 	accountId := c.Query("accountId")
 
 	var expenses []models.Expense
-	query := db.DB.Model(&models.Expense{})
+	query := db.DB.Model(&models.Expense{}).Where("review_status != ?", "IGNORED")
 
 	// Filter by date range if provided
 	if startDate != "" {
@@ -107,12 +115,30 @@ func GetExpenses(c fiber.Ctx) error {
 		query = query.Where("chart_account_id = ?", accountId)
 	}
 
+	pageStr := c.Query("page", "1")
+	limitStr := c.Query("limit", "50")
+	page, _ := strconv.Atoi(pageStr)
+	limit, _ := strconv.Atoi(limitStr)
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 50
+	}
+	offset := (page - 1) * limit
+
+	var total int64
+	query.Count(&total)
+
 	// Preload BankTransactions so the frontend knows if it's linked
-	query.Order("timestamp DESC").Preload("Receipts").Preload("BankTransactions").Preload("ChartAccount").Find(&expenses)
+	query.Order("timestamp DESC").Preload("Receipts").Preload("BankTransactions").Preload("ChartAccount").Offset(offset).Limit(limit).Find(&expenses)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":   "success",
 		"expenses": expenses,
+		"total":    total,
+		"page":     page,
+		"limit":    limit,
 	})
 }
 
@@ -155,7 +181,7 @@ func UpdateExpense(c fiber.Ctx) error {
 		"notes":            input.Notes,
 	})
 
-	utils.UpdateReconciliationStatuses()
+	go utils.RunReconciliation()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success", "expense": expense})
 }

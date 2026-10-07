@@ -8,15 +8,19 @@ import { Modal } from "./ui/Modal";
 import DetailDrawer from "./DetailDrawer";
 import { getTransactions, getExpenses, createTransaction, createExpense, getSummary } from "../services/api";
 import type { BankTransaction, Expense, ChartAccount, LedgerSummary } from "../types/models";
+import CreateExpenseForm from "./CreateExpenseForm";
+import CreateTransactionForm from "./CreateTransactionForm";
+import Pagination from "./ui/Pagination";
 
 interface LedgerGridProps {
   startDate: string;
   endDate: string;
   accounts: ChartAccount[];
   activeAccountId: number | null;
+  viewUnlinkedTrigger?: number;
 }
 
-export default function LedgerGrid({ startDate, endDate, accounts, activeAccountId }: LedgerGridProps) {
+export default function LedgerGrid({ startDate, endDate, accounts, activeAccountId, viewUnlinkedTrigger }: LedgerGridProps) {
   const [transactions, setTransactions] = useState<BankTransaction[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [summary, setSummary] = useState<LedgerSummary | null>(null);
@@ -39,9 +43,22 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
   const [txForm, setTxForm] = useState<Partial<BankTransaction>>({ transactionType: 'DEBIT' });
   const [expenseForm, setExpenseForm] = useState<Partial<Expense>>({ tender: 'card' });
 
+  const [txPage, setTxPage] = useState(1);
+  const [txTotalPages, setTxTotalPages] = useState(1);
+  const [expPage, setExpPage] = useState(1);
+  const [expTotalPages, setExpTotalPages] = useState(1);
+  const LIMIT = 50;
+
   useEffect(() => {
     loadGridData();
-  }, [startDate, endDate, activeAccountId]);
+  }, [startDate, endDate, activeAccountId, txPage, expPage, searchQuery]);
+
+  useEffect(() => {
+    if (viewUnlinkedTrigger && viewUnlinkedTrigger > 0) {
+      setTxFilter("UNMATCHED");
+      setExpFilter("UNMATCHED");
+    }
+  }, [viewUnlinkedTrigger]);
 
   // Reset drawer if resized to desktop
   useEffect(() => {
@@ -59,15 +76,24 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
       const filters = { 
         startDate, 
         endDate, 
-        accountId: activeAccountId === null ? undefined : activeAccountId 
+        accountId: activeAccountId === null ? undefined : activeAccountId,
+        search: searchQuery
       };
+      
+      const txFilters = { ...filters, page: txPage, limit: LIMIT };
+      const expFilters = { ...filters, page: expPage, limit: LIMIT };
+
       const [txData, expData, summaryData] = await Promise.all([
-        getTransactions(filters),
-        getExpenses(filters),
-        getSummary(filters)
+        getTransactions(txFilters),
+        getExpenses(expFilters),
+        getSummary({ startDate, endDate, accountId: activeAccountId === null ? undefined : activeAccountId })
       ]);
-      setTransactions(txData);
-      setExpenses(expData);
+      setTransactions(txData.transactions);
+      setTxTotalPages(Math.ceil(txData.total / LIMIT));
+      
+      setExpenses(expData.expenses);
+      setExpTotalPages(Math.ceil(expData.total / LIMIT));
+      
       setSummary(summaryData);
     } catch (err) {
       console.error(err);
@@ -111,17 +137,13 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
     finally { setIsSaving(false); }
   };
 
-  const handleTxTypeChange = (type: string) => {
-    setTxForm(prev => ({ ...prev, transactionType: type }));
-  };
-
   const exportCSV = () => {
     const txRows = transactions.map(tx => [
       new Date(tx.date).toLocaleDateString(),
       `"${(tx.description || '').replace(/"/g, '""')}"`,
       tx.amount, tx.transactionType,
       tx.chartAccount?.code || '', `"${tx.chartAccount?.name || ''}"`,
-      tx.reconciliationStatus === 'MATCHED' ? 'LINKED' : 'UNLINKED',
+      tx.reconciliationStatus === 'MATCHED' ? 'LINKED' : tx.reconciliationStatus === 'PARTIALLY_MATCHED' ? 'PARTIAL' : tx.reconciliationStatus === 'OVER_ALLOCATED' ? 'OVER-ALLOCATED' : 'UNLINKED',
     ].join(','));
     const expRows = expenses.map(exp => [
       new Date(exp.timestamp).toLocaleDateString(),
@@ -129,7 +151,7 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
       `"${(exp.description || '').replace(/"/g, '""')}"`,
       exp.amount, exp.tender,
       exp.chartAccount?.code || '', `"${exp.chartAccount?.name || ''}"`,
-      exp.reconciliationStatus === 'MATCHED' ? 'LINKED' : 'UNLINKED',
+      exp.reconciliationStatus === 'MATCHED' ? 'LINKED' : exp.reconciliationStatus === 'PARTIALLY_MATCHED' ? 'PARTIAL' : exp.reconciliationStatus === 'OVER_ALLOCATED' ? 'OVER-ALLOCATED' : 'UNLINKED',
     ].join(','));
     const content = [
       '=== BANK TRANSACTIONS ===',
@@ -147,9 +169,6 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
     a.click();
     URL.revokeObjectURL(url);
   };
-
-  const isOutgoingTx = txForm.transactionType === 'DEBIT' || txForm.transactionType === 'PAYMENT';
-  const filteredTxAccounts = accounts.filter(a => isOutgoingTx ? a.type === 'EXPENSE' : a.type === 'REVENUE');
 
   const formatMoney = (amount: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
 
@@ -185,20 +204,20 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
         <div className="px-6 py-4 border-b border-white/5 bg-[#0e0e10] shrink-0">
           <div className="flex flex-wrap items-center gap-x-4 lg:gap-x-8 gap-y-4 lg:gap-y-6">
             <div className="flex flex-col">
-              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">Income</span>
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Income</span>
               <span className="text-lg xl:text-xl font-black text-emerald-400 tracking-tight">{formatMoney(summary.totalIncome)}</span>
             </div>
             <div className="flex flex-col">
-              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">Expenses</span>
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Expenses</span>
               <span className="text-lg xl:text-xl font-black text-red-400 tracking-tight">{formatMoney(summary.totalExpenses)}</span>
             </div>
             <div className="flex flex-col">
-              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">Net Cashflow</span>
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Net Cashflow</span>
               <span className={`text-lg xl:text-xl font-black tracking-tight ${summary.netCashflow >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatMoney(summary.netCashflow)}</span>
             </div>
             
             <div className="flex flex-col items-start xl:items-end xl:pl-8 xl:border-l border-white/5 ml-auto max-w-full">
-              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">Needs Attention</span>
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Needs Attention</span>
               {(summary.unlinkedExpCount > 0 || summary.unmatchedTxCount > 0) ? (
                 <Button 
                   variant="warning"
@@ -209,7 +228,7 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
                   <span className="truncate">{summary.unmatchedTxCount} Unlinked Tx / {summary.unlinkedExpCount} Unlinked Exp</span>
                 </Button>
               ) : (
-                <span className="flex items-center text-left whitespace-nowrap gap-1.5 text-sm font-bold text-zinc-500 px-3 py-1.5 max-w-full" title="All Caught Up">
+                <span className="flex items-center text-left whitespace-nowrap gap-1.5 text-sm font-bold text-zinc-400 px-3 py-1.5 max-w-full" title="All Caught Up">
                   <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
                   <span className="truncate hidden xl:inline">All Caught Up</span>
                 </span>
@@ -255,13 +274,13 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
           <div className="lg:hidden flex border-b border-white/5 shrink-0 bg-[#0e0e10]">
             <button 
               onClick={() => setMobileTab("expenses")} 
-              className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors ${mobileTab === 'expenses' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
+              className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors ${mobileTab === 'expenses' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-zinc-400 hover:text-zinc-300'}`}
             >
               Expenses
             </button>
             <button 
               onClick={() => setMobileTab("transactions")} 
-              className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors ${mobileTab === 'transactions' ? 'border-blue-500 text-blue-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
+              className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors ${mobileTab === 'transactions' ? 'border-blue-500 text-blue-400' : 'border-transparent text-zinc-400 hover:text-zinc-300'}`}
             >
               Bank Transactions
             </button>
@@ -288,6 +307,7 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
               </div>
               <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24">
                 <ReceiptList expenses={expenses} filter={expFilter} searchQuery={searchQuery} sortField={sortField} sortOrder={sortOrder} onSelect={(id) => setDrawerConfig({ type: 'receipt', id })} />
+                <Pagination currentPage={expPage} totalPages={expTotalPages} onPageChange={setExpPage} />
               </div>
             </div>
 
@@ -311,8 +331,9 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
               </div>
               <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24">
                 <TransactionList transactions={transactions} filter={txFilter} searchQuery={searchQuery} sortField={sortField} sortOrder={sortOrder} onSelect={(id) => setDrawerConfig({ type: 'transaction', id })} />
+                <Pagination currentPage={txPage} totalPages={txTotalPages} onPageChange={setTxPage} />
+              </div>
             </div>
-          </div>
         </div>
         </div>
       )}
@@ -326,24 +347,7 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
           <Button variant="primary" onClick={handleCreateTransaction} isLoading={isSaving}>Create Transaction</Button>
         </div>
       }>
-        <div className="space-y-4">
-          <Input type="date" label="Date" value={txForm.date || ''} onChange={e => setTxForm({ ...txForm, date: e.target.value })} />
-          <Input type="text" label="Description" placeholder="e.g. Office Supplies — Staples" value={txForm.description || ''} onChange={e => setTxForm({ ...txForm, description: e.target.value })} />
-          <Select label="Type" value={txForm.transactionType || 'DEBIT'} onChange={e => handleTxTypeChange(e.target.value)}>
-            <option value="DEBIT">Debit (money out)</option>
-            <option value="DEP">Deposit (money in)</option>
-            <option value="PAYMENT">Payment (money out)</option>
-            <option value="OTHER">Other</option>
-          </Select>
-          <div>
-            <Input type="number" step="0.01" label="Amount" placeholder={isOutgoingTx ? "e.g. -89.99" : "e.g. 1500.00"} value={txForm.amount || ''} onChange={e => setTxForm({ ...txForm, amount: Number(e.target.value) || 0 })} />
-            <p className="text-[11px] text-zinc-500 mt-2 font-medium pl-1">{isOutgoingTx ? "⬇ Money out — enter as negative (e.g. -89.99)" : "⬆ Money in — enter as positive (e.g. 1500.00)"}</p>
-          </div>
-          <Select label={isOutgoingTx ? "Expense Category (Optional)" : "Revenue Account (Optional)"} value={txForm.chartAccountId || ''} onChange={e => setTxForm({ ...txForm, chartAccountId: e.target.value ? Number(e.target.value) : undefined })}>
-            <option value="">None</option>
-            {(filteredTxAccounts.length > 0 ? filteredTxAccounts : accounts).map(acc => <option key={acc.id} value={acc.id}>{acc.code} — {acc.name}</option>)}
-          </Select>
-        </div>
+        <CreateTransactionForm form={txForm} setForm={setTxForm} accounts={accounts} />
       </Modal>
 
       {/* ADD EXPENSE MODAL */}
@@ -353,19 +357,7 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
           <Button variant="primary" onClick={handleCreateExpense} isLoading={isSaving}>Create Expense</Button>
         </div>
       }>
-        <div className="space-y-4">
-          <Input type="date" label="Date" value={expenseForm.timestamp || ''} onChange={e => setExpenseForm({ ...expenseForm, timestamp: e.target.value })} />
-          <Input type="text" label="Vendor" placeholder="e.g. Staples" value={expenseForm.vendor || ''} onChange={e => setExpenseForm({ ...expenseForm, vendor: e.target.value })} />
-          <Input type="text" label="Description" placeholder="e.g. Office supplies" value={expenseForm.description || ''} onChange={e => setExpenseForm({ ...expenseForm, description: e.target.value })} />
-          <Input type="number" step="0.01" label="Amount" placeholder="0.00" value={expenseForm.amount || ''} onChange={e => setExpenseForm({ ...expenseForm, amount: Number(e.target.value) || 0 })} />
-          <Select label="Tender" value={expenseForm.tender || 'card'} onChange={e => setExpenseForm({ ...expenseForm, tender: e.target.value })}>
-            <option value="card">Card</option><option value="cash">Cash</option><option value="check">Check</option><option value="other">Other</option>
-          </Select>
-          <Select label="Expense Category (Optional)" value={expenseForm.chartAccountId || ''} onChange={e => setExpenseForm({ ...expenseForm, chartAccountId: e.target.value ? Number(e.target.value) : undefined })}>
-            <option value="">None</option>
-            {accounts.filter(a => a.type === 'EXPENSE').map(acc => <option key={acc.id} value={acc.id}>{acc.code} — {acc.name}</option>)}
-          </Select>
-        </div>
+        <CreateExpenseForm form={expenseForm} setForm={setExpenseForm} accounts={accounts} />
       </Modal>
     </div>
   );

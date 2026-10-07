@@ -138,7 +138,7 @@ func UpdateChartAccount(c fiber.Ctx) error {
 		}
 
 		var txCount, expCount int64
-		db.DB.Model(&models.BankTransaction{}).Where("chart_account_id = ?", account.ID).Count(&txCount)
+		db.DB.Model(&models.BankTransaction{}).Where("chart_account_id = ? OR category_account_id = ?", account.ID, account.ID).Count(&txCount)
 		db.DB.Model(&models.Expense{}).Where("chart_account_id = ?", account.ID).Count(&expCount)
 		if txCount > 0 || expCount > 0 {
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
@@ -196,7 +196,7 @@ func DeleteChartAccount(c fiber.Ctx) error {
 
 	// Check for linked transactions
 	var txCount int64
-	db.DB.Model(&models.BankTransaction{}).Where("chart_account_id = ?", account.ID).Count(&txCount)
+	db.DB.Model(&models.BankTransaction{}).Where("chart_account_id = ? OR category_account_id = ?", account.ID, account.ID).Count(&txCount)
 
 	// Check for linked expenses
 	var expCount int64

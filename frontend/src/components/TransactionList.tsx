@@ -42,7 +42,7 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
   if (sortedTransactions.length === 0) {
     return (
       <div className="text-center py-16 border border-dashed border-white/10 rounded-2xl bg-white/[0.02]">
-        <p className="text-zinc-500">No transactions found matching this criteria.</p>
+        <p className="text-zinc-400">No transactions found matching this criteria.</p>
       </div>
     );
   }
@@ -76,8 +76,15 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
             style={{ animationDelay: `${index * 120}ms` }}
           >
             <div className="flex flex-col gap-1 min-w-0 pr-4">
-              <span className="text-sm font-semibold text-zinc-100 truncate">{tx.description || "Unknown Transaction"}</span>
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-zinc-100 truncate">{tx.description || "Unknown Transaction"}</span>
+                {(tx.isManual || (tx.fitId && tx.fitId.startsWith("MANUAL-"))) && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-orange-500/20 text-orange-400 border border-orange-500/30 tracking-wider">
+                    Manual
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400">
                 {detailItems.map((item, i) => (
                   <React.Fragment key={i}>
                     {i > 0 && <span>&middot;</span>}
@@ -95,11 +102,10 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
                 {tx.reconciliationStatus === 'UNMATCHED' && tx.hasSuggestions && (
                   <Badge variant="info" size="sm">SUGGESTION FOUND</Badge>
                 )}
-                {tx.reconciliationStatus === 'MATCHED' ? (
-                  <Badge variant="success">LINKED</Badge>
-                ) : (
-                  <Badge variant="danger">UNLINKED</Badge>
-                )}
+                {tx.reconciliationStatus === 'MATCHED' && <Badge variant="success">LINKED</Badge>}
+                {tx.reconciliationStatus === 'PARTIALLY_MATCHED' && <Badge variant="warning">PARTIAL</Badge>}
+                {tx.reconciliationStatus === 'OVER_ALLOCATED' && <Badge variant="danger">OVER-ALLOCATED</Badge>}
+                {tx.reconciliationStatus === 'UNMATCHED' && <Badge variant="neutral">UNLINKED</Badge>}
               </div>
             </div>
           </Card>

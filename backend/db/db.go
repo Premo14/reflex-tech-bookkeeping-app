@@ -63,7 +63,18 @@ func Connect() {
 		&models.Expense{},
 		&models.Receipt{},
 		&models.ExpenseBankTransaction{},
+		&models.PeriodAuditLog{},
+		&models.ItemAuditLog{},
 	)
+
+	// Migration: bank transactions used to store their category (REVENUE/EXPENSE account)
+	// in chart_account_id, which is meant to hold the bank account. Move those values into
+	// category_account_id. Idempotent: once moved, chart_account_id no longer points at a
+	// REVENUE/EXPENSE account, so re-running touches nothing.
+	DB.Exec(`UPDATE bank_transactions
+		SET category_account_id = chart_account_id, chart_account_id = NULL
+		WHERE category_account_id IS NULL
+		AND chart_account_id IN (SELECT id FROM chart_accounts WHERE type IN ('REVENUE', 'EXPENSE'))`)
 
 	// Seed the chart of accounts if the table is empty (first boot or fresh DB).
 	SeedChartOfAccounts()
