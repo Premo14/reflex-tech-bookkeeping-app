@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type BadgeVariant = 'success' | 'danger' | 'warning' | 'info' | 'neutral';
+export type BadgeVariant = 'success' | 'danger' | 'warning' | 'info' | 'neutral' | 'purple';
 
 interface BadgeProps {
   variant?: BadgeVariant;
@@ -15,7 +15,8 @@ export function Badge({ variant = 'neutral', children, className = '', size = 'm
     danger: "bg-red-500/10 text-red-400 border-red-500/20",
     warning: "bg-amber-500/10 text-amber-500 border-amber-500/20",
     info: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-    neutral: "bg-zinc-800 text-zinc-400 border-zinc-700"
+    neutral: "bg-zinc-800 text-zinc-400 border-zinc-700",
+    purple: "bg-purple-500/10 text-purple-400 border-purple-500/20"
   };
 
   const sizes = {

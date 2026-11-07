@@ -5,16 +5,21 @@ import (
 	"os"
 	"path/filepath"
 	"reflex-tech-bookkeeping-app-api/constants"
+	"reflex-tech-bookkeeping-app-api/events"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
 var (
-	timers = make(map[string]*time.Timer)
-	mu     sync.Mutex // Mutex ensures the map is safe for concurrent access
+	timers          = make(map[string]*time.Timer)
+	mu              sync.Mutex // Mutex ensures the timer map is safe for concurrent access
+	activeWatcher   *fsnotify.Watcher
+	watcherLock     sync.Mutex
+	stopWatcherChan chan struct{}
 )
 
 // isIgnoredFile returns true if the file is a Syncthing temporary file or metadata file.
@@ -24,6 +29,9 @@ func isIgnoredFile(filename string) bool {
 		return true
 	}
 	if strings.HasPrefix(base, ".st") {
+		return true
+	}
+	if strings.HasPrefix(base, ".") {
 		return true
 	}
 	return false
@@ -47,6 +55,11 @@ func debouceEvent(filePath string, delay time.Duration) {
 
 		if err := processFile(filePath); err != nil {
 			log.Println("Error processing file:", err)
+		} else {
+			events.Broadcast("TRANSACTIONS_UPDATED", nil)
+			events.Broadcast("EXPENSES_UPDATED", nil)
+			events.Broadcast("QUEUE_UPDATED", nil)
+			events.Broadcast("ACCOUNTS_UPDATED", nil)
 		}
 
 		mu.Lock()
@@ -55,66 +68,107 @@ func debouceEvent(filePath string, delay time.Duration) {
 	})
 }
 
-// Watcher listens for new files in documents/inbox/ and passes them to debounceEvent.
-func Watcher() error {
-	watcher, err := fsnotify.NewWatcher()
+// runWatcherLoop listens for events until stopCh is closed or watcher is closed.
+func runWatcherLoop(w *fsnotify.Watcher, stopCh chan struct{}) {
+	for {
+		select {
+		case <-stopCh:
+			log.Println("Stopping watcher loop for previous directory.")
+			return
+
+		case event, ok := <-w.Events:
+			if !ok {
+				return
+			}
+			log.Println("file watcher event:", event)
+
+			if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
+				if !isIgnoredFile(event.Name) {
+					debouceEvent(event.Name, 2*time.Second)
+				}
+			}
+
+		case err, ok := <-w.Errors:
+			if !ok {
+				return
+			}
+			log.Println("watcher error:", err)
+		}
+	}
+}
+
+// RestartWatcher dynamically stops any active watcher and binds to the current constants.GetInboxPath().
+func RestartWatcher() error {
+	watcherLock.Lock()
+	defer watcherLock.Unlock()
+
+	// Stop existing watcher if one is running
+	if activeWatcher != nil {
+		if stopWatcherChan != nil {
+			close(stopWatcherChan)
+			stopWatcherChan = nil
+		}
+		activeWatcher.Close()
+		activeWatcher = nil
+	}
+
+	if err := CreateDirsIfNotExists(); err != nil {
+		return err
+	}
+
+	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
 	}
 
-	// Start a new goroutine (background thread) so the watcher runs indefinitely
-	// without blocking the rest of the application.
+	activeWatcher = w
+	stopWatcherChan = make(chan struct{})
+
+	inboxPath := constants.GetInboxPath()
+	err = activeWatcher.Add(inboxPath)
+	if err != nil {
+		activeWatcher.Close()
+		activeWatcher = nil
+		return err
+	}
+
+	stopCh := stopWatcherChan
+	go runWatcherLoop(w, stopCh)
+
+	log.Printf("File watcher active on inbox: %s (Host: %s)\n", inboxPath, constants.GetCurrentHostPath())
+
+	// Process any files already waiting in the new inbox
 	go func() {
-		// An infinite loop to continuously listen for events.
-		for {
-			// It waits here and blocks the loop until it receives a message from one of the channels.
-			select {
-
-			// 1. If we receive a message on the watcher.Events channel:
-			case event, ok := <-watcher.Events:
-				// If `ok` is false, it means the channel was closed. We should exit the thread.
-				if !ok {
-					return
-				}
-
-				log.Println("event:", event)
-
-				// We only care if a file was newly created or written to.
-				// (We ignore things like fsnotify.Remove or fsnotify.Chmod)
-				if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
-					if !isIgnoredFile(event.Name) {
-						debouceEvent(event.Name, 2*time.Second)
-					}
-				}
-
-			// 2. If we receive a message on the watcher.Errors channel:
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				log.Println("error:", err)
-			}
+		if err := ProcessExistingFiles(inboxPath); err != nil {
+			log.Println("Error processing files in new inbox:", err)
 		}
 	}()
-
-	// Tell the watcher which specific directory to monitor
-	err = watcher.Add(constants.InboxPath)
-	if err != nil {
-		return err
-	}
 
 	return nil
 }
 
-// Create documents/inbox/ and documents/processed/ folders if they do not already exist.
-func CreateDirsIfNotExists() error {
+// Watcher starts the background file watcher on the active inbox directory.
+func Watcher() error {
+	return RestartWatcher()
+}
 
-	if err := os.MkdirAll(constants.InboxPath, 0755); err != nil {
+// CreateDirsIfNotExists creates inbox and processed folders with wide-open 0777 permissions.
+func CreateDirsIfNotExists() error {
+	syscall.Umask(0)
+
+	inbox := constants.GetInboxPath()
+	processed := constants.GetProcessedPath()
+
+	if err := os.MkdirAll(inbox, 0777); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(constants.ProcessedPath, 0755); err != nil {
+	_ = os.Chmod(inbox, 0777)
+
+	if err := os.MkdirAll(processed, 0777); err != nil {
 		return err
 	}
+	_ = os.Chmod(processed, 0777)
+
 	return nil
 }
 

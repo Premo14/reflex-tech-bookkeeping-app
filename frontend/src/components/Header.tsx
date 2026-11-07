@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "./ui/Button";
+import { LoadingSpinner } from "./ui/LoadingSpinner";
 import type { ChartAccount } from "../types/models";
 import UploadModal from "./UploadModal";
 import AccountManager from "./AccountManager";
@@ -14,6 +15,9 @@ interface HeaderProps {
   refreshData: () => void;
   settings: Record<string, string>;
   onViewItems?: (date: string) => void;
+  isAccountsLoading?: boolean;
+  startDate?: string;
+  endDate?: string;
 }
 
 export default function Header({
@@ -23,13 +27,17 @@ export default function Header({
   setActiveAccountId,
   refreshData,
   settings,
-  onViewItems
+  onViewItems,
+  isAccountsLoading = false,
+  startDate,
+  endDate
 }: HeaderProps) {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showAccountManager, setShowAccountManager] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showReportsModal, setShowReportsModal] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [accountSearch, setAccountSearch] = useState("");
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -43,8 +51,11 @@ export default function Header({
   }, []);
 
   const selectedAccount = activeAccountId ? accounts.find(a => a.id === activeAccountId) : null;
-  const selectedText = selectedAccount ? `${selectedAccount.code} — ${selectedAccount.name}` : "All Accounts (Global View)";
-
+  const parentAccount = selectedAccount?.parentId ? accounts.find(p => p.id === selectedAccount.parentId) : null;
+  const childCountForSelected = selectedAccount ? accounts.filter(a => a.parentId === selectedAccount.id).length : 0;
+  const selectedText = selectedAccount 
+    ? ((parentAccount ? `↳ ${selectedAccount.code} — ${selectedAccount.name}` : `${selectedAccount.code} — ${selectedAccount.name}`) + (!selectedAccount.active ? " (Archived)" : ""))
+    : "All Accounts (Global View)";
 
   // Group accounts by type for the dropdown
   const groupedAccounts = accounts.reduce((acc, account) => {
@@ -55,10 +66,44 @@ export default function Header({
 
   const accountTypes = ["ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"];
 
+  // Build tree list for an account type
+  const buildHierarchyList = (typeAccounts: ChartAccount[]) => {
+    if (accountSearch.trim()) {
+      const q = accountSearch.toLowerCase();
+      return typeAccounts
+        .filter(a => a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q))
+        .map(a => ({ account: a, depth: 0, childCount: 0 }));
+    }
+
+    const list: { account: ChartAccount; depth: number; childCount: number }[] = [];
+    const topLevel = typeAccounts.filter(a => !a.parentId).sort((a, b) => a.code.localeCompare(b.code));
+
+    const addAccountAndChildren = (parent: ChartAccount, depth: number) => {
+      const directChildren = typeAccounts.filter(a => a.parentId === parent.id).sort((a, b) => a.code.localeCompare(b.code));
+      list.push({ account: parent, depth, childCount: directChildren.length });
+      for (const child of directChildren) {
+        addAccountAndChildren(child, depth + 1);
+      }
+    };
+
+    topLevel.forEach(a => addAccountAndChildren(a, 0));
+
+    // Catch any accounts whose parentId is not in typeAccounts (orphans)
+    const addedIds = new Set(list.map(i => i.account.id));
+    typeAccounts.filter(a => !addedIds.has(a.id)).sort((a, b) => a.code.localeCompare(b.code)).forEach(a => {
+      list.push({ account: a, depth: 1, childCount: 0 });
+    });
+
+    return list;
+  };
+
   // Show tax season warning if it's past January and previous year isn't locked
   const currentYear = new Date().getFullYear();
   const booksClosedDateStr = settings["BooksClosedDate"];
   const isTaxWarning = (() => {
+    // If settings haven't loaded yet, do not flash warning
+    if (!settings || Object.keys(settings).length === 0) return false;
+
     const now = new Date();
     // Only show warning starting in Feb
     if (now.getMonth() < 1) return false; 
@@ -99,52 +144,117 @@ export default function Header({
 
           <div>
             <p className="text-xs font-bold text-zinc-400 mb-2 uppercase tracking-widest">Chart of Accounts</p>
-            <div className="flex items-center gap-3 flex-nowrap">
-              <div className="relative" ref={dropdownRef}>
+            <div className="flex items-center gap-2 sm:gap-3 flex-wrap sm:flex-nowrap">
+              <div className="relative flex-1 sm:flex-initial min-w-0" ref={dropdownRef}>
                 <button
                   type="button"
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className={`bg-[#121212] border ${isDropdownOpen ? 'border-emerald-500 ring-1 ring-emerald-500/20' : 'border-white/10 hover:border-white/20'} text-white rounded-xl px-4 py-2.5 font-bold transition-all shadow-sm flex items-center justify-between min-w-[280px] max-w-[350px] truncate`}
+                  className={`bg-[#121212] border ${isDropdownOpen ? 'border-emerald-500 ring-1 ring-emerald-500/20' : 'border-white/10 hover:border-white/20'} text-white rounded-xl px-4 py-2.5 font-bold transition-all shadow-sm flex items-center justify-between w-full sm:w-auto sm:min-w-[260px] whitespace-nowrap`}
                 >
-                  <span className="truncate">{selectedText}</span>
+                  <span className="whitespace-nowrap flex items-center gap-2">
+                    {isAccountsLoading && (
+                      <LoadingSpinner size="xs" color="text-emerald-400" />
+                    )}
+                    <span className="whitespace-nowrap">{selectedText}</span>
+                    {childCountForSelected > 0 && (
+                      <span className="text-[10px] text-emerald-400/80 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.2 rounded font-normal shrink-0">
+                        +{childCountForSelected} sub
+                      </span>
+                    )}
+                  </span>
                   <svg className={`w-4 h-4 text-zinc-400 shrink-0 ml-3 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path>
                   </svg>
                 </button>
 
                 {isDropdownOpen && (
-                  <div className="absolute top-full left-0 mt-2 w-full min-w-[280px] bg-zinc-900 border border-white/10 rounded-xl shadow-2xl z-50 py-1.5 animate-in fade-in zoom-in-95 duration-200 overflow-hidden backdrop-blur-xl bg-zinc-900/90 max-h-[400px] overflow-y-auto custom-scrollbar">
-                    <button
-                      onClick={() => { setActiveAccountId(null); setIsDropdownOpen(false); }}
-                      className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${activeAccountId === null ? 'bg-emerald-500/10 text-emerald-400 font-bold' : 'text-zinc-300 hover:bg-white/5'}`}
-                    >
-                      All Accounts (Global View)
-                    </button>
+                  <div className="absolute top-full left-0 mt-2 min-w-full w-max max-w-[calc(100vw-32px)] bg-zinc-900 border border-white/10 rounded-xl shadow-2xl z-50 py-1.5 animate-in fade-in zoom-in-95 duration-200 overflow-hidden backdrop-blur-xl bg-zinc-900/95 max-h-[420px] overflow-y-auto custom-scrollbar flex flex-col">
+                    {/* Quick Search */}
+                    <div className="p-2 border-b border-white/5 bg-zinc-900/95 sticky top-0 z-10 shrink-0">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Filter accounts..."
+                          value={accountSearch}
+                          onChange={(e) => setAccountSearch(e.target.value)}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-8 pr-7 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
+                          autoFocus
+                        />
+                        <svg className="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                        {accountSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setAccountSearch("")}
+                            className="text-zinc-500 hover:text-white absolute right-2.5 top-1.5 text-xs p-0.5"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {isAccountsLoading && accounts.length === 0 ? (
+                      <div className="py-8 flex flex-col items-center justify-center space-y-2 text-zinc-400">
+                        <LoadingSpinner size="sm" color="text-emerald-500" />
+                        <span className="text-xs">Loading accounts…</span>
+                      </div>
+                    ) : (
+                      <>
+                        {!accountSearch && (
+                          <button
+                            onClick={() => { setActiveAccountId(null); setIsDropdownOpen(false); setAccountSearch(""); }}
+                            className={`w-full text-left px-4 py-2.5 text-sm transition-colors shrink-0 ${activeAccountId === null ? 'bg-emerald-500/10 text-emerald-400 font-bold' : 'text-zinc-300 hover:bg-white/5'}`}
+                          >
+                            All Accounts (Global View)
+                          </button>
+                        )}
                     
-                    {accountTypes.map(type => (
-                      groupedAccounts[type] && groupedAccounts[type].length > 0 && (
+                    {accountTypes.map(type => {
+                      const hierarchy = buildHierarchyList(groupedAccounts[type] || []);
+                      if (hierarchy.length === 0) return null;
+
+                      return (
                         <div key={type}>
-                          <div className="px-4 py-1.5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest mt-2">
-                            {type}
+                          <div className="px-4 py-1.5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest mt-2 flex items-center justify-between">
+                            <span>{type}</span>
+                            <span className="text-[10px] text-zinc-400 font-normal">{hierarchy.length}</span>
                           </div>
-                          {groupedAccounts[type].map(acc => (
+                          {hierarchy.map(({ account: acc, depth, childCount }) => (
                             <button
                               key={acc.id}
-                              onClick={() => { setActiveAccountId(acc.id); setIsDropdownOpen(false); }}
-                              className={`w-full text-left px-4 py-2 text-sm transition-colors ${activeAccountId === acc.id ? 'bg-emerald-500/10 text-emerald-400 font-bold' : 'text-zinc-300 hover:bg-white/5 hover:text-white'} truncate flex items-center gap-2`}
+                              onClick={() => { setActiveAccountId(acc.id); setIsDropdownOpen(false); setAccountSearch(""); }}
+                              className={`w-full text-left py-2 text-sm transition-colors ${activeAccountId === acc.id ? 'bg-emerald-500/10 text-emerald-400 font-bold' : 'text-zinc-300 hover:bg-white/5 hover:text-white'} whitespace-nowrap flex items-center gap-2`}
+                              style={{ paddingLeft: `${16 + depth * 14}px`, paddingRight: '16px' }}
                             >
-                              <span className={`text-xs ${activeAccountId === acc.id ? 'text-emerald-500/70' : 'text-zinc-400'}`}>{acc.code}</span>
-                              <span className="truncate">{acc.name}</span>
+                              {depth > 0 && <span className="text-zinc-400 select-none text-xs shrink-0">↳</span>}
+                              <span className={`text-xs font-mono shrink-0 ${activeAccountId === acc.id ? 'text-emerald-500/70' : depth > 0 ? 'text-zinc-400' : 'text-zinc-400'}`}>
+                                 {acc.code}
+                              </span>
+                              <span className="whitespace-nowrap pr-2">{acc.name}</span>
+                              {childCount > 0 && depth === 0 && (
+                                <span className="text-[10px] text-zinc-400 bg-white/5 border border-white/5 px-1.5 py-0.2 rounded ml-1 shrink-0 font-normal">
+                                  {childCount} sub
+                                </span>
+                              )}
+                              {!acc.active && (
+                                <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.2 rounded uppercase font-semibold ml-auto shrink-0">
+                                  Inactive
+                                </span>
+                              )}
                             </button>
                           ))}
                         </div>
-                      )
-                    ))}
+                      );
+                    })}
+                      </>
+                    )}
                   </div>
                 )}
               </div>
 
-              <Button variant="secondary" onClick={() => setShowAccountManager(true)} title="Manage Chart of Accounts">
+              <Button variant="secondary" onClick={() => setShowAccountManager(true)} title="Manage Chart of Accounts" className="shrink-0">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
                 Manage
               </Button>
@@ -196,6 +306,8 @@ export default function Header({
       {showReportsModal && (
         <ReportsModal 
           onClose={() => setShowReportsModal(false)}
+          initialStartDate={startDate}
+          initialEndDate={endDate}
         />
       )}
     </>

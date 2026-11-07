@@ -1,4 +1,4 @@
-import React, { forwardRef } from 'react';
+import React, { forwardRef, useId } from 'react';
 
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -7,11 +7,14 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ label, error, className = '', icon, ...props }, ref) => {
+  ({ label, error, className = '', icon, id, ...props }, ref) => {
+    const generatedId = useId();
+    const inputId = id || (label ? generatedId : undefined);
+
     return (
       <div className="w-full flex flex-col gap-1.5 text-left">
         {label && (
-          <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest pl-1">
+          <label htmlFor={inputId} className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest pl-1 cursor-pointer">
             {label}
           </label>
         )}
@@ -22,6 +25,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             </div>
           )}
           <input
+            id={inputId}
             ref={ref}
             className={`
               w-full text-left bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-zinc-500

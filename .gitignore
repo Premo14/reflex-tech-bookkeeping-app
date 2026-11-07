@@ -38,3 +38,10 @@ docs/
  .vscode
 
 document-data/**
+
+# Linux compiled binaries
+backend/api
+backend/reflex-api
+backend/reflex-tech-bookkeeping-app-api
+file-processor/app
+file-processor/file-processor

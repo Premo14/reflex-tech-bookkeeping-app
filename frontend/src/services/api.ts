@@ -97,6 +97,23 @@ export async function updateSettings(key: string, value: string): Promise<void> 
   }
 }
 
+export interface BrowseDirectoriesResponse {
+  currentPath: string;
+  parentPath: string;
+  directories: string[];
+}
+
+export async function browseHostDirectories(path?: string): Promise<BrowseDirectoriesResponse> {
+  const query = new URLSearchParams();
+  if (path) query.append("path", path);
+  const res = await fetch(`${API_BASE}/settings/directories?${query.toString()}`);
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || `Failed to browse directory: ${res.status}`);
+  }
+  return res.json();
+}
+
 // ---------------------------------------------------------
 // Transactions
 // ---------------------------------------------------------
@@ -273,7 +290,7 @@ export async function unlinkExpenseFromTransaction(expenseId: number, transactio
 }
 
 export async function markExpenseAsCash(expenseId: number): Promise<MarkExpenseAsCashResponse> {
-  const res = await fetch(`${API_BASE}/reconciliation/cash/${expenseId}`, { method: "PATCH" });
+  const res = await fetch(`${API_BASE}/expenses/${expenseId}/cash`, { method: "PATCH" });
   if (!res.ok) throw new Error(`Response status: ${res.status}`);
   return res.json();
 }
@@ -309,9 +326,12 @@ export async function uploadFile(file: File): Promise<FileUploadResponse> {
   return res.json();
 }
 
-export async function uploadReceiptToExpense(expenseId: number, file: File): Promise<any> {
+export async function uploadReceiptToExpense(expenseId: number, file: File, allowDuplicate: boolean = false): Promise<any> {
   const formData = new FormData();
   formData.append("file", file);
+  if (allowDuplicate) {
+    formData.append("allowDuplicate", "true");
+  }
 
   const res = await fetch(`${API_BASE}/expenses/${expenseId}/receipt`, {
     method: "POST",
@@ -319,7 +339,7 @@ export async function uploadReceiptToExpense(expenseId: number, file: File): Pro
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Response status: ${res.status}`);
+    throw { message: err.error || `Response status: ${res.status}`, status: res.status, data: err };
   }
   return res.json();
 }
@@ -365,19 +385,60 @@ export async function getProfitLoss(startDate: string, endDate: string): Promise
 
 
 // Review Queue API
-export const getReviewQueue = async (status: 'PENDING' | 'IGNORED' = 'PENDING') => {
-  const res = await fetch(`${API_BASE}/review-queue?status=${status}`);
-  if (!res.ok) throw new Error("Failed to fetch review queue");
+export type ReviewStatusType = 'PENDING' | 'IGNORED' | 'WARNINGS_IGNORED' | 'DELETED';
+
+export interface ReviewQueueCounts {
+  pending: number;
+  excluded: number;
+  warningsIgnored: number;
+  deleted: number;
+}
+
+export const getReviewQueueCounts = async (): Promise<ReviewQueueCounts> => {
+  const res = await fetch(`${API_BASE}/review-queue/counts`);
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || "Failed to fetch review queue counts");
+  }
   return res.json();
 };
 
-export const resolveReviewItems = async (action: 'allow' | 'ignore' | 'pending', transactionIds: number[], expenseIds: number[]) => {
+export const getReviewQueue = async (
+  status: ReviewStatusType = 'PENDING'
+): Promise<{
+  status: string;
+  transactions: BankTransaction[];
+  expenses: Expense[];
+  booksClosedDate?: string;
+}> => {
+  const res = await fetch(`${API_BASE}/review-queue?status=${status}`);
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || "Failed to fetch review queue");
+  }
+  return res.json();
+};
+
+export const resolveReviewItems = async (
+  action: 'allow' | 'pending' | 'ignore_warnings' | 'restore_warnings' | 'delete',
+  transactionIds: number[],
+  expenseIds: number[]
+): Promise<{
+  status: string;
+  rolledBack?: boolean;
+  booksClosedDate?: string;
+  autoApproved?: number;
+  affected?: GroupItem[];
+}> => {
   const res = await fetch(`${API_BASE}/review-queue/resolve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, transactionIds, expenseIds }),
   });
-  if (!res.ok) throw new Error("Failed to resolve items");
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || "Failed to resolve items");
+  }
   return res.json();
 };
 
@@ -421,9 +482,10 @@ export function excludeItem(
   type: "transaction" | "expense",
   id: number,
   reason: ExclusionReason,
-  note: string
+  note: string,
+  unlinkOnly?: boolean
 ): Promise<{ status: string; affected: GroupItem[] }> {
-  return postJSON("/items/exclude", { type, id, reason, note });
+  return postJSON("/items/exclude", { type, id, reason, note, unlinkOnly });
 }
 
 export function restoreItem(
@@ -432,3 +494,53 @@ export function restoreItem(
 ): Promise<{ status: string; affected: GroupItem[] }> {
   return postJSON("/items/restore", { type, id });
 }
+
+export function restoreItems(
+  items: Array<{ type: "transaction" | "expense"; id: number }>
+): Promise<{ status: string; affected: GroupItem[] }> {
+  return postJSON("/items/restore-bulk", { items });
+}
+
+export function previewBulkExclusion(
+  items: Array<{ type: "transaction" | "expense"; id: number }>
+): Promise<ExcludePreview> {
+  return postJSON("/items/exclude-bulk-preview", { items });
+}
+
+export function excludeItems(
+  items: Array<{ type: "transaction" | "expense"; id: number }>,
+  reason: ExclusionReason,
+  note: string,
+  unlinkOnly?: boolean
+): Promise<{ status: string; affected: GroupItem[] }> {
+  return postJSON("/items/exclude-bulk", { items, reason, note, unlinkOnly });
+}
+
+export function deleteItemsBulk(
+  items: Array<{ type: "transaction" | "expense"; id: number }>
+): Promise<{ status: string; deletedCount: number; affected: GroupItem[] }> {
+  return postJSON("/items/delete-bulk", { items });
+}
+
+export function restoreDeletedItems(
+  items: Array<{ type: "transaction" | "expense"; id: number }>
+): Promise<{ status: string; restoredCount: number; affected: GroupItem[] }> {
+  return postJSON("/items/restore-deleted", { items });
+}
+
+export function moveDeletedToExcluded(
+  items: Array<{ type: "transaction" | "expense"; id: number }>,
+  reason: ExclusionReason,
+  note: string
+): Promise<{ status: string; movedCount: number; affected: GroupItem[] }> {
+  return postJSON("/items/move-to-excluded", { items, reason, note });
+}
+
+export function deleteItemsPermanent(
+  items: Array<{ type: "transaction" | "expense"; id: number }>
+): Promise<{ status: string; deletedCount: number }> {
+  return postJSON("/items/delete-permanent", { items });
+}
+
+
+

@@ -33,16 +33,29 @@ func SetupRoutes(app *fiber.App) {
 	api.Post("/settings", controllers.UpdateSettings)
 	api.Get("/settings/audit-logs", controllers.GetAuditLogs)
 	api.Get("/settings/close-preflight", controllers.GetClosePreflight)
+	api.Get("/settings/directories", controllers.BrowseDirectories)
 	// Review Queue
 	api.Get("/review-queue", controllers.GetReviewQueue)
+	api.Get("/review-queue/counts", controllers.GetReviewQueueCounts)
 	api.Post("/review-queue/resolve", controllers.ResolveQueueItems)
+
+	// Real-Time Events (Server-Sent Events)
+	api.Get("/events", controllers.HandleSSEStream)
 
 	// Excluding items from the books (cascades through link groups)
 	api.Post("/items/exclude-preview", controllers.ExcludePreview)
+	api.Post("/items/exclude-bulk-preview", controllers.ExcludeBulkPreview)
 	api.Post("/items/exclude", controllers.ExcludeItem)
+	api.Post("/items/exclude-bulk", controllers.ExcludeBulk)
 	api.Post("/items/restore", controllers.RestoreItem)
+	api.Post("/items/restore-bulk", controllers.RestoreBulk)
+	api.Post("/items/delete-bulk", controllers.DeleteBulk)
+	api.Post("/items/restore-deleted", controllers.RestoreDeletedBulk)
+	api.Post("/items/move-to-excluded", controllers.MoveDeletedToExcludedBulk)
+	api.Post("/items/delete-permanent", controllers.DeletePermanentBulk)
 
 	// Bank Transactions
+	api.Get("/transactions/export", controllers.ExportTransactionsCSV)
 	api.Get("/transactions", controllers.GetTransactions)
 	api.Post("/transactions", controllers.CreateTransaction) // manual entry
 	api.Get("/transactions/:id", controllers.GetTransaction)
@@ -50,6 +63,7 @@ func SetupRoutes(app *fiber.App) {
 	api.Delete("/transactions/:id", controllers.DeleteTransaction)
 
 	// Expenses & Receipts
+	api.Get("/expenses/export", controllers.ExportExpensesCSV)
 	api.Get("/expenses", controllers.GetExpenses)
 	api.Post("/expenses", controllers.CreateExpense) // manual entry
 	api.Get("/expenses/:id", controllers.GetExpense)
@@ -60,6 +74,7 @@ func SetupRoutes(app *fiber.App) {
 
 	// Mark Expense as Cash (bypasses reconciliation requirement)
 	api.Patch("/expenses/:id/cash", controllers.MarkExpenseAsCash)
+	api.Patch("/reconciliation/cash/:id", controllers.MarkExpenseAsCash)
 
 	// Reconciliation
 	api.Get("/reconciliation/flagged", controllers.GetFlaggedItems)

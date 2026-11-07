@@ -7,7 +7,9 @@ export interface ChartAccount {
   type: 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
   parentId?: number;   // optional: nil = top-level, set = sub-account
   description: string;
+  ofxAccountId?: string;
   active: boolean;
+  isDefault?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -30,7 +32,7 @@ export interface ExpenseBankTransaction {
   expenseId: number;
   bankTransactionId: number;
   // "suggested" = scoring system's best guess, not yet accepted by the user
-  // "confirmed" = manually linked or auto-matched with high confidence
+  // "confirmed" = manually linked or auto-linked with high confidence
   status: "suggested" | "confirmed";
   createdAt: string;
   updatedAt: string;
@@ -43,6 +45,8 @@ export interface Expense {
   vendor: string;
   description: string;
   amount: number;
+  taxAmount: number;
+  currencyCode: string;
   tender: string;
   notes?: string;
   status?: string;
@@ -51,10 +55,13 @@ export interface Expense {
   bankTransactions?: BankTransaction[];
   receipts?: Receipt[];
   reconciliationStatus?: string;
+  allocationStatus?: string;
+  linkStatus?: string;
   reviewStatus?: string;
   exclusionReason?: string;
   exclusionNote?: string;
   hasSuggestions?: boolean;
+  deletedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -73,28 +80,52 @@ export interface BankTransaction {
   bankStatementId?: number;
   chartAccountId?: number;
   chartAccount?: ChartAccount;
+  categoryAccountId?: number;
+  category?: ChartAccount;
   date: string;
   description: string;
   amount: number;
   transactionType: string;
   fitId: string;
-  reconciliationStatus: string;
+  allocationStatus?: string;
+  linkStatus?: string;
+  reconciliationStatus?: string;
   reviewStatus: string;
   exclusionReason?: string;
   exclusionNote?: string;
   hasSuggestions?: boolean;
+  deletedAt?: string;
   notes?: string;
   expenses?: Expense[];
 }
 
+export interface BankStatement {
+  id: number;
+  documentUri: string;
+  fileExt: string;
+  accountId: string;
+  bankId: string;
+  startDate: string;
+  endDate: string;
+  endingBalance?: number;
+  balanceAsOf?: string;
+  chartAccountId?: number;
+  chartAccount?: ChartAccount;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LedgerSummary {
   totalIncome: number;
+  totalDeposits?: number;
   totalDebits: number;
   totalExpenses: number;
   netCashflow: number;
+  netIncome?: number;
+  totalTax?: number;
   transactionCount: number;
   expenseCount: number;
-  unmatchedTxCount: number;
+  unlinkedTxCount: number;
   unlinkedExpCount: number;
 }
 
@@ -112,6 +143,7 @@ export interface ProfitLossReport {
   expenses: PLLine[];
   totalExpenses: number;
   netIncome: number;
+  totalTax?: number;
   uncategorizedTxCount: number;
   uncategorizedExpCount: number;
   excludedTxCount: number;
@@ -133,12 +165,13 @@ export interface CreateExpenseInput {
 
 // Input for creating a new bank transaction manually (no OFX import)
 export interface CreateTransactionInput {
-  date: string;             // ISO datetime string
+  date: string;                // ISO datetime string
   description: string;
   amount: number;
   transactionType: string;
-  chartAccountId?: number;  // optional COA account
-  notes?: string;           // optional notes
+  chartAccountId: number;      // Required Bank/Card account (ASSET or LIABILITY)
+  categoryAccountId?: number;  // Optional category (EXPENSE or REVENUE)
+  notes?: string;              // optional notes
 }
 
 // Returned by GET /transactions/:id — separates confirmed from suggested expense links
@@ -200,7 +233,7 @@ export interface UpdateChartAccountInput {
   code?: string;
   name?: string;
   type?: 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
-  parentId?: number;
+  parentId?: number | null;
   description?: string;
   active?: boolean;
 }
@@ -229,7 +262,7 @@ export interface ExcludePreview {
   blockedReason: string;
 }
 
-export type ExclusionReason = "DUPLICATE" | "PERSONAL" | "ERROR" | "OTHER";
+export type ExclusionReason = "DUPLICATE" | "PERSONAL" | "CLOSED_PERIOD" | "OTHER";
 
 export interface ClosePreflight {
   date: string;
@@ -244,4 +277,6 @@ export interface ClosePreflight {
   excludedExpCount: number;
   excludedTxTotal: number;
   excludedExpTotal: number;
+  uncategorizedTxCount: number;
+  uncategorizedExpCount: number;
 }

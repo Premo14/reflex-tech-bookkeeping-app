@@ -36,30 +36,32 @@ var defaultAccounts = []seedEntry{
 	// Liabilities
 	{Code: "2010", Name: "Accounts Payable", Type: "LIABILITY", Description: "Money the business owes to vendors"},
 	{Code: "2020", Name: "Credit Card", Type: "LIABILITY", Description: "Business credit card balance"},
-	{Code: "2030", Name: "Bank Loan", Type: "LIABILITY", Description: "Outstanding loan balances"},
+	{Code: "2030", Name: "Line of Credit", Type: "LIABILITY", Description: "Revolving business line of credit"},
 	{Code: "2100", Name: "Accrued Wages", Type: "LIABILITY", Description: "Wages earned but not yet paid"},
+	{Code: "2510", Name: "Bank Loan", Type: "LIABILITY", Description: "Outstanding loan balances"},
 
 	// Equity
 	{Code: "3010", Name: "Owner's Capital", Type: "EQUITY", Description: "Owner's investment in the business"},
 	{Code: "3020", Name: "Retained Earnings", Type: "EQUITY", Description: "Cumulative profit kept in the business"},
+	{Code: "3110", Name: "Owner's Draw", Type: "EQUITY", Description: "Distributions and withdrawals by owner"},
 
 	// Revenue
 	{Code: "4010", Name: "Sales Revenue", Type: "REVENUE", Description: "Income from product sales"},
-	{Code: "4020", Name: "Service Fees", Type: "REVENUE", Description: "Income from services rendered"},
-	{Code: "4030", Name: "Interest Income", Type: "REVENUE", Description: "Interest earned on accounts"},
+	{Code: "4110", Name: "Service Fees", Type: "REVENUE", Description: "Income from services rendered"},
+	{Code: "4210", Name: "Interest Income", Type: "REVENUE", Description: "Interest earned on accounts"},
 
 	// Expenses
 	{Code: "5010", Name: "Rent", Type: "EXPENSE", Description: "Office or workspace rent"},
 	{Code: "5020", Name: "Payroll", Type: "EXPENSE", Description: "Employee wages and salaries"},
 	{Code: "5030", Name: "Utilities", Type: "EXPENSE", Description: "Electricity, water, internet, etc."},
-	{Code: "5040", Name: "Advertising", Type: "EXPENSE", Description: "Marketing and advertising costs"},
 	{Code: "5050", Name: "Office Supplies", Type: "EXPENSE", Description: "Stationery, printer supplies, etc."},
-	{Code: "5060", Name: "Travel", Type: "EXPENSE", Description: "Business travel and transportation"},
-	{Code: "5070", Name: "Bank Fees", Type: "EXPENSE", Description: "Bank service charges and fees"},
 	{Code: "5080", Name: "Insurance", Type: "EXPENSE", Description: "Business insurance premiums"},
 	{Code: "5090", Name: "Meals & Entertainment", Type: "EXPENSE", Description: "Client meals and business entertainment"},
-	{Code: "5100", Name: "Professional Services", Type: "EXPENSE", Description: "Accountant, lawyer, consultant fees"},
-	{Code: "5110", Name: "Software & Subscriptions", Type: "EXPENSE", Description: "SaaS tools, software licenses"},
+	{Code: "5110", Name: "Professional Services", Type: "EXPENSE", Description: "Accountant, lawyer, consultant fees"},
+	{Code: "5210", Name: "Software & Subscriptions", Type: "EXPENSE", Description: "SaaS tools, software licenses"},
+	{Code: "5310", Name: "Advertising", Type: "EXPENSE", Description: "Marketing and advertising costs"},
+	{Code: "5410", Name: "Travel", Type: "EXPENSE", Description: "Business travel and transportation"},
+	{Code: "5910", Name: "Bank Fees", Type: "EXPENSE", Description: "Bank service charges and fees"},
 }
 
 // SeedChartOfAccounts inserts the default accounts only when the chart_accounts table
@@ -79,6 +81,7 @@ func SeedChartOfAccounts() {
 			Type:        entry.Type,
 			Description: entry.Description,
 			Active:      true,
+			IsDefault:   true,
 		}
 		if err := DB.Create(&account).Error; err != nil {
 			log.Printf("Failed to seed account %s (%s): %v\n", entry.Code, entry.Name, err)

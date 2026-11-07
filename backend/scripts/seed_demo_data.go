@@ -31,8 +31,8 @@ func main() {
 		return "DEMO-" + time.Now().Format("20060102150405") + "-" + string(rune(rand.Intn(10000)))
 	}
 
-	log.Println("Seeding Scenario 1: Exact Match (Amount + Date)")
-	// Score: 50 (Amount) + 30 (Date) = 80 -> Auto Matched
+	log.Println("Seeding Scenario 1: Exact Link (Amount + Date)")
+	// Score: 50 (Amount) + 30 (Date) = 80 -> Auto Linked
 	matchDate := startOfMonth.AddDate(0, 0, 2)
 	db.DB.Create(&models.BankTransaction{
 		FITID:                generateFITID(),
@@ -40,7 +40,7 @@ func main() {
 		Description:          "STAPLES STORE 1234",
 		Amount:               -145.50,
 		TransactionType:      "DEBIT",
-		ReconciliationStatus: "UNMATCHED", // Engine will update
+		AllocationStatus:     "UNLINKED", // Engine will update
 		CategoryAccountID:    &officeSupplies.ID,
 	})
 	db.DB.Create(&models.Expense{
@@ -49,7 +49,7 @@ func main() {
 		Description:          "Printer Ink",
 		Amount:               145.50,
 		Tender:               "card",
-		ReconciliationStatus: "UNMATCHED",
+		AllocationStatus:     "UNLINKED",
 		ChartAccountID:       &officeSupplies.ID,
 	})
 
@@ -61,7 +61,7 @@ func main() {
 		Description:          "HOME DEPOT",
 		Amount:               -300.00,
 		TransactionType:      "DEBIT",
-		ReconciliationStatus: "UNMATCHED",
+		AllocationStatus:     "UNLINKED",
 	})
 	db.DB.Create(&models.Expense{
 		Timestamp:            subsetDate,
@@ -69,7 +69,7 @@ func main() {
 		Description:          "Lumber",
 		Amount:               200.00,
 		Tender:               "card",
-		ReconciliationStatus: "UNMATCHED",
+		AllocationStatus:     "UNLINKED",
 	})
 	db.DB.Create(&models.Expense{
 		Timestamp:            subsetDate,
@@ -77,11 +77,11 @@ func main() {
 		Description:          "Tools",
 		Amount:               100.00,
 		Tender:               "card",
-		ReconciliationStatus: "UNMATCHED",
+		AllocationStatus:     "UNLINKED",
 	})
 
-	log.Println("Seeding Scenario 3: Suggested Match (Exact Amount, Off by 2 days)")
-	// Score: 50 (Amount) + 10 (Date) = 60 -> Suggested Match
+	log.Println("Seeding Scenario 3: Suggested Link (Exact Amount, Off by 2 days)")
+	// Score: 50 (Amount) + 10 (Date) = 60 -> Suggested Link
 	suggTxDate := startOfMonth.AddDate(0, 0, 10)
 	suggExpDate := startOfMonth.AddDate(0, 0, 8) // E.g., bought on weekend, cleared on Tuesday
 	db.DB.Create(&models.BankTransaction{
@@ -90,7 +90,7 @@ func main() {
 		Description:          "SQ *LOCAL COFFEE SHOP",
 		Amount:               -12.75,
 		TransactionType:      "DEBIT",
-		ReconciliationStatus: "UNMATCHED",
+		AllocationStatus:     "UNLINKED",
 	})
 	db.DB.Create(&models.Expense{
 		Timestamp:            suggExpDate,
@@ -98,10 +98,10 @@ func main() {
 		Description:          "Client Meeting",
 		Amount:               12.75,
 		Tender:               "card",
-		ReconciliationStatus: "UNMATCHED",
+		AllocationStatus:     "UNLINKED",
 	})
 
-	log.Println("Seeding Scenario 4: Fully Unmatched Transaction")
+	log.Println("Seeding Scenario 4: Fully Unlinked Transaction")
 	unmTxDate := startOfMonth.AddDate(0, 0, 15)
 	db.DB.Create(&models.BankTransaction{
 		FITID:                generateFITID(),
@@ -109,10 +109,10 @@ func main() {
 		Description:          "TARGET T-123",
 		Amount:               -89.99,
 		TransactionType:      "DEBIT",
-		ReconciliationStatus: "UNMATCHED",
+		AllocationStatus:     "UNLINKED",
 	})
 
-	log.Println("Seeding Scenario 5: Fully Unmatched Receipt")
+	log.Println("Seeding Scenario 5: Fully Unlinked Receipt")
 	unmExpDate := startOfMonth.AddDate(0, 0, 18)
 	db.DB.Create(&models.Expense{
 		Timestamp:            unmExpDate,
@@ -120,10 +120,10 @@ func main() {
 		Description:          "Keyboard",
 		Amount:               120.00,
 		Tender:               "card",
-		ReconciliationStatus: "UNMATCHED",
+		AllocationStatus:     "UNLINKED",
 	})
 
-	log.Println("Seeding Scenario 6: Deposit/Income (Auto-Matched)")
+	log.Println("Seeding Scenario 6: Deposit/Income (Auto-Balanced)")
 	depDate := startOfMonth.AddDate(0, 0, 20)
 	db.DB.Create(&models.BankTransaction{
 		FITID:                generateFITID(),
@@ -131,7 +131,7 @@ func main() {
 		Description:          "STRIPE TRANSFER",
 		Amount:               1500.00,
 		TransactionType:      "DEP",
-		ReconciliationStatus: "UNMATCHED", // Engine will set to MATCHED
+		AllocationStatus:     "UNLINKED", // Engine will set to BALANCED
 		CategoryAccountID:    &sales.ID,
 	})
 
@@ -143,7 +143,7 @@ func main() {
 		Description:          "Stamps",
 		Amount:               11.00,
 		Tender:               "cash",
-		ReconciliationStatus: "UNMATCHED", // Engine ignores for close checks, UI flags as unlinked but safe
+		AllocationStatus:     "UNLINKED", // Engine ignores for close checks, UI flags as unlinked but safe
 		ChartAccountID:       &cash.ID,
 	})
 

@@ -30,17 +30,21 @@ Extract the expense details and return ONLY a valid JSON object with no explanat
   "vendor": "Walmart",
   "description": "Groceries",
   "amount": 181.13,
-  "tender": "VISA"
+  "taxAmount": 10.50,
+  "currencyCode": "USD",
+  "tender": "CARD",
+  "chartAccountId": null
 }
 Rules:
 - timestamp must be RFC3339 format (e.g. 2023-08-16T18:51:49Z). Use midnight UTC if no time is visible.
-- amount must be the TOTAL paid (not subtotal), as a number with no currency symbol.
-- tender is the payment method (e.g. VISA, CASH, MASTERCARD, DEBIT).
+- amount must be the TOTAL paid as a positive number with no currency symbol.
+- taxAmount must be the total tax paid, as a number. Leave as 0 if not found.
+- currencyCode must be the 3-letter currency code (e.g. USD, CAD, EUR). Default to USD if none is found.
+- tender is the payment method: CARD, CASH, CHECK, TRANSFER, PAYPAL, VENMO, ZELLE, OTHER.
+- chartAccountId should be null unless an active category ID is provided.
 - vendor should be the store/business name (e.g. Walmart, not the address).
 - Leave vendor, description, or tender as empty strings if they cannot be determined.
 - Leave amount as 0 if it cannot be determined.
-
-Raw OCR text:
 `
 
 const defaultVisionPrompt = `You are a receipt data extractor. Look at this receipt image carefully and extract the expense details.
@@ -50,12 +54,19 @@ Return ONLY a valid JSON object with no explanation or markdown, matching this e
   "vendor": "Walmart",
   "description": "Groceries",
   "amount": 181.13,
-  "tender": "VISA"
+  "taxAmount": 10.50,
+  "currencyCode": "USD",
+  "tender": "CARD",
+  "chartAccountId": null
 }
 Rules:
 - timestamp must be RFC3339 format (e.g. 2023-08-16T18:51:49Z). Use midnight UTC if no time is visible.
-- amount must be the final total paid as a number with no currency symbol.
-- tender is the payment method (e.g. VISA, CASH, MASTERCARD, DEBIT).
+- amount must be the final total paid as a positive number with no currency symbol.
+- taxAmount must be the total tax paid, as a number. Leave as 0 if not found.
+- currencyCode must be the 3-letter currency code (e.g. USD, CAD, EUR). Default to USD if none is found.
+- tender is the payment method: CARD, CASH, CHECK, TRANSFER, PAYPAL, VENMO, ZELLE, OTHER.
+- chartAccountId should be null unless an active category ID is provided.
+- vendor should be the store/business name (e.g. Walmart, not the address).
 - Leave vendor, description, or tender as empty strings if they cannot be determined.
 - Leave amount as 0 if it cannot be determined.`
 
@@ -222,8 +233,9 @@ func process(ctx *fasthttp.RequestCtx) {
 
 		prompt := userPrompt
 		if prompt == "" {
-			prompt = defaultTextPrompt + extracted
+			prompt = defaultTextPrompt
 		}
+		prompt = prompt + "\n\nRaw OCR text extracted from document:\n" + extracted
 
 		response, err := callOllama(OllamaRequest{
 			Model:  "llama3.1:8b", // Using text model for PDF text processing

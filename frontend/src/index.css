@@ -84,3 +84,14 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .animate-card-cascade {
   animation: cardCascade 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
+
+@media print {
+  body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+  }
+  body:has([role="dialog"]) #root {
+    display: none !important;
+  }
+}
+

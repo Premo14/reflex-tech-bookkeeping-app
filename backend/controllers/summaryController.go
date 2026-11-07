@@ -1,10 +1,12 @@
 package controllers
 
 import (
+	"strconv"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
 
 	"github.com/gofiber/fiber/v3"
+	"gorm.io/gorm"
 )
 
 // GetSummary returns aggregate totals for the given date range and optional account filter.
@@ -19,71 +21,161 @@ func GetSummary(c fiber.Ctx) error {
 	endDate   := c.Query("endDate")
 	accountId := c.Query("accountId")
 
+	var accountIDs []uint
+	if accountId != "" {
+		if parsedID, err := strconv.ParseUint(accountId, 10, 32); err == nil {
+			accountIDs = GetAccountAndDescendantIDs(uint(parsedID))
+		}
+	}
+
 	type amtResult struct{ Total float64 }
 
-	// Income: sum of positive bank transaction amounts (deposits/credits)
-	var totalIncome amtResult
-	incQ := db.DB.Model(&models.BankTransaction{}).Select("COALESCE(SUM(amount), 0) as total").Where("amount > 0").Where(inBooksClause)
-	if startDate != "" { incQ = incQ.Where("date >= ?", startDate) }
-	if endDate != ""   { incQ = incQ.Where("date <= ?", endDate) }
-	if accountId != "" { incQ = incQ.Where("chart_account_id = ? OR category_account_id = ?", accountId, accountId) }
-	incQ.Scan(&totalIncome)
+	applyTxAccountFilter := func(q *gorm.DB) *gorm.DB {
+		if len(accountIDs) > 0 {
+			return q.Where("chart_account_id IN ? OR category_account_id IN ?", accountIDs, accountIDs)
+		} else if accountId != "" {
+			return q.Where("chart_account_id = ? OR category_account_id = ?", accountId, accountId)
+		}
+		return q
+	}
 
-	// Debits: sum of negative bank transaction amounts (payments/debits)
+	applyExpAccountFilter := func(q *gorm.DB) *gorm.DB {
+		if len(accountIDs) > 0 {
+			return q.Where(
+				"chart_account_id IN ? OR id IN (SELECT ebt.expense_id FROM expense_bank_transactions ebt JOIN bank_transactions bt ON bt.id = ebt.bank_transaction_id WHERE bt.chart_account_id IN ?)",
+				accountIDs, accountIDs,
+			)
+		} else if accountId != "" {
+			return q.Where("chart_account_id = ?", accountId)
+		}
+		return q
+	}
+
+	// 1. Operating Income / Revenue:
+	// Matches P&L: bank transactions categorized as REVENUE + uncategorized bank deposits.
+	var revCategorized amtResult
+	revCatQ := db.DB.Table("bank_transactions bt").
+		Select("COALESCE(SUM(bt.amount), 0) as total").
+		Joins("JOIN chart_accounts ca ON ca.id = bt.category_account_id").
+		Where("ca.type = ?", "REVENUE").
+		Where(inBooksClauseBT)
+	if len(accountIDs) > 0 {
+		revCatQ = revCatQ.Where("bt.chart_account_id IN ? OR bt.category_account_id IN ?", accountIDs, accountIDs)
+	} else if accountId != "" {
+		revCatQ = revCatQ.Where("bt.chart_account_id = ? OR bt.category_account_id = ?", accountId, accountId)
+	}
+	revCatQ = ApplyDateRange(revCatQ, "bt.date", startDate, endDate)
+	_ = revCatQ.Scan(&revCategorized)
+
+	var uncatDeposits amtResult
+	uncatDepQ := db.DB.Model(&models.BankTransaction{}).
+		Select("COALESCE(SUM(amount), 0) as total").
+		Where("amount > 0").
+		Where("category_account_id IS NULL").
+		Where(inBooksClause)
+	uncatDepQ = applyTxAccountFilter(uncatDepQ)
+	uncatDepQ = ApplyDateRange(uncatDepQ, "date", startDate, endDate)
+	_ = uncatDepQ.Scan(&uncatDeposits)
+
+	totalIncome := revCategorized.Total + uncatDeposits.Total
+
+	// 2. Bank Cash Flow (Deposits & Debits):
+	var totalDeposits amtResult
+	depQ := db.DB.Model(&models.BankTransaction{}).Select("COALESCE(SUM(amount), 0) as total").Where("amount > 0").Where(inBooksClause)
+	depQ = applyTxAccountFilter(depQ)
+	depQ = ApplyDateRange(depQ, "date", startDate, endDate)
+	_ = depQ.Scan(&totalDeposits)
+
 	var totalDebits amtResult
 	debQ := db.DB.Model(&models.BankTransaction{}).Select("COALESCE(SUM(amount), 0) as total").Where("amount < 0").Where(inBooksClause)
-	if startDate != "" { debQ = debQ.Where("date >= ?", startDate) }
-	if endDate != ""   { debQ = debQ.Where("date <= ?", endDate) }
-	if accountId != "" { debQ = debQ.Where("chart_account_id = ? OR category_account_id = ?", accountId, accountId) }
-	debQ.Scan(&totalDebits)
+	debQ = applyTxAccountFilter(debQ)
+	debQ = ApplyDateRange(debQ, "date", startDate, endDate)
+	_ = debQ.Scan(&totalDebits)
+
+	// 3. Operating Expenses:
+	// Matches P&L:
+	//   a) Confirmed Expense records (e.g. receipts/invoices)
+	//   b) Unlinked bank transactions categorized under EXPENSE accounts (net -bt.amount for debits and refunds)
+	//   c) Unlinked uncategorized bank debits (Suspense)
+	var expFromReceipts amtResult
+	expQ := db.DB.Model(&models.Expense{}).
+		Select("COALESCE(SUM(amount), 0) as total").
+		Where(inBooksClause).
+		Where("LOWER(COALESCE(tender, '')) = 'cash' OR id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed')")
+	expQ = applyExpAccountFilter(expQ)
+	expQ = ApplyDateRange(expQ, "timestamp", startDate, endDate)
+	_ = expQ.Scan(&expFromReceipts)
+
+	var unlinkedExpDebits amtResult
+	unlinkedDebQ := db.DB.Table("bank_transactions bt").
+		Select("COALESCE(SUM(-bt.amount), 0) as total").
+		Joins("JOIN chart_accounts ca ON ca.id = bt.category_account_id").
+		Where("ca.type = ?", "EXPENSE").
+		Where("bt.id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')").
+		Where(inBooksClauseBT)
+	if len(accountIDs) > 0 {
+		unlinkedDebQ = unlinkedDebQ.Where("bt.chart_account_id IN ? OR bt.category_account_id IN ?", accountIDs, accountIDs)
+	} else if accountId != "" {
+		unlinkedDebQ = unlinkedDebQ.Where("bt.chart_account_id = ? OR bt.category_account_id = ?", accountId, accountId)
+	}
+	unlinkedDebQ = ApplyDateRange(unlinkedDebQ, "bt.date", startDate, endDate)
+	_ = unlinkedDebQ.Scan(&unlinkedExpDebits)
+
+	var uncatDebitTotal amtResult
+	udQ := db.DB.Model(&models.BankTransaction{}).
+		Select("COALESCE(SUM(ABS(amount)), 0) as total").
+		Where("amount < 0").
+		Where("category_account_id IS NULL").
+		Where("id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')").
+		Where(inBooksClause)
+	udQ = applyTxAccountFilter(udQ)
+	udQ = ApplyDateRange(udQ, "date", startDate, endDate)
+	_ = udQ.Scan(&uncatDebitTotal)
+
+	totalExpenses := expFromReceipts.Total + unlinkedExpDebits.Total + uncatDebitTotal.Total
 
 	// Total transaction count
 	var txCount int64
 	txQ := db.DB.Model(&models.BankTransaction{}).Where(inBooksClause)
-	if startDate != "" { txQ = txQ.Where("date >= ?", startDate) }
-	if endDate != ""   { txQ = txQ.Where("date <= ?", endDate) }
-	if accountId != "" { txQ = txQ.Where("chart_account_id = ? OR category_account_id = ?", accountId, accountId) }
+	txQ = applyTxAccountFilter(txQ)
+	txQ = ApplyDateRange(txQ, "date", startDate, endDate)
 	txQ.Count(&txCount)
 
-	// Unmatched transaction count
-	var unmatchedCount int64
-	umQ := db.DB.Model(&models.BankTransaction{}).Where("reconciliation_status != ?", "MATCHED").Where(inBooksClause)
-	if startDate != "" { umQ = umQ.Where("date >= ?", startDate) }
-	if endDate != ""   { umQ = umQ.Where("date <= ?", endDate) }
-	umQ.Count(&unmatchedCount)
-
-	// Expense total (expenses stored as positive amounts)
-	var totalExpenses amtResult
-	expQ := db.DB.Model(&models.Expense{}).Select("COALESCE(SUM(amount), 0) as total").Where(inBooksClause)
-	if startDate != "" { expQ = expQ.Where("timestamp >= ?", startDate) }
-	if endDate != ""   { expQ = expQ.Where("timestamp <= ?", endDate) }
-	expQ.Scan(&totalExpenses)
+	// Unlinked transaction count (needs attention)
+	var unlinkedTxCount int64
+	umQ := db.DB.Model(&models.BankTransaction{}).Where(needsAttentionClause)
+	umQ = applyTxAccountFilter(umQ)
+	umQ = ApplyDateRange(umQ, "date", startDate, endDate)
+	umQ.Count(&unlinkedTxCount)
 
 	// Expense count
 	var expCount int64
 	ecQ := db.DB.Model(&models.Expense{}).Where(inBooksClause)
-	if startDate != "" { ecQ = ecQ.Where("timestamp >= ?", startDate) }
-	if endDate != ""   { ecQ = ecQ.Where("timestamp <= ?", endDate) }
+	ecQ = applyExpAccountFilter(ecQ)
+	ecQ = ApplyDateRange(ecQ, "timestamp", startDate, endDate)
 	ecQ.Count(&expCount)
 
-	// Unlinked expense count
+	// Unlinked expense count (needs attention)
 	var unlinkedExpCount int64
-	ulQ := db.DB.Model(&models.Expense{}).Where("reconciliation_status != ?", "MATCHED").Where(inBooksClause)
-	if startDate != "" { ulQ = ulQ.Where("timestamp >= ?", startDate) }
-	if endDate != ""   { ulQ = ulQ.Where("timestamp <= ?", endDate) }
+	ulQ := db.DB.Model(&models.Expense{}).Where(notCashClause).Where(needsAttentionClause)
+	ulQ = applyExpAccountFilter(ulQ)
+	ulQ = ApplyDateRange(ulQ, "timestamp", startDate, endDate)
 	ulQ.Count(&unlinkedExpCount)
 
-	netCashflow := totalIncome.Total + totalDebits.Total
+	netCashflow := totalDeposits.Total + totalDebits.Total
+	netIncome := totalIncome - totalExpenses
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":           "success",
-		"totalIncome":      totalIncome.Total,
+		"totalIncome":      totalIncome,
+		"totalDeposits":    totalDeposits.Total,
 		"totalDebits":      totalDebits.Total,
-		"totalExpenses":    totalExpenses.Total,
+		"totalExpenses":    totalExpenses,
 		"netCashflow":      netCashflow,
+		"netIncome":        netIncome,
 		"transactionCount": txCount,
 		"expenseCount":     expCount,
-		"unmatchedTxCount": unmatchedCount,
+		"unlinkedTxCount":  unlinkedTxCount,
 		"unlinkedExpCount": unlinkedExpCount,
 	})
 }

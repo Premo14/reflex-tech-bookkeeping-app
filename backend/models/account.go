@@ -33,11 +33,15 @@ type ChartAccount struct {
 	ParentID *uint        `json:"parentId"`
 	Parent   *ChartAccount `gorm:"foreignKey:ParentID" json:"-"`
 
-	Description string `json:"description"` // free-text notes, also stores raw OFX AccountID on auto-create
+	Description  string  `json:"description"` // free-text notes
+	OfxAccountID *string `gorm:"column:ofx_account_id;index" json:"ofxAccountId,omitempty"` // background OFX account number for statement matching
 
 	// Soft-disable: inactive accounts can no longer receive new transactions
 	// but their history is preserved.
 	Active bool `gorm:"default:true" json:"active"`
+
+	// System/default accounts cannot be deleted, and their Type cannot be changed.
+	IsDefault bool `gorm:"default:false" json:"isDefault"`
 
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`

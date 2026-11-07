@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflex-tech-bookkeeping-app-api/db"
+	"reflex-tech-bookkeeping-app-api/events"
 	"reflex-tech-bookkeeping-app-api/models"
+	"strings"
 	"time"
 
 	"github.com/aclindsa/ofxgo"
@@ -16,12 +18,11 @@ import (
 // ParseOfx reads an .ofx or .qfx file to extract the bank statement and transactions.
 // It uses the bank's FITID to safely ignore duplicates so users can upload overlapping date ranges.
 //
-// COA account matching:
-//   On import, we attempt to match the OFX AccountID+BankID to an existing ChartAccount
-//   by looking at the Description field (where we store the raw OFX account ID on auto-create).
-//   If no match is found, a new ASSET-type ChartAccount is auto-created.
-//   The user can later reassign the type (e.g. to LIABILITY for a credit card account)
-//   via the Account Manager in the UI.
+// COA account matching & Smart Adoption:
+//   On import, we attempt to match the OFX AccountID to an existing ChartAccount.
+//   If an unassigned default account of the matching type exists (e.g. 1010 Checking, 2020 Credit Card),
+//   the system adopts it, binding the institution name and account ID without creating duplicate accounts.
+//   If all default accounts are already in use, a new sequential account is auto-created.
 //
 // Period assignment:
 //   Transactions are NOT auto-assigned to any accounting period. They are stored freely
@@ -45,9 +46,15 @@ func ParseOfx(filePath string) {
 	var accountID string
 	var bankID string
 	var accountType string
+	var subType string
 	var startDate time.Time
 	var endDate time.Time
+	var endingBalance *float64
+	var balanceAsOf *time.Time
 	var transactions []ofxgo.Transaction
+
+	// Extract financial institution name (e.g. "Chase", "Wells Fargo", "Capital One")
+	institution := strings.TrimSpace(string(resp.Signon.Org))
 
 	if len(resp.Bank) > 0 {
 		stmtResp, ok := resp.Bank[0].(*ofxgo.StatementResponse)
@@ -55,11 +62,22 @@ func ParseOfx(filePath string) {
 			log.Println("Could not parse StatementResponse")
 			return
 		}
-		accountID = stmtResp.BankAcctFrom.AcctID.String()
-		bankID = stmtResp.BankAcctFrom.BankID.String()
-		accountType = "ASSET" // Bank checking/savings accounts are assets
+		accountID = strings.TrimSpace(stmtResp.BankAcctFrom.AcctID.String())
+		bankID = strings.TrimSpace(stmtResp.BankAcctFrom.BankID.String())
+		subType = strings.ToUpper(strings.TrimSpace(stmtResp.BankAcctFrom.AcctType.String()))
+		if subType == "CREDITLINE" {
+			accountType = "LIABILITY"
+		} else {
+			accountType = "ASSET" // CHECKING, SAVINGS, MONEYMRKT are assets
+		}
 		startDate = stmtResp.BankTranList.DtStart.Time
 		endDate = stmtResp.BankTranList.DtEnd.Time
+		bal, _ := stmtResp.BalAmt.Float64()
+		endingBalance = &bal
+		if !stmtResp.DtAsOf.Time.IsZero() {
+			t := stmtResp.DtAsOf.Time
+			balanceAsOf = &t
+		}
 		transactions = stmtResp.BankTranList.Transactions
 	} else if len(resp.CreditCard) > 0 {
 		ccStmtResp, ok := resp.CreditCard[0].(*ofxgo.CCStatementResponse)
@@ -67,20 +85,26 @@ func ParseOfx(filePath string) {
 			log.Println("Could not parse CCStatementResponse")
 			return
 		}
-		accountID = ccStmtResp.CCAcctFrom.AcctID.String()
+		accountID = strings.TrimSpace(ccStmtResp.CCAcctFrom.AcctID.String())
 		bankID = "" // Credit cards typically don't have a routing/bank ID in OFX
+		subType = "CREDIT_CARD"
 		accountType = "LIABILITY" // Credit cards are liabilities (money owed)
 		startDate = ccStmtResp.BankTranList.DtStart.Time
 		endDate = ccStmtResp.BankTranList.DtEnd.Time
+		bal, _ := ccStmtResp.BalAmt.Float64()
+		endingBalance = &bal
+		if !ccStmtResp.DtAsOf.Time.IsZero() {
+			t := ccStmtResp.DtAsOf.Time
+			balanceAsOf = &t
+		}
 		transactions = ccStmtResp.BankTranList.Transactions
 	} else {
 		log.Println("No bank or credit card statement found in OFX")
 		return
 	}
 
-	// Resolve or auto-create a ChartAccount for this statement's bank account.
-	// Bank accounts are ASSET type; credit card accounts are LIABILITY type.
-	chartAccountID := resolveOrCreateChartAccount(accountID, bankID, accountType)
+	// Resolve or adopt a ChartAccount for this statement's bank account.
+	chartAccountID := resolveOrCreateChartAccount(accountID, bankID, accountType, institution, subType)
 
 	// Create the BankStatement record
 	bankStatement := models.BankStatement{
@@ -90,6 +114,8 @@ func ParseOfx(filePath string) {
 		BankID:         bankID,
 		StartDate:      startDate,
 		EndDate:        endDate,
+		EndingBalance:  endingBalance,
+		BalanceAsOf:    balanceAsOf,
 		ChartAccountID: chartAccountID,
 	}
 
@@ -130,7 +156,7 @@ func ParseOfx(filePath string) {
 		} else {
 			dbTx.ReviewStatus = "APPROVED"
 		}
-		dbTx.ReconciliationStatus = "UNMATCHED"
+		dbTx.AllocationStatus = "UNLINKED"
 
 		dbTransactions = append(dbTransactions, dbTx)
 	}
@@ -155,23 +181,38 @@ func ParseOfx(filePath string) {
 }
 
 // resolveOrCreateChartAccount finds a ChartAccount matching the given OFX account credentials,
-// or creates a new account of the specified type if none exists.
+// adopts an unassigned default placeholder account if available, or creates a new account.
 //
-// Matching strategy:
-//   The raw OFX accountID is stored in ChartAccount.Description on auto-creation.
-//   We use that field to match future imports of the same account without requiring
-//   the user to manually link every new statement.
-//
-// accountType should be "ASSET" for bank accounts and "LIABILITY" for credit cards.
-// Users can update the type via the Account Manager in the UI if needed.
-func resolveOrCreateChartAccount(accountID, bankID, accountType string) *uint {
+// Matching & Adoption strategy:
+//  1. Direct match: Check if an existing ChartAccount has OfxAccountID matching accountID,
+//     or if an existing BankStatement has account_id matching accountID, or legacy description match.
+//  2. Smart Adoption: If no match is found, check if an unadopted default placeholder account
+//     of the matching type exists with 0 associated bank statements. If so, adopt it by updating
+//     its Name (incorporating institution if available) and setting OfxAccountID to accountID.
+//  3. Fallback: If all default accounts of that category are already adopted (e.g. user uploads a
+//     second checking account or second credit card), find the next available code and auto-create.
+func resolveOrCreateChartAccount(accountID, bankID, accountType, institution, subType string) *uint {
 	if accountID == "" {
 		return nil
 	}
 
-	// Try to find an existing account whose Description contains the raw OFX account ID
+	// 1. Direct match: Try to find an existing account matching the raw OFX account ID
+	// a) By background OfxAccountID
 	var existing models.ChartAccount
+	if err := db.DB.Where("ofx_account_id = ?", accountID).First(&existing).Error; err == nil {
+		return &existing.ID
+	}
+
+	// b) By prior BankStatement linked to this accountID
+	var existingStmt models.BankStatement
+	if err := db.DB.Where("account_id = ? AND chart_account_id IS NOT NULL", accountID).First(&existingStmt).Error; err == nil && existingStmt.ChartAccountID != nil {
+		db.DB.Model(&models.ChartAccount{}).Where("id = ? AND (ofx_account_id IS NULL OR ofx_account_id = '')", *existingStmt.ChartAccountID).Update("ofx_account_id", accountID)
+		return existingStmt.ChartAccountID
+	}
+
+	// c) Legacy fallback: Description matches accountID
 	if err := db.DB.Where("description = ?", accountID).First(&existing).Error; err == nil {
+		db.DB.Model(&existing).Update("ofx_account_id", accountID)
 		return &existing.ID
 	}
 
@@ -181,23 +222,88 @@ func resolveOrCreateChartAccount(accountID, bankID, accountType string) *uint {
 		last4 = accountID[len(accountID)-4:]
 	}
 
-	// Find the next available code in the appropriate range based on account type
-	// ASSET accounts use 1xxx range; LIABILITY accounts use 2xxx range
-	codePrefix := "1"
+	// Determine account label and default candidate code for Smart Adoption
 	accountLabel := "Bank Account"
-	if accountType == "LIABILITY" {
+	defaultCandidateCode := ""
+	codePrefix := "1"
+
+	switch accountType {
+	case "ASSET":
+		codePrefix = "1"
+		if subType == "SAVINGS" || subType == "MONEYMRKT" {
+			accountLabel = "Savings Account"
+			defaultCandidateCode = "1020"
+		} else {
+			accountLabel = "Checking Account"
+			defaultCandidateCode = "1010"
+		}
+	case "LIABILITY":
 		codePrefix = "2"
-		accountLabel = "Credit Card"
+		if subType == "CREDITLINE" {
+			accountLabel = "Line of Credit"
+			defaultCandidateCode = "2030"
+		} else if subType == "LOAN" {
+			accountLabel = "Bank Loan"
+			defaultCandidateCode = "2510"
+		} else {
+			accountLabel = "Credit Card"
+			defaultCandidateCode = "2020"
+		}
 	}
 
-	code := nextAvailableCode(codePrefix)
+	displayName := fmt.Sprintf("%s (...%s)", accountLabel, last4)
+	if institution != "" {
+		displayName = fmt.Sprintf("%s %s (...%s)", institution, accountLabel, last4)
+	}
+
+	// 2. Smart Adoption: Check if the default placeholder account exists and is 100% pristine (unadopted)
+	if defaultCandidateCode != "" {
+		var candidate models.ChartAccount
+		if err := db.DB.Where("code = ? AND is_default = ?", defaultCandidateCode, true).First(&candidate).Error; err == nil {
+			var statementCount int64
+			db.DB.Model(&models.BankStatement{}).Where("chart_account_id = ?", candidate.ID).Count(&statementCount)
+			var txCount int64
+			db.DB.Model(&models.BankTransaction{}).Where("chart_account_id = ? OR category_account_id = ?", candidate.ID, candidate.ID).Count(&txCount)
+			var expCount int64
+			db.DB.Model(&models.Expense{}).Where("chart_account_id = ?", candidate.ID).Count(&expCount)
+
+			// An account is unadopted ONLY if it is completely pristine:
+			// 0 statements, 0 transactions, 0 expenses, and its description is still a default template phrase
+			if statementCount == 0 && txCount == 0 && expCount == 0 && (candidate.Description == "" || isDefaultDescription(candidate.Description)) {
+				candidate.Name = displayName
+				candidate.OfxAccountID = &accountID
+				candidate.Description = fmt.Sprintf("OFX ID: %s", accountID)
+				if err := db.DB.Save(&candidate).Error; err == nil {
+					log.Printf("Smart Adoption: Claimed pristine default account %s '%s' for OFX account %s (institution: %s)\n",
+						candidate.Code, candidate.Name, accountID, institution)
+					events.Broadcast("ACCOUNTS_UPDATED", nil)
+					return &candidate.ID
+				}
+			} else {
+				log.Printf("Smart Adoption: Candidate default account %s '%s' has existing records (stmts=%d, txs=%d, exps=%d). Preserving it and allocating new account.\n",
+					candidate.Code, candidate.Name, statementCount, txCount, expCount)
+			}
+		}
+	}
+
+	// 3. Fallback: Create a new account with the next sequential code in standard range
+	var code string
+	if accountType == "ASSET" {
+		code = nextAvailableCodeInRange(1010, 1099)
+	} else if accountType == "LIABILITY" {
+		code = nextAvailableCodeInRange(2020, 2099)
+	} else {
+		code = nextAvailableCode(codePrefix)
+	}
 
 	newAccount := models.ChartAccount{
-		Code:        code,
-		Name:        fmt.Sprintf("%s (...%s)", accountLabel, last4),
-		Type:        accountType,
-		Description: accountID, // store raw OFX ID for future statement matching
-		Active:      true,
+		Code:         code,
+		Name:         displayName,
+		Type:         accountType,
+		OfxAccountID: &accountID, // store raw OFX ID in background for future statement matching
+		Description:  fmt.Sprintf("OFX ID: %s", accountID),
+		Active:       true,
+		IsDefault:    false,
 	}
 
 	if err := db.DB.Create(&newAccount).Error; err != nil {
@@ -206,7 +312,26 @@ func resolveOrCreateChartAccount(accountID, bankID, accountType string) *uint {
 	}
 
 	log.Printf("Auto-created ChartAccount '%s' (%s, type=%s) for OFX account ID: %s\n", newAccount.Name, newAccount.Code, newAccount.Type, accountID)
+	events.Broadcast("ACCOUNTS_UPDATED", nil)
 	return &newAccount.ID
+}
+
+// isDefaultDescription checks whether an account description is an initial template description
+func isDefaultDescription(desc string) bool {
+	defaults := []string{
+		"Primary business checking account",
+		"Business savings account",
+		"Business credit card balance",
+		"Outstanding loan balances",
+		"Revolving business line of credit",
+	}
+	for _, d := range defaults {
+		if strings.EqualFold(desc, d) {
+			return true
+		}
+	}
+	// If the description contains spaces, it's a descriptive phrase rather than a raw account ID
+	return strings.Contains(desc, " ")
 }
 
 // nextAvailableCode finds the next unused 4-digit code starting with the given prefix.
@@ -222,4 +347,26 @@ func nextAvailableCode(prefix string) string {
 	}
 	// Fallback: use a timestamp-based code if all slots are taken
 	return fmt.Sprintf("%s%d", prefix, time.Now().UnixNano()%9999)
+}
+
+// nextAvailableCodeInRange finds the next unused 4-digit code between minCode and maxCode inclusive.
+func nextAvailableCodeInRange(minCode, maxCode int) string {
+	for i := minCode; i <= maxCode; i += 5 {
+		candidate := fmt.Sprintf("%04d", i)
+		var count int64
+		db.DB.Model(&models.ChartAccount{}).Where("code = ?", candidate).Count(&count)
+		if count == 0 {
+			return candidate
+		}
+	}
+	// Fallback: try any single integer gap
+	for i := minCode; i <= maxCode; i++ {
+		candidate := fmt.Sprintf("%04d", i)
+		var count int64
+		db.DB.Model(&models.ChartAccount{}).Where("code = ?", candidate).Count(&count)
+		if count == 0 {
+			return candidate
+		}
+	}
+	return fmt.Sprintf("%04d", minCode)
 }

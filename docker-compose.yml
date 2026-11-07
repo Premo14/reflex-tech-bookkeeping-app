@@ -26,6 +26,7 @@ services:
     volumes:
       - ./backend:/app
       - ${DOCUMENT_DATA_PATH:-./document-data}:/app/documents
+      - /:/host_fs:rw
     restart: unless-stopped
     depends_on:
       postgres:
@@ -77,6 +78,8 @@ services:
       context: ./file-processor
       dockerfile: Dockerfile.dev
     env_file: .env
+    volumes:
+      - ./file-processor:/app
     restart: unless-stopped
     depends_on:
       ollama:

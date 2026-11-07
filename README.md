@@ -100,11 +100,11 @@ OFX/QFX files (exported from most major Canadian and US banks) are parsed using 
 
 ### Step 5 — Automatic Reconciliation Engine
 
-After every new import (and after any manual link/unlink action), a multi-pass reconciliation algorithm runs across all unmatched records:
+After every new import (and after any manual link/unlink action), a multi-pass reconciliation algorithm runs across all unlinked records:
 
 **Pass 1 — Scored Direct Matching**
 
-Each unlinked `Expense` is scored against each `UNMATCHED` `BankTransaction`:
+Each unlinked `Expense` is scored against each `UNLINKED` `BankTransaction`:
 
 | Signal | Points |
 |--------|--------|
@@ -119,14 +119,14 @@ Each unlinked `Expense` is scored against each `UNMATCHED` `BankTransaction`:
 
 **Pass 2 — Split-Transaction Detection**
 
-A recursive subset-sum algorithm identifies groups of expenses from the same day whose amounts add up exactly to an unmatched transaction total. This handles cases like one bank debit covering multiple individual receipts.
+A recursive subset-sum algorithm identifies groups of expenses from the same day whose amounts add up exactly to an unlinked transaction total. This handles cases like one bank debit covering multiple individual receipts.
 
 **Pass 3 — Status Propagation**
 
 Every `BankTransaction` and `Expense` is re-evaluated:
-- `MATCHED` — the sum of all linked confirmed expenses equals the transaction amount
-- `PARTIAL` — linked but amounts don't sum to the transaction total
-- `UNMATCHED` — no confirmed links exist
+- `BALANCED` — the sum of all linked confirmed expenses equals the transaction amount
+- `PARTIALLY_ALLOCATED` / `OVER_ALLOCATED` — linked but amounts don't sum to the transaction total
+- `UNLINKED` — no confirmed links exist
 
 ---
 
@@ -134,18 +134,18 @@ Every `BankTransaction` and `Expense` is re-evaluated:
 
 The React frontend provides three primary views:
 
-**Dashboard** — A summary of the current reconciliation state: how many transactions are matched, unmatched, or have AI-generated suggestions pending review.
+**Dashboard** — A summary of the current reconciliation state: how many transactions are balanced, unlinked, or have AI-generated suggestions pending review.
 
-**Month Ledger** — A paginated, filterable table of all bank transactions and expenses for a selected accounting period. Users can filter by status (`MATCHED`, `UNMATCHED`, `PARTIAL`), approve AI-suggested links in one click, manually link/unlink records, and mark expenses as cash (removing them from the reconciliation queue).
+**Month Ledger** — A paginated, filterable table of all bank transactions and expenses for a selected accounting period. Users can filter by status (`BALANCED`, `UNLINKED`, `PARTIAL`, `OVER-ALLOCATED`), approve AI-suggested links in one click, manually link/unlink records, and mark expenses as cash (removing them from the reconciliation queue).
 
-**Detail View** — A two-column side-by-side view of a single `BankTransaction` and its linked `Expense(s)`. Supports a carousel when multiple expenses link to one transaction. Users can edit fields, view the physical receipt image or PDF in a modal, link or unlink records manually, and create a new matching record on the fly.
+**Detail View** — A two-column side-by-side view of a single `BankTransaction` and its linked `Expense(s)`. Supports a carousel when multiple expenses link to one transaction. Users can edit fields, view the physical receipt image or PDF in a modal, link or unlink records manually, and create a new corresponding record on the fly.
 
 ---
 
 ### Step 7 — Accounting Period Close
 
 When a month is complete, a user can **close** the accounting period. The system enforces that:
-- No `UNMATCHED` transactions remain
+- No `UNLINKED` transactions remain
 - No orphaned (unlinked, non-cash) expenses remain
 
 Once closed, all records for that period become **read-only** — edits, links, and unlinks are rejected with a `403 Forbidden` response.
@@ -275,8 +275,8 @@ AI-extracted structured data representing one purchase.
 | `description` | string | Short description of the purchase |
 | `amount` | float64 | Total amount paid (not subtotal, inclusive of tax) |
 | `tender` | string | Payment method (`VISA`, `CASH`, `DEBIT`, etc.) |
-| `reconciliationStatus` | string | `MATCHED`, `PARTIAL`, or `UNMATCHED` |
-| `hasSuggestions` | bool | True if the reconciler found a suggested bank match |
+| `allocationStatus` | string | `BALANCED`, `PARTIALLY_ALLOCATED`, `OVER_ALLOCATED`, or `UNLINKED` |
+| `hasSuggestions` | bool | True if the reconciler found a suggested bank link |
 | `receipts` | []Receipt | All physical files belonging to this expense |
 
 ### `BankTransaction`
@@ -291,8 +291,8 @@ One line item from an imported bank statement.
 | `amount` | float64 | Transaction amount |
 | `transactionType` | string | `DEBIT`, `DEP`, `PAYMENT`, or `OTHER` |
 | `fitId` | string | Bank-issued unique ID — unique constraint prevents duplicate imports |
-| `reconciliationStatus` | string | `MATCHED`, `PARTIAL`, or `UNMATCHED` |
-| `hasSuggestions` | bool | True if the reconciler has a suggested expense match |
+| `allocationStatus` | string | `BALANCED`, `PARTIALLY_ALLOCATED`, `OVER_ALLOCATED`, or `UNLINKED` |
+| `hasSuggestions` | bool | True if the reconciler has a suggested expense link |
 
 ### `BankStatement`
 Metadata about an imported OFX/QFX file.
@@ -357,8 +357,8 @@ All endpoints are served from `http://localhost:8080`.
 ### Reconciliation
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/flagged` | Return all unmatched transactions and orphaned expenses. Supports `?year=&month=` filters. |
-| `GET` | `/unlinked` | Return all unmatched transactions and unlinked expenses (used by the manual link picker). |
+| `GET` | `/flagged` | Return all unlinked transactions and orphaned expenses. Supports `?year=&month=` filters. |
+| `GET` | `/unlinked` | Return all unlinked transactions and unlinked expenses (used by the manual link picker). |
 | `POST` | `/link` | Manually link an expense to a bank transaction. Body: `{ expenseId, transactionId }`. |
 | `POST` | `/unlink` | Remove a confirmed link. Body: `{ expenseId, transactionId }`. |
 | `POST` | `/expenses/:id/mark-cash` | Mark an expense as cash, removing it from the reconciliation queue. |

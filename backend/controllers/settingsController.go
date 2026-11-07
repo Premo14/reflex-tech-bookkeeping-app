@@ -2,9 +2,15 @@ package controllers
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"time"
+	"reflex-tech-bookkeeping-app-api/constants"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
+	"reflex-tech-bookkeeping-app-api/utils"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -22,6 +28,28 @@ func GetSettings(c fiber.Ctx) error {
 		settingsMap[s.Key] = s.Value
 	}
 
+	// Also find earliest date across bank transactions and expenses
+	var minTx *time.Time
+	db.DB.Model(&models.BankTransaction{}).Where("review_status NOT IN ('DELETED')").Select("MIN(date)").Row().Scan(&minTx)
+	var minExp *time.Time
+	db.DB.Model(&models.Expense{}).Where("review_status NOT IN ('DELETED')").Select("MIN(timestamp)").Row().Scan(&minExp)
+
+	var earliest *time.Time
+	if minTx != nil {
+		earliest = minTx
+	}
+	if minExp != nil && (earliest == nil || minExp.Before(*earliest)) {
+		earliest = minExp
+	}
+	if earliest != nil && !earliest.IsZero() {
+		settingsMap["EarliestDate"] = earliest.Format("2006-01-02")
+	}
+
+	// Ensure DocumentDropboxPath is present
+	if _, ok := settingsMap["DocumentDropboxPath"]; !ok || settingsMap["DocumentDropboxPath"] == "" {
+		settingsMap["DocumentDropboxPath"] = constants.GetCurrentHostPath()
+	}
+
 	return c.JSON(settingsMap)
 }
 
@@ -36,6 +64,30 @@ func UpdateSettings(c fiber.Ctx) error {
 	}
 	if input.Key == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Key is required"})
+	}
+
+	// Custom Validation and Dynamic Configuration for DocumentDropboxPath
+	if input.Key == "DocumentDropboxPath" {
+		hostPath := strings.TrimSpace(input.Value)
+		if hostPath == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Dropbox path cannot be empty"})
+		}
+
+		containerDir, err := constants.MoveDropboxLocation(hostPath)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": fmt.Sprintf("Failed to move directory to '%s': %v", hostPath, err),
+			})
+		}
+
+		// Ensure setting stores the normalized host path ending in document-data
+		input.Value = constants.GetCurrentHostPath()
+
+		if err := utils.RestartWatcher(); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": fmt.Sprintf("Directory moved to %s, but file watcher failed to start: %v", containerDir, err),
+			})
+		}
 	}
 
 	// Custom Validation for BooksClosedDate
@@ -94,6 +146,10 @@ func UpdateSettings(c fiber.Ctx) error {
 	}
 
 	tx.Commit()
+	BroadcastEvent("SETTINGS_UPDATED", nil)
+	if input.Key == "BooksClosedDate" {
+		BroadcastEvent("QUEUE_UPDATED", nil)
+	}
 	return c.JSON(setting)
 }
 
@@ -116,13 +172,15 @@ type ClosePreflight struct {
 	UnlinkedTxSamples   []GroupItem `json:"unlinkedTxSamples"`
 	UnlinkedExpSamples  []GroupItem `json:"unlinkedExpSamples"`
 	EarliestBlockerDate string      `json:"earliestBlockerDate"`
-	ExcludedTxCount     int64       `json:"excludedTxCount"`
-	ExcludedExpCount    int64       `json:"excludedExpCount"`
-	ExcludedTxTotal     float64     `json:"excludedTxTotal"`
-	ExcludedExpTotal    float64     `json:"excludedExpTotal"`
+	ExcludedTxCount       int64       `json:"excludedTxCount"`
+	ExcludedExpCount      int64       `json:"excludedExpCount"`
+	ExcludedTxTotal       float64     `json:"excludedTxTotal"`
+	ExcludedExpTotal      float64     `json:"excludedExpTotal"`
+	UncategorizedTxCount  int64       `json:"uncategorizedTxCount"`
+	UncategorizedExpCount int64       `json:"uncategorizedExpCount"`
 }
 
-const unresolvedCondition = "(review_status IS NULL OR review_status = '' OR review_status = 'APPROVED') AND (reconciliation_status IS NULL OR reconciliation_status != 'MATCHED')"
+const unresolvedCondition = "(review_status IS NULL OR review_status = '' OR review_status = 'APPROVED') AND (allocation_status IS NULL OR allocation_status != 'BALANCED')"
 
 func computeClosePreflight(dateStr string) (ClosePreflight, error) {
 	pf := ClosePreflight{Date: dateStr, UnlinkedTxSamples: []GroupItem{}, UnlinkedExpSamples: []GroupItem{}}
@@ -153,7 +211,7 @@ func computeClosePreflight(dateStr string) (ClosePreflight, error) {
 
 	// Unlinked expenses
 	var exps []models.Expense
-	db.DB.Where("timestamp < ?", before).Where(unresolvedCondition).Order("timestamp ASC").Find(&exps)
+	db.DB.Where("timestamp < ?", before).Where(unresolvedCondition).Where(notCashClause).Order("timestamp ASC").Find(&exps)
 	pf.UnlinkedExpCount = int64(len(exps))
 	for i, e := range exps {
 		track(e.Timestamp)
@@ -184,6 +242,19 @@ func computeClosePreflight(dateStr string) (ClosePreflight, error) {
 	db.DB.Model(&models.Expense{}).Where("timestamp < ? AND review_status = ?", before, "IGNORED").
 		Select("COUNT(*), COALESCE(SUM(amount), 0)").Row().Scan(&pf.ExcludedExpCount, &pf.ExcludedExpTotal)
 
+	// Uncategorized items: in books but missing category or assigned to an inactive/invalid category
+	db.DB.Model(&models.BankTransaction{}).
+		Where("date < ?", before).
+		Where(inBooksClause).
+		Where("category_account_id IS NULL OR category_account_id NOT IN (SELECT id FROM chart_accounts WHERE active = true)").
+		Count(&pf.UncategorizedTxCount)
+
+	db.DB.Model(&models.Expense{}).
+		Where("timestamp < ?", before).
+		Where(inBooksClause).
+		Where("chart_account_id IS NULL OR chart_account_id NOT IN (SELECT id FROM chart_accounts WHERE active = true AND type = 'EXPENSE')").
+		Count(&pf.UncategorizedExpCount)
+
 	if !earliest.IsZero() {
 		pf.EarliestBlockerDate = earliest.Format("2006-01-02")
 	}
@@ -202,4 +273,59 @@ func GetClosePreflight(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "date must be YYYY-MM-DD"})
 	}
 	return c.JSON(pf)
+}
+
+// BrowseDirectories lists subdirectories at the requested host path.
+func BrowseDirectories(c fiber.Ctx) error {
+	reqPath := strings.TrimSpace(c.Query("path"))
+	if reqPath == "" {
+		reqPath = "/home/premo"
+	}
+
+	cleaned := filepath.Clean(reqPath)
+	if strings.HasPrefix(cleaned, "~") {
+		cleaned = filepath.Join("/home/premo", strings.TrimPrefix(cleaned, "~"))
+	}
+	if strings.HasPrefix(cleaned, "home/") {
+		cleaned = "/" + cleaned
+	}
+
+	containerPath := constants.ResolveHostToContainer(cleaned)
+
+	fi, err := os.Stat(containerPath)
+	if err != nil || !fi.IsDir() {
+		// Fallback to /home/premo if requested path is missing
+		cleaned = "/home/premo"
+		containerPath = constants.ResolveHostToContainer(cleaned)
+		fi, err = os.Stat(containerPath)
+		if err != nil || !fi.IsDir() {
+			cleaned = "/"
+			containerPath = constants.ResolveHostToContainer(cleaned)
+		}
+	}
+
+	entries, err := os.ReadDir(containerPath)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": fmt.Sprintf("Cannot access path: %v", err)})
+	}
+
+	var dirs []string
+	for _, e := range entries {
+		// Only list non-hidden directories
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	sort.Strings(dirs)
+
+	parent := filepath.Dir(cleaned)
+	if parent == cleaned {
+		parent = ""
+	}
+
+	return c.JSON(fiber.Map{
+		"currentPath": cleaned,
+		"parentPath":  parent,
+		"directories": dirs,
+	})
 }

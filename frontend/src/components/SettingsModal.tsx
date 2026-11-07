@@ -4,6 +4,8 @@ import type { PeriodAuditLog, ClosePreflight } from "../types/models";
 import { Modal } from "./ui/Modal";
 import { Input } from "./ui/Input";
 import { Button } from "./ui/Button";
+import { LoadingSpinner } from "./ui/LoadingSpinner";
+import { formatDate, toLocalISODate } from "../utils/dateUtils";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -20,15 +22,18 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
   const [error, setError] = useState("");
   const [preflight, setPreflight] = useState<ClosePreflight | null>(null);
   const [isLoadingPreflight, setIsLoadingPreflight] = useState(false);
+  const [ackUncategorized, setAckUncategorized] = useState(false);
   const debounceRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       loadData();
+      setAckUncategorized(false);
     }
   }, [isOpen]);
 
   useEffect(() => {
+    setAckUncategorized(false);
     if (!booksClosedDate) {
       setPreflight(null);
       return;
@@ -86,10 +91,12 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
     const now = new Date();
     // End of last month
     const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
-    const dateStr = endOfLastMonth.toISOString().split("T")[0];
+    const dateStr = toLocalISODate(endOfLastMonth);
     setBooksClosedDate(dateStr);
-    handleSave(dateStr);
   };
+
+  const hasUncategorized = !!preflight && (preflight.uncategorizedTxCount > 0 || preflight.uncategorizedExpCount > 0);
+  const canSave = (!preflight || preflight.canClose || booksClosedDate === "") && (!hasUncategorized || ackUncategorized);
 
   const getActionColor = (action: string) => {
     if (action.includes("LOCKED")) return "text-emerald-400";
@@ -118,7 +125,7 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
           </div>
           <div>
             <h3 className={`font-bold ${currentClosedDate ? 'text-emerald-400' : 'text-amber-400'}`}>
-              {currentClosedDate ? `Books Locked through ${new Date(currentClosedDate).toLocaleDateString()}` : "Books are completely OPEN"}
+              {currentClosedDate ? `Books Locked through ${formatDate(currentClosedDate)}` : "Books are completely OPEN"}
             </h3>
             <p className="text-sm text-zinc-400 mt-1">
               {currentClosedDate 
@@ -138,7 +145,7 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
         <div className="bg-[#111] border border-white/5 p-5 rounded-2xl">
           <h3 className="text-sm font-bold text-white mb-4">Change Closing Date</h3>
           <p className="text-xs text-zinc-400 mb-4">
-            <strong className="text-amber-500/80">Strict Closing Rule:</strong> You cannot lock books for a period that contains unresolved items. All expenses and transactions on or before your chosen date must be explicitly matched or moved to the "Ignored Items" queue.
+            <strong className="text-amber-500/80">Strict Closing Rule:</strong> You cannot lock books for a period that contains unresolved items. All expenses and transactions on or before your chosen date must be explicitly linked and balanced, or moved to the "Ignored Items" queue.
           </p>
           
           <div className="flex flex-col sm:flex-row items-end gap-3">
@@ -151,7 +158,7 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
               />
             </div>
             <div className="flex gap-2 w-full sm:w-auto mt-2 sm:mt-0">
-              <Button variant="primary" onClick={() => handleSave()} disabled={!!preflight && !preflight.canClose && booksClosedDate !== ""} isLoading={isSaving} className="flex-1 sm:flex-none">
+              <Button variant="primary" onClick={() => handleSave()} disabled={!canSave} isLoading={isSaving} className="flex-1 sm:flex-none">
                 Save Date
               </Button>
               {booksClosedDate && (
@@ -172,7 +179,7 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
             <div className={`mt-5 p-4 rounded-xl border ${preflight.canClose ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
               <h4 className={`text-sm font-bold mb-2 flex items-center gap-2 ${preflight.canClose ? 'text-emerald-400' : 'text-red-400'}`}>
                 {isLoadingPreflight ? (
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+                  <LoadingSpinner size="xs" />
                 ) : preflight.canClose ? (
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/></svg>
                 ) : (
@@ -199,10 +206,34 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
                     <span>{preflight.pendingCount} items in review queue.</span>
                   </li>
                 )}
+                {(preflight.uncategorizedTxCount > 0 || preflight.uncategorizedExpCount > 0) && (
+                  <li className="flex flex-col gap-2 pt-1 border-t border-amber-500/20 text-amber-300">
+                    <div className="flex items-start gap-2">
+                      <span className="mt-0.5">⚠️</span>
+                      <span>
+                        {preflight.uncategorizedTxCount > 0 && `${preflight.uncategorizedTxCount} transaction(s)`}
+                        {preflight.uncategorizedTxCount > 0 && preflight.uncategorizedExpCount > 0 && " and "}
+                        {preflight.uncategorizedExpCount > 0 && `${preflight.uncategorizedExpCount} expense(s)`}
+                        {" without an assigned category will be locked."}
+                      </span>
+                    </div>
+                    {preflight.canClose && (
+                      <label className="flex items-center gap-2 cursor-pointer mt-1 bg-amber-500/10 border border-amber-500/30 p-2.5 rounded-lg select-none text-xs text-amber-200 hover:bg-amber-500/20 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={ackUncategorized}
+                          onChange={e => setAckUncategorized(e.target.checked)}
+                          className="rounded border-zinc-700 bg-zinc-900 text-amber-500 focus:ring-amber-500/20 h-4 w-4"
+                        />
+                        <span>I acknowledge locking records with uncategorized suspense items.</span>
+                      </label>
+                    )}
+                  </li>
+                )}
                 {preflight.canClose && (
                   <li className="flex items-start gap-2">
                     <span className="text-emerald-400 mt-0.5">•</span>
-                    <span>All items on or before {new Date(booksClosedDate).toLocaleDateString()} are resolved.</span>
+                    <span>All items on or before {formatDate(booksClosedDate)} are resolved.</span>
                   </li>
                 )}
               </ul>

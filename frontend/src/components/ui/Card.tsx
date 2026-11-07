@@ -8,7 +8,9 @@ interface CardProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 export function Card({ children, className = '', onClick, active = false, ...props }: CardProps) {
-  const baseStyles = "w-full text-left flex items-center justify-between p-4 rounded-2xl transition-all duration-300 shadow-sm";
+  const isCol = className.includes('flex-col');
+  const layoutStyles = isCol ? 'flex flex-col' : 'flex items-center justify-between';
+  const baseStyles = `w-full text-left ${layoutStyles} p-4 rounded-2xl transition-all duration-300 shadow-sm`;
   const stateStyles = active 
     ? "bg-zinc-800 border border-emerald-500/30" 
     : "bg-white/[0.02] hover:bg-white/[0.04] border border-white/5 hover:border-white/10 hover:-translate-y-0.5 backdrop-blur-sm";

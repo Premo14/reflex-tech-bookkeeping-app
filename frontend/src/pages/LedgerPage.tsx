@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
-import { getChartAccounts, getSettings } from "../services/api";
+import { getChartAccounts, getSettings, getReviewQueueCounts, type ReviewStatusType } from "../services/api";
 import type { ChartAccount } from "../types/models";
 
 import Sidebar from "../components/Sidebar";
 import Header from "../components/Header";
 import LedgerGrid from "../components/LedgerGrid";
 import ReviewModal from "../components/ReviewModal";
-import { getReviewQueue, getFlaggedItems } from "../services/api";
+import AppSettingsModal from "../components/AppSettingsModal";
+import { useLiveEvent } from "../utils/useLiveSync";
 
 export default function LedgerPage() {
   const [accounts, setAccounts] = useState<ChartAccount[]>([]);
@@ -15,12 +16,29 @@ export default function LedgerPage() {
   const [endDate, setEndDate] = useState<string>("");
   const [activeAccountId, setActiveAccountId] = useState<number | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isAccountsLoading, setIsAccountsLoading] = useState(true);
+  const [isQueueLoading, setIsQueueLoading] = useState(true);
+  const [isSettingsLoading, setIsSettingsLoading] = useState(true);
   
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
-  const [reviewStatusType, setReviewStatusType] = useState<'PENDING' | 'IGNORED'>('PENDING');
+  const [reviewStatusType, setReviewStatusType] = useState<ReviewStatusType>('PENDING');
+  const [appSettingsModalOpen, setAppSettingsModalOpen] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [excludedCount, setExcludedCount] = useState(0);
+  const [warningsIgnoredCount, setWarningsIgnoredCount] = useState(0);
+  const [deletedCount, setDeletedCount] = useState(0);
   const [viewUnlinkedTrigger, setViewUnlinkedTrigger] = useState(0);
+  const [hasInitializedOpenBooks, setHasInitializedOpenBooks] = useState(false);
+
+  function addDays(dateStr: string, days: number): string {
+    if (!dateStr) return "";
+    const [y, m, d] = dateStr.split("T")[0].split("-").map(Number);
+    const dt = new Date(y, m - 1, d + days);
+    const ny = dt.getFullYear();
+    const nm = String(dt.getMonth() + 1).padStart(2, "0");
+    const nd = String(dt.getDate()).padStart(2, "0");
+    return `${ny}-${nm}-${nd}`;
+  }
 
   const handleViewItems = (date: string) => {
     setStartDate("");
@@ -28,37 +46,73 @@ export default function LedgerPage() {
     setViewUnlinkedTrigger(prev => prev + 1);
   };
 
-  const fetchData = async () => {
+  const fetchQueueCounts = async () => {
+    setIsQueueLoading(true);
     try {
-      const [accountsData, settingsData, queueData, flaggedData] = await Promise.all([
-        getChartAccounts(),
-        getSettings(),
-        getReviewQueue('PENDING').catch(() => ({ transactions: [], expenses: [] })),
-        getFlaggedItems().catch(() => ({ transactions: [], expenses: [] }))
-      ]);
-      setAccounts(accountsData || []);
-      setSettings(settingsData || {});
-      
-      const txKeys = new Set([
-        ...(queueData.transactions || []).map((t: any) => t.id),
-        ...(flaggedData.transactions || []).map((t: any) => t.id)
-      ]);
-      const expKeys = new Set([
-        ...(queueData.expenses || []).map((e: any) => e.id),
-        ...(flaggedData.expenses || []).map((e: any) => e.id)
-      ]);
-      
-      setPendingCount(txKeys.size + expKeys.size);
+      const counts = await getReviewQueueCounts();
+      setPendingCount(counts.pending);
+      setExcludedCount(counts.excluded);
+      setWarningsIgnoredCount(counts.warningsIgnored);
+      setDeletedCount(counts.deleted);
     } catch (err) {
-      console.error("Failed to load global data:", err);
+      console.error("Failed to load queue counts:", err);
     } finally {
-      setIsLoading(false);
+      setIsQueueLoading(false);
     }
   };
 
+  const fetchAccounts = async () => {
+    setIsAccountsLoading(true);
+    try {
+      const data = await getChartAccounts();
+      setAccounts(data || []);
+    } catch (err) {
+      console.error("Failed to load accounts:", err);
+    } finally {
+      setIsAccountsLoading(false);
+    }
+  };
+
+  const fetchSettings = async () => {
+    setIsSettingsLoading(true);
+    try {
+      const data = await getSettings();
+      setSettings(data || {});
+      if (!hasInitializedOpenBooks && data?.["BooksClosedDate"]) {
+        setHasInitializedOpenBooks(true);
+        const nextDay = addDays(data["BooksClosedDate"], 1);
+        setStartDate(nextDay);
+        setEndDate("");
+      }
+    } catch (err) {
+      console.error("Failed to load settings:", err);
+    } finally {
+      setIsSettingsLoading(false);
+    }
+  };
+
+  const fetchData = async () => {
+    await Promise.all([fetchAccounts(), fetchSettings(), fetchQueueCounts()]);
+  };
+
   useEffect(() => {
-    fetchData();
+    fetchAccounts();
+    fetchSettings();
+    fetchQueueCounts();
   }, []);
+
+  // Live real-time updates from background tasks
+  useLiveEvent(["QUEUE_UPDATED", "RECONCILIATION_UPDATED"], () => {
+    fetchQueueCounts();
+  });
+
+  useLiveEvent(["ACCOUNTS_UPDATED", "TRANSACTIONS_UPDATED"], () => {
+    fetchAccounts();
+  });
+
+  useLiveEvent("SETTINGS_UPDATED", () => {
+    fetchSettings();
+  });
 
   return (
     <div className="flex h-screen bg-zinc-900 font-sans text-zinc-100 selection:bg-zinc-700 overflow-hidden relative">
@@ -70,43 +124,49 @@ export default function LedgerPage() {
         isSidebarOpen={isSidebarOpen}
         setIsSidebarOpen={setIsSidebarOpen}
         pendingCount={pendingCount}
+        excludedCount={excludedCount}
+        warningsIgnoredCount={warningsIgnoredCount}
+        deletedCount={deletedCount}
+        booksClosedDate={settings["BooksClosedDate"] || ""}
         onOpenReview={(type) => { setReviewStatusType(type); setReviewModalOpen(true); setIsSidebarOpen(false); }}
+        onOpenSettings={() => { setAppSettingsModalOpen(true); setIsSidebarOpen(false); }}
+        isQueueLoading={isQueueLoading}
+        isSettingsLoading={isSettingsLoading}
       />
       
       <main className="flex-1 flex flex-col h-screen overflow-hidden min-w-0 bg-[#0a0a0a]">
-        {isLoading ? (
-          <div className="flex-1 flex items-center justify-center">
-            <svg className="w-8 h-8 text-zinc-400 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-          </div>
-        ) : (
-          <>
-            <Header 
-              setIsSidebarOpen={setIsSidebarOpen}
-              accounts={accounts}
-              activeAccountId={activeAccountId}
-              setActiveAccountId={setActiveAccountId}
-              refreshData={fetchData}
-              settings={settings}
-              onViewItems={handleViewItems}
-            />
-            <LedgerGrid 
-              startDate={startDate}
-              endDate={endDate}
-              accounts={accounts}
-              activeAccountId={activeAccountId}
-              viewUnlinkedTrigger={viewUnlinkedTrigger}
-            />
-          </>
-        )}
+        <Header 
+          setIsSidebarOpen={setIsSidebarOpen}
+          accounts={accounts}
+          activeAccountId={activeAccountId}
+          setActiveAccountId={setActiveAccountId}
+          refreshData={fetchData}
+          settings={settings}
+          onViewItems={handleViewItems}
+          isAccountsLoading={isAccountsLoading}
+          startDate={startDate}
+          endDate={endDate}
+        />
+        <LedgerGrid 
+          startDate={startDate}
+          endDate={endDate}
+          accounts={accounts}
+          activeAccountId={activeAccountId}
+          viewUnlinkedTrigger={viewUnlinkedTrigger}
+          onItemsChanged={fetchData}
+        />
       </main>
       <ReviewModal 
         isOpen={reviewModalOpen} 
         onClose={() => setReviewModalOpen(false)} 
         statusType={reviewStatusType} 
         refreshData={fetchData} 
+      />
+      <AppSettingsModal
+        isOpen={appSettingsModalOpen}
+        onClose={() => setAppSettingsModalOpen(false)}
+        settings={settings}
+        refreshSettings={fetchData}
       />
     </div>
   );
