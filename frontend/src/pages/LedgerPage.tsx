@@ -7,6 +7,7 @@ import Header from "../components/Header";
 import LedgerGrid from "../components/LedgerGrid";
 import ReviewModal from "../components/ReviewModal";
 import AppSettingsModal from "../components/AppSettingsModal";
+import InvoicingModal from "../components/InvoicingModal";
 import { useLiveEvent } from "../utils/useLiveSync";
 
 export default function LedgerPage() {
@@ -23,11 +24,30 @@ export default function LedgerPage() {
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [reviewStatusType, setReviewStatusType] = useState<ReviewStatusType>('PENDING');
   const [appSettingsModalOpen, setAppSettingsModalOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'storage' | 'rules'>('storage');
+  const [invoicingModalOpen, setInvoicingModalOpen] = useState(false);
+  const [initialRuleData, setInitialRuleData] = useState<{
+    name?: string;
+    descriptionKeyword?: string;
+    categoryAccountId?: number | null;
+  } | null>(null);
+
+  const handleOpenRules = (data?: {
+    name?: string;
+    descriptionKeyword?: string;
+    categoryAccountId?: number | null;
+  }) => {
+    setInitialRuleData(data || null);
+    setSettingsTab('rules');
+    setAppSettingsModalOpen(true);
+    setIsSidebarOpen(false);
+  };
   const [pendingCount, setPendingCount] = useState(0);
   const [excludedCount, setExcludedCount] = useState(0);
   const [warningsIgnoredCount, setWarningsIgnoredCount] = useState(0);
   const [deletedCount, setDeletedCount] = useState(0);
   const [viewUnlinkedTrigger, setViewUnlinkedTrigger] = useState(0);
+  const [viewUncategorizedTrigger, setViewUncategorizedTrigger] = useState(0);
   const [hasInitializedOpenBooks, setHasInitializedOpenBooks] = useState(false);
 
   function addDays(dateStr: string, days: number): string {
@@ -44,6 +64,10 @@ export default function LedgerPage() {
     setStartDate("");
     setEndDate(date);
     setViewUnlinkedTrigger(prev => prev + 1);
+  };
+
+  const handleViewUncategorized = () => {
+    setViewUncategorizedTrigger(prev => prev + 1);
   };
 
   const fetchQueueCounts = async () => {
@@ -106,8 +130,9 @@ export default function LedgerPage() {
     fetchQueueCounts();
   });
 
-  useLiveEvent(["ACCOUNTS_UPDATED", "TRANSACTIONS_UPDATED"], () => {
+  useLiveEvent(["ACCOUNTS_UPDATED", "TRANSACTIONS_UPDATED", "RULES_UPDATED"], () => {
     fetchAccounts();
+    fetchQueueCounts();
   });
 
   useLiveEvent("SETTINGS_UPDATED", () => {
@@ -129,7 +154,7 @@ export default function LedgerPage() {
         deletedCount={deletedCount}
         booksClosedDate={settings["BooksClosedDate"] || ""}
         onOpenReview={(type) => { setReviewStatusType(type); setReviewModalOpen(true); setIsSidebarOpen(false); }}
-        onOpenSettings={() => { setAppSettingsModalOpen(true); setIsSidebarOpen(false); }}
+        onOpenSettings={() => { setSettingsTab('storage'); setAppSettingsModalOpen(true); setIsSidebarOpen(false); }}
         isQueueLoading={isQueueLoading}
         isSettingsLoading={isSettingsLoading}
       />
@@ -143,6 +168,8 @@ export default function LedgerPage() {
           refreshData={fetchData}
           settings={settings}
           onViewItems={handleViewItems}
+          onViewUncategorized={handleViewUncategorized}
+          onOpenInvoices={() => setInvoicingModalOpen(true)}
           isAccountsLoading={isAccountsLoading}
           startDate={startDate}
           endDate={endDate}
@@ -153,7 +180,9 @@ export default function LedgerPage() {
           accounts={accounts}
           activeAccountId={activeAccountId}
           viewUnlinkedTrigger={viewUnlinkedTrigger}
+          viewUncategorizedTrigger={viewUncategorizedTrigger}
           onItemsChanged={fetchData}
+          onCreateRule={(data) => handleOpenRules(data)}
         />
       </main>
       <ReviewModal 
@@ -164,9 +193,17 @@ export default function LedgerPage() {
       />
       <AppSettingsModal
         isOpen={appSettingsModalOpen}
-        onClose={() => setAppSettingsModalOpen(false)}
+        onClose={() => { setAppSettingsModalOpen(false); setInitialRuleData(null); }}
         settings={settings}
         refreshSettings={fetchData}
+        initialTab={settingsTab}
+        initialRuleData={initialRuleData}
+        onRulesApplied={fetchData}
+      />
+      <InvoicingModal
+        isOpen={invoicingModalOpen}
+        onClose={() => setInvoicingModalOpen(false)}
+        onInvoicesUpdated={fetchData}
       />
     </div>
   );

@@ -3,6 +3,7 @@ package utils
 import (
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"reflex-tech-bookkeeping-app-api/db"
@@ -134,21 +135,30 @@ func ParseOfx(filePath string) {
 
 	// Build and bulk-insert the transactions
 	var dbTransactions []models.BankTransaction
-	for _, tx := range transactions {
+	for i, tx := range transactions {
 		// Convert tx.TrnAmt (which is an ofxgo.Amount) to a float64
 		val, _ := tx.TrnAmt.Float64()
-		// Combine Name and Memo for a full description
-		fullDesc := string(tx.Name) + " " + string(tx.Memo)
+		// Combine Name and Memo for a full description without duplicating identical fields
+		fullDesc := buildOfxDescription(string(tx.Name), string(tx.Memo))
 		statementID := bankStatement.ID
+
+		// Normalize posted date to UTC calendar midnight to prevent timezone day-drift
+		posted := tx.DtPosted.Time
+		date := time.Date(posted.Year(), posted.Month(), posted.Day(), 0, 0, 0, 0, time.UTC)
+
+		fitID := strings.TrimSpace(string(tx.FiTID))
+		if fitID == "" {
+			fitID = fmt.Sprintf("OFX-SYNTH-%d-%s-%d-%d", statementID, date.Format("20060102"), int64(math.Round(val*100)), i)
+		}
 
 		dbTx := models.BankTransaction{
 			BankStatementID: &statementID,
 			ChartAccountID:  chartAccountID, // denormalized from the statement
-			Date:            tx.DtPosted.Time,
+			Date:            date,
 			Description:     fullDesc,
 			Amount:          val,
 			TransactionType: fmt.Sprintf("%v", tx.TrnType),
-			FITID:           string(tx.FiTID),
+			FITID:           fitID,
 		}
 
 		if IsDateInClosedPeriod(dbTx.Date) {
@@ -157,6 +167,9 @@ func ParseOfx(filePath string) {
 			dbTx.ReviewStatus = "APPROVED"
 		}
 		dbTx.AllocationStatus = "UNLINKED"
+
+		// Automatically evaluate active bank rules (auto-categorization, clean renaming, notes)
+		ApplyBankRulesToTransaction(&dbTx, db.DB)
 
 		dbTransactions = append(dbTransactions, dbTx)
 	}
@@ -178,6 +191,22 @@ func ParseOfx(filePath string) {
 
 	// Trigger reconciliation to link any waiting expenses to the newly imported transactions
 	RunReconciliation()
+}
+
+// buildOfxDescription combines OFX Name and Memo without repeating identical or redundant strings.
+func buildOfxDescription(name, memo string) string {
+	n := strings.Join(strings.Fields(name), " ")
+	m := strings.Join(strings.Fields(memo), " ")
+	if n == "" {
+		return m
+	}
+	if m == "" || strings.EqualFold(n, m) || strings.Contains(strings.ToLower(n), strings.ToLower(m)) {
+		return n
+	}
+	if strings.Contains(strings.ToLower(m), strings.ToLower(n)) {
+		return m
+	}
+	return n + " " + m
 }
 
 // resolveOrCreateChartAccount finds a ChartAccount matching the given OFX account credentials,

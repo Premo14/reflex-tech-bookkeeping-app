@@ -117,7 +117,7 @@ export function Modal({ isOpen, onClose, title, children, footer, maxWidth = 'md
         aria-modal="true"
         aria-labelledby="modal-dialog-title"
         tabIndex={-1}
-        className={`bg-zinc-900 border border-white/10 rounded-2xl w-full ${maxWidthClasses[maxWidth]} shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200 outline-none print:static print:max-h-none print:w-full print:max-w-none print:border-none print:shadow-none print:bg-white print:text-black print:overflow-visible`}
+        className={`bg-zinc-900 border border-white/10 rounded-2xl w-full ${maxWidthClasses[maxWidth]} shadow-2xl flex flex-col max-h-[min(90vh,90dvh)] animate-in zoom-in-95 duration-200 outline-none print:static print:max-h-none print:w-full print:max-w-none print:border-none print:shadow-none print:bg-white print:text-black print:overflow-visible`}
       >
         <div className={`flex justify-between items-center p-6 border-b border-white/5 shrink-0 ${headerClassName || ''}`}>
           <h2 id="modal-dialog-title" className="text-xl font-bold text-white print:text-black">{title}</h2>

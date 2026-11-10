@@ -31,6 +31,23 @@ func init() {
 	}
 }
 
+// DetectHostHomeDir inspects /host_fs/Users (macOS) and /host_fs/home (Linux)
+// to find the primary host user home directory.
+func DetectHostHomeDir() string {
+	for _, root := range []string{"/Users", "/home"} {
+		entries, err := os.ReadDir(filepath.Join("/host_fs", root))
+		if err == nil {
+			for _, e := range entries {
+				name := e.Name()
+				if e.IsDir() && !strings.HasPrefix(name, ".") && name != "Shared" && name != "Guest" {
+					return filepath.Join(root, name)
+				}
+			}
+		}
+	}
+	return "/home/premo"
+}
+
 // NormalizeDropboxHostPath ensures that the folder name is ALWAYS "document-data".
 // If the user supplies a parent path like "/home/user/Desktop", it appends "document-data".
 func NormalizeDropboxHostPath(hostPath string) string {
@@ -41,19 +58,11 @@ func NormalizeDropboxHostPath(hostPath string) string {
 
 	// Expand ~/ to host user home if running in container
 	if strings.HasPrefix(cleaned, "~") {
-		entries, err := os.ReadDir("/host_fs/home")
-		if err == nil && len(entries) > 0 {
-			for _, e := range entries {
-				if e.IsDir() {
-					cleaned = filepath.Join("/home", e.Name(), strings.TrimPrefix(cleaned, "~"))
-					break
-				}
-			}
-		}
+		cleaned = filepath.Join(DetectHostHomeDir(), strings.TrimPrefix(cleaned, "~"))
 	}
 
-	// If user enters without leading slash e.g. "home/premo/...", prepend "/"
-	if strings.HasPrefix(cleaned, "home/") {
+	// If user enters without leading slash e.g. "home/premo/..." or "Users/aj/...", prepend "/"
+	if strings.HasPrefix(cleaned, "home/") || strings.HasPrefix(cleaned, "Users/") {
 		cleaned = "/" + cleaned
 	}
 

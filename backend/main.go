@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"reflex-tech-bookkeeping-app-api/constants"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
@@ -53,8 +54,14 @@ func main() {
 	// Expose the processed/ folder so the frontend can display receipt images dynamically
 	app.Get("/api/images/*", func(c fiber.Ctx) error {
 		relPath := c.Params("*")
-		filePath := filepath.Join(constants.GetProcessedPath(), relPath)
-		return c.SendFile(filePath)
+		baseDir := filepath.Clean(constants.GetProcessedPath())
+		cleanTarget := filepath.Clean(filepath.Join(baseDir, relPath))
+
+		// Prevent path traversal outside the processed folder
+		if !strings.HasPrefix(cleanTarget, baseDir+string(filepath.Separator)) && cleanTarget != baseDir {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Access denied"})
+		}
+		return c.SendFile(cleanTarget)
 	})
 
 	routes.SetupRoutes(app)

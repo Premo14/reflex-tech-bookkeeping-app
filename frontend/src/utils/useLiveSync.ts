@@ -107,7 +107,9 @@ export function useLiveEvent(
   callback: (payload: any) => void
 ) {
   const cbRef = useRef(callback);
-  cbRef.current = callback;
+  useEffect(() => {
+    cbRef.current = callback;
+  });
 
   useEffect(() => {
     const manager = LiveSyncManager.getInstance();

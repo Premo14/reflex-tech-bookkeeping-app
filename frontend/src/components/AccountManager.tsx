@@ -48,6 +48,37 @@ interface AccountManagerProps {
   refreshAccounts: () => void;
 }
 
+export const SCHEDULE_C_OPTIONS = [
+  { value: "", label: "-- None / Not Applicable --" },
+  { value: "Line 1 - Gross receipts or sales", label: "Line 1 - Gross receipts or sales (Revenue)" },
+  { value: "Line 2 - Returns and allowances", label: "Line 2 - Returns & allowances" },
+  { value: "Line 4 - Cost of goods sold", label: "Line 4 - Cost of goods sold (COGS)" },
+  { value: "Line 6 - Other income", label: "Line 6 - Other income (Interest, refunds)" },
+  { value: "Line 8 - Advertising", label: "Line 8 - Advertising & marketing" },
+  { value: "Line 9 - Car and truck expenses", label: "Line 9 - Car and truck expenses" },
+  { value: "Line 10 - Commissions and fees", label: "Line 10 - Commissions and fees" },
+  { value: "Line 11 - Contract labor", label: "Line 11 - Contract labor (1099)" },
+  { value: "Line 12 - Depletion", label: "Line 12 - Depletion" },
+  { value: "Line 13 - Depreciation", label: "Line 13 - Depreciation & Sec 179" },
+  { value: "Line 14 - Employee benefit programs", label: "Line 14 - Employee benefits" },
+  { value: "Line 15 - Insurance (other than health)", label: "Line 15 - Insurance (liability, business)" },
+  { value: "Line 16a - Mortgage interest", label: "Line 16a - Mortgage interest" },
+  { value: "Line 16b - Other interest", label: "Line 16b - Other interest (loans, credit card interest)" },
+  { value: "Line 17 - Legal and professional services", label: "Line 17 - Legal and professional services" },
+  { value: "Line 18 - Office expense", label: "Line 18 - Office expense & supplies" },
+  { value: "Line 19 - Pension and profit-sharing", label: "Line 19 - Pension and profit-sharing" },
+  { value: "Line 20a - Rent (vehicles, machinery)", label: "Line 20a - Rent (vehicles, machinery, equipment)" },
+  { value: "Line 20b - Rent or lease (other business property)", label: "Line 20b - Rent/lease (office, property)" },
+  { value: "Line 21 - Repairs and maintenance", label: "Line 21 - Repairs and maintenance" },
+  { value: "Line 22 - Supplies", label: "Line 22 - Supplies & materials" },
+  { value: "Line 23 - Taxes and licenses", label: "Line 23 - Taxes and licenses" },
+  { value: "Line 24a - Travel", label: "Line 24a - Travel & lodging" },
+  { value: "Line 24b - Deductible meals (50%)", label: "Line 24b - Deductible meals (50% IRS limit)" },
+  { value: "Line 25 - Utilities", label: "Line 25 - Utilities (electric, internet, phone)" },
+  { value: "Line 26 - Wages", label: "Line 26 - Wages & salaries" },
+  { value: "Line 27a - Other expenses", label: "Line 27a - Other expenses (Software, bank fees, misc)" },
+];
+
 export default function AccountManager({ isOpen, onClose, accounts, refreshAccounts }: AccountManagerProps) {
   const { confirm } = useConfirm();
   const [isCreating, setIsCreating] = useState(false);
@@ -91,6 +122,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
       name: "",
       type: "EXPENSE",
       description: "",
+      scheduleCLine: "",
       active: true,
       parentId: undefined,
     });
@@ -108,6 +140,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
       type: acc.type,
       parentId: acc.parentId,
       description: acc.description,
+      scheduleCLine: acc.scheduleCLine || "",
       active: acc.active,
       isDefault: acc.isDefault,
     });
@@ -248,6 +281,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
         code: cleanCode,
         name: cleanName,
         description: (formData.description || "").trim(),
+        scheduleCLine: (formData.scheduleCLine || "").trim(),
       };
       if (isCreating) {
         await createChartAccount(payload as CreateChartAccountInput);
@@ -308,7 +342,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
         <div className="flex-1 min-h-0 flex flex-col md:flex-row gap-8 overflow-hidden">
           
           {/* LEFT: List of Accounts */}
-          <div className="flex-1 overflow-y-auto pr-3 space-y-6 custom-scrollbar min-h-0 max-h-[calc(90vh-140px)]">
+          <div className={`flex-1 overflow-y-auto pr-3 space-y-6 custom-scrollbar min-h-0 max-h-[calc(90vh-140px)] ${(isCreating || editingId) ? 'hidden md:block' : 'block'}`}>
             <div className="flex justify-between items-center">
               <h3 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider">Existing Accounts</h3>
               <button 
@@ -396,6 +430,11 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                                   Default
                                 </span>
                               )}
+                              {acc.scheduleCLine && (
+                                <span className="text-[10px] bg-amber-500/10 text-amber-300 border border-amber-500/20 px-1.5 py-0.2 rounded font-medium truncate max-w-44" title={`IRS Schedule C: ${acc.scheduleCLine}`}>
+                                  📋 {acc.scheduleCLine.split("-")[0].trim()}
+                                </span>
+                              )}
                               {!acc.active && (
                                 <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 rounded uppercase tracking-wider font-semibold">
                                   Inactive
@@ -434,14 +473,23 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
           </div>
 
           {/* RIGHT: Edit/Create Form */}
-          <div className="md:w-84 shrink-0 flex flex-col justify-center my-auto max-h-[calc(90vh-140px)] min-w-0 max-w-full">
+          <div className={`md:w-84 shrink-0 flex flex-col justify-center my-auto max-h-[calc(90vh-140px)] min-w-0 max-w-full ${(isCreating || editingId) ? 'block flex-1' : 'hidden md:flex'}`}>
             {(isCreating || editingId) ? (
               <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 shadow-xl flex flex-col max-h-full overflow-hidden min-w-0">
                 <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-800/80 shrink-0">
-                  <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                    <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
-                    {isCreating ? "Create Account" : isEditingDefault ? "Edit Default Account" : "Edit Custom Account"}
-                  </h3>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      type="button" 
+                      onClick={handleCancel} 
+                      className="md:hidden text-zinc-400 hover:text-white mr-1 text-xs px-1.5 py-0.5 rounded bg-zinc-800"
+                    >
+                      ← Back
+                    </button>
+                    <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                      <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                      {isCreating ? "Create Account" : isEditingDefault ? "Edit Default Account" : "Edit Custom Account"}
+                    </h3>
+                  </div>
                 </div>
 
                 {(error && (isCreating || editingId)) && (
@@ -548,6 +596,24 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                           );
                         })}
                     </Select>
+                  </div>
+
+                  <div>
+                    <label className={labelCls}>IRS Schedule C Line (Tax Mapping)</label>
+                    <Select
+                      className={inputCls}
+                      value={formData.scheduleCLine || ""}
+                      onChange={e => setFormData({ ...formData, scheduleCLine: e.target.value })}
+                    >
+                      {SCHEDULE_C_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </Select>
+                    <p className="text-[10px] text-zinc-500 mt-1">
+                      Links this account directly to Form 1040 Schedule C for 1-click tax prep & export.
+                    </p>
                   </div>
 
                   <div>

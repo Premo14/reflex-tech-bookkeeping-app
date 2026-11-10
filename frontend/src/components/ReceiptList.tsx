@@ -4,6 +4,7 @@ import { Card } from "./ui/Card";
 import { Badge } from "./ui/Badge";
 import { getSubClassForAccount } from "../utils/accountHierarchy";
 import { formatDate } from "../utils/dateUtils";
+import ReceiptThumbnailBadge from "./ReceiptThumbnailBadge";
 
 interface ReceiptListProps {
   expenses: Expense[];
@@ -95,6 +96,14 @@ export default function ReceiptList({ expenses, filter, searchQuery, sortField, 
           detailItems.push(<span className="text-zinc-400 truncate max-w-[180px]">{exp.description}</span>);
         }
 
+        if (exp.taxAmount && exp.taxAmount > 0) {
+          detailItems.push(
+            <span className="text-zinc-400" title={`Sales tax: ${formatMoney(exp.taxAmount)}`}>
+              Tax: <span className="text-zinc-300 font-medium">{formatMoney(exp.taxAmount)}</span>
+            </span>
+          );
+        }
+
         if (exp.chartAccount && exp.chartAccount.id) {
           const subClass = getSubClassForAccount(exp.chartAccount.type, exp.chartAccount.code);
           detailItems.push(
@@ -138,7 +147,7 @@ export default function ReceiptList({ expenses, filter, searchQuery, sortField, 
               </span>
             </div>
 
-            {/* Row 2: Metadata (Date, Description, Category) */}
+            {/* Row 2: Metadata (Date, Description, Tax, Category) */}
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400 min-w-0">
               {detailItems.map((item, i) => (
                 <React.Fragment key={i}>
@@ -154,7 +163,7 @@ export default function ReceiptList({ expenses, filter, searchQuery, sortField, 
             )}
 
             {/* Row 3: Metadata Badges on Left, Allocation Status on Right */}
-            <div className="flex items-center justify-between gap-2 pt-2 border-t border-white/5 w-full min-w-0">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/5 w-full min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap min-w-0">
                 <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-zinc-800 text-zinc-400 border border-zinc-700 tracking-wider">
                   {exp.tender}
@@ -164,25 +173,32 @@ export default function ReceiptList({ expenses, filter, searchQuery, sortField, 
                     Manual
                   </span>
                 )}
-                {(!exp.receipts || exp.receipts.length === 0) && (
+                {exp.receipts && exp.receipts.length > 0 ? (
+                  <ReceiptThumbnailBadge receipts={exp.receipts} />
+                ) : (
                   <span className="flex items-center gap-1 text-[10px] uppercase font-bold text-red-400 bg-red-400/10 px-1.5 py-0.5 rounded border border-red-400/20" title="No physical receipt attached">
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
                     No Receipt
                   </span>
                 )}
               </div>
-              <div className="flex gap-1.5 items-center shrink-0">
+              <div className="flex gap-1.5 items-center shrink-0 ml-auto sm:ml-0">
                 {exp.reviewStatus === 'WARNINGS_IGNORED' ? (
                   <Badge variant="neutral" size="sm">WARNINGS SILENCED</Badge>
                 ) : (
                   <>
                     {s === 'UNLINKED' && exp.hasSuggestions && (
-                      <Badge variant="info" size="sm">SUGGESTION FOUND</Badge>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider bg-blue-500/20 text-blue-300 border border-blue-500/30 flex items-center gap-1 shadow-sm shadow-blue-500/10 animate-pulse">
+                        <svg className="w-3 h-3 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+                        </svg>
+                        MATCH READY
+                      </span>
                     )}
                     {(s === 'BALANCED' || s === 'LINKED') && <Badge variant="success">BALANCED</Badge>}
                     {s === 'PARTIALLY_ALLOCATED' && <Badge variant="warning">UNDER-ALLOCATED</Badge>}
                     {s === 'OVER_ALLOCATED' && <Badge variant="danger">OVER-ALLOCATED</Badge>}
-                    {s === 'UNLINKED' && <Badge variant="neutral">UNLINKED</Badge>}
+                    {s === 'UNLINKED' && !exp.hasSuggestions && <Badge variant="neutral">UNLINKED</Badge>}
                   </>
                 )}
               </div>

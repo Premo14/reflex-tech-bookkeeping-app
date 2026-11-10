@@ -524,6 +524,13 @@ func DeleteBulk(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Selected items not found."})
 	}
 
+	if locked := groupLockedItem(items); locked != nil {
+		tx.Rollback()
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": fmt.Sprintf("Cannot delete %s from a locked period. Unlock the period first.", locked.Label),
+		})
+	}
+
 	// Sever links in join table
 	if len(txIDs) > 0 {
 		tx.Where("bank_transaction_id IN ?", txIDs).Delete(&models.ExpenseBankTransaction{})
@@ -569,6 +576,12 @@ func RestoreDeletedBulk(c fiber.Ctx) error {
 
 	tx := db.DB.Begin()
 	items := loadGroupItems(tx, txIDs, expIDs)
+	if locked := groupLockedItem(items); locked != nil {
+		tx.Rollback()
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": fmt.Sprintf("Cannot restore %s into a locked period. Unlock the period first.", locked.Label),
+		})
+	}
 	for _, it := range items {
 		if it.ReviewStatus != "DELETED" {
 			tx.Rollback()
@@ -617,6 +630,12 @@ func MoveDeletedToExcludedBulk(c fiber.Ctx) error {
 
 	tx := db.DB.Begin()
 	items := loadGroupItems(tx, txIDs, expIDs)
+	if locked := groupLockedItem(items); locked != nil {
+		tx.Rollback()
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": fmt.Sprintf("Cannot exclude %s from a locked period. Unlock the period first.", locked.Label),
+		})
+	}
 	for _, it := range items {
 		if it.ReviewStatus != "DELETED" {
 			tx.Rollback()
@@ -664,6 +683,13 @@ func DeletePermanentBulk(c fiber.Ctx) error {
 	}
 
 	tx := db.DB.Begin()
+	items := loadGroupItems(tx, txIDs, expIDs)
+	if locked := groupLockedItem(items); locked != nil {
+		tx.Rollback()
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": fmt.Sprintf("Cannot permanently delete %s from a locked period. Unlock the period first.", locked.Label),
+		})
+	}
 
 	if len(txIDs) > 0 {
 		tx.Where("bank_transaction_id IN ?", txIDs).Delete(&models.ExpenseBankTransaction{})

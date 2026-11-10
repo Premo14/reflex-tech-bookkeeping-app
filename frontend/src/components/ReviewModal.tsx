@@ -17,6 +17,7 @@ import {
   moveDeletedToExcluded,
   deleteItemsPermanent,
   getChartAccounts,
+  batchCategorizeItems,
   type ReviewStatusType,
 } from "../services/api";
 import { useLiveEvent } from "../utils/useLiveSync";
@@ -92,6 +93,8 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
   const [showMoveToExcludedModal, setShowMoveToExcludedModal] = useState(false);
   const [moveToExcludedReason, setMoveToExcludedReason] = useState<ExclusionReason | "">("");
   const [moveToExcludedNote, setMoveToExcludedNote] = useState("");
+  const [bulkCategory, setBulkCategory] = useState<string>("");
+  const [isBulkCategorizing, setIsBulkCategorizing] = useState(false);
 
   const selectAllRef = useRef<HTMLInputElement>(null);
   const activeRequestId = useRef(0);
@@ -740,6 +743,31 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
   const canMassAllow = isPending && totalSelected > 0 && selectedRows.every((r) => r.issues.includes("CLOSED_PERIOD"));
   const canIgnoreWarnings = isPending && totalSelected > 0 && selectedRows.every((r) => !r.issues.includes("CLOSED_PERIOD"));
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement)?.tagName)) {
+        return;
+      }
+      if (e.key === "Escape") {
+        if (!showAllowConfirm && !showExcludeModal && !showDeleteConfirm && !showPermanentDeleteConfirm && !showMoveToExcludedModal && !drawerConfig.id) {
+          onClose();
+        }
+      } else if (e.key === "c" || e.key === "C") {
+        if (selected.size > 0) setSelected(new Set());
+      } else if (e.key === "x" || e.key === "X") {
+        if (selectedRows.length > 0 && isPending) setShowExcludeModal(true);
+      } else if (e.key === "w" || e.key === "W") {
+        if (canIgnoreWarnings) handleResolve("ignore_warnings");
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    isOpen, selected, selectedRows, canIgnoreWarnings, isPending, onClose,
+    showAllowConfirm, showExcludeModal, showDeleteConfirm, showPermanentDeleteConfirm, showMoveToExcludedModal, drawerConfig.id
+  ]);
+
   const oldestAllowedDate = useMemo(() => {
     const allowedRows = selectedRows.filter((r) => r.issues.includes("CLOSED_PERIOD"));
     if (allowedRows.length === 0) return null;
@@ -808,6 +836,25 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
       setErrors([err.message || "Action failed"]);
     } finally {
       setIsResolving(false);
+    }
+  };
+
+  const handleBulkCategorize = async () => {
+    if (!bulkCategory || totalSelected === 0) return;
+    setIsBulkCategorizing(true);
+    setErrors([]);
+    setInfo("");
+    try {
+      const txIds = selectedRows.filter((r) => r.type === "transaction").map((r) => r.id);
+      const expIds = selectedRows.filter((r) => r.type === "expense").map((r) => r.id);
+      const res = await batchCategorizeItems(txIds, expIds, Number(bulkCategory));
+      setInfo(res.message || `Successfully categorized ${res.count} item(s).`);
+      setBulkCategory("");
+      await afterAction();
+    } catch (err: any) {
+      setErrors([err.message || "Failed to batch categorize items."]);
+    } finally {
+      setIsBulkCategorizing(false);
     }
   };
 
@@ -1185,6 +1232,38 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
               )}
             </div>
             <div className="flex flex-wrap gap-2 items-center">
+              {/* BATCH CATEGORIZATION */}
+              {!isDeleted && totalSelected > 0 && (
+                <div className="flex items-center gap-1.5 bg-zinc-800/90 py-0.5 px-2 rounded-lg border border-zinc-700/80">
+                  <span className="text-xs text-zinc-400 font-medium whitespace-nowrap">Category:</span>
+                  <select
+                    value={bulkCategory}
+                    onChange={(e) => setBulkCategory(e.target.value)}
+                    className="py-1 px-2 text-xs bg-zinc-900 border border-zinc-700 rounded-md text-white focus:outline-none focus:ring-1 focus:ring-emerald-500 max-w-[210px]"
+                    disabled={isBulkCategorizing}
+                  >
+                    <option value="">Assign to {totalSelected} item{totalSelected > 1 ? 's' : ''}...</option>
+                    {getGroupedAccounts(accounts, ['EXPENSE', 'REVENUE', 'EQUITY', 'ASSET', 'LIABILITY']).map((g) => (
+                      <optgroup key={g.subClassId} label={g.label}>
+                        {g.options.map((opt) => (
+                          <option key={opt.account.id} value={opt.account.id}>
+                            {opt.displayName}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={!bulkCategory || isBulkCategorizing}
+                    isLoading={isBulkCategorizing}
+                    onClick={handleBulkCategorize}
+                  >
+                    Apply
+                  </Button>
+                </div>
+              )}
               {isPending && (
                 <>
                   <Button
@@ -1415,7 +1494,7 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
             ) : (
               paginatedRows.map((r) => {
                 const isSelected = selected.has(r.key);
-                const isCredit = r.type === "transaction" && r.transactionType === "CREDIT";
+                const isCredit = r.type === "transaction" ? r.amount >= 0 : false;
 
                 return (
                   <div
@@ -1441,7 +1520,7 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
                       className="w-4 h-4 shrink-0 rounded border-zinc-700 bg-zinc-900 accent-emerald-500 cursor-pointer"
                     />
                     <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
                         <span
                           className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
                             r.type === "transaction" ? "bg-blue-500/10 text-blue-400" : "bg-emerald-500/10 text-emerald-400"
@@ -1467,8 +1546,8 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
                             {r.reason ? (EXCLUSION_REASON_LABELS[r.reason] || r.reason) : "EXCLUDED"}
                           </Badge>
                         )}
-                        <p className="font-semibold text-white truncate ml-1">{r.title}</p>
                       </div>
+                      <p className="font-semibold text-white truncate text-sm leading-snug">{r.title}</p>
                       <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-zinc-400">
                         <span>{formatDate(r.date)} · {r.subtitle}</span>
                         {isDeleted && r.deletedAt && <span>· Deleted {formatDate(r.deletedAt)}</span>}
@@ -1495,8 +1574,8 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
                       </div>
                       {isIgnored && r.note && <p className="text-xs text-zinc-400 mt-0.5 italic truncate">“{r.note}”</p>}
                     </div>
-                    <div className="flex flex-col items-end gap-1 shrink-0">
-                      <p className={`font-bold ${isCredit ? "text-emerald-400" : "text-white"}`}>
+                    <div className="flex flex-col items-end gap-1 shrink-0 ml-2">
+                      <p className={`font-bold font-mono text-sm ${isCredit ? "text-emerald-400" : "text-white"}`}>
                         {isCredit ? `+${formatMoney(Math.abs(r.amount))}` : `-${formatMoney(Math.abs(r.amount))}`}
                       </p>
                       <button

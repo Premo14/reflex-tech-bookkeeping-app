@@ -7,6 +7,7 @@ import { LoadingSpinner } from "./ui/LoadingSpinner";
 import Pagination from "./ui/Pagination";
 import ReactDOM from "react-dom";
 import ExcludeItemModal, { EXCLUSION_REASON_LABELS } from "./ExcludeItemModal";
+import SplitExpenseModal from "./SplitExpenseModal";
 import {
   getTransactionDetail, getExpenseDetail,
   updateTransaction, updateExpense,
@@ -23,6 +24,7 @@ import { getGroupedAccounts } from "../utils/accountHierarchy";
 import { formatDate } from "../utils/dateUtils";
 import { useLiveEvent } from "../utils/useLiveSync";
 import { extractCleanVendor } from "../utils/vendorUtils";
+import { computeMatchScore } from "../utils/matchConfidence";
 
 const CURRENCIES = [
   "USD", "EUR", "GBP", "CAD", "AUD", "JPY", "INR", "CNY", "CHF", "SGD", 
@@ -39,9 +41,10 @@ interface DetailDrawerProps {
   type: "transaction" | "receipt" | null;
   id: number | null;
   onClose: () => void;
+  onCreateRule?: (data: { name: string; descriptionKeyword: string; categoryAccountId?: number | null }) => void;
 }
 
-export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
+export default function DetailDrawer({ type, id, onClose, onCreateRule }: DetailDrawerProps) {
   const { confirm, alert } = useConfirm();
   const activeRequestId = useRef(0);
   const [hasBackgroundUpdate, setHasBackgroundUpdate] = useState(false);
@@ -54,13 +57,15 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
   const [confirmedTransactions, setConfirmedTransactions] = useState<BankTransaction[]>([]);
   const [suggestedTransactions, setSuggestedTransactions] = useState<BankTransaction[]>([]);
 
-  const [activeLinkedIdx, setActiveLinkedIdx] = useState(0);
+  const [activeExpenseIdx, setActiveExpenseIdx] = useState(0);
+  const [activeTxIdx, setActiveTxIdx] = useState(0);
 
-  const [isEditingExpense, setIsEditingRoot] = useState(false);
-  const [expenseForm, setRootForm] = useState<any>({});
+  const [isEditingExpense, setIsEditingExpense] = useState(false);
+  const [expenseForm, setExpenseForm] = useState<any>({});
+  const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
 
-  const [isEditingLinked, setIsEditingLinked] = useState(false);
-  const [linkedForm, setLinkedForm] = useState<any>({});
+  const [isEditingTx, setIsEditingTx] = useState(false);
+  const [txForm, setTxForm] = useState<any>({});
 
   const [unlinked, setUnlinked] = useState<{ transactions: BankTransaction[], expenses: Expense[] }>({ transactions: [], expenses: [] });
   const [selectedLinkId, setSelectedLinkId] = useState<number | null>(null);
@@ -93,13 +98,53 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
   const [linkEndDate, setLinkEndDate] = useState("");
   const [linkPage, setLinkPage] = useState(1);
   const [unlinkedTotalPages, setUnlinkedTotalPages] = useState(1);
+  const [showSplitCategories, setShowSplitCategories] = useState(false);
   const LINK_LIMIT = 20;
+
+  // List of expenses to display/tab through
+  const expensesList: Expense[] = (() => {
+    if (type === "transaction") {
+      return confirmedExpenses;
+    }
+    if (!expense) return [];
+    if (confirmedTransactions.length > 0) {
+      const activeConfirmedTx = confirmedTransactions[activeTxIdx];
+      if (activeConfirmedTx?.expenses && activeConfirmedTx.expenses.length > 1) {
+        return activeConfirmedTx.expenses;
+      }
+    }
+    return [expense];
+  })();
+
+  // List of transactions to display/tab through
+  const transactionsList: BankTransaction[] = (() => {
+    if (type === "receipt") {
+      return confirmedTransactions;
+    }
+    if (!tx) return [];
+    if (confirmedExpenses.length > 0) {
+      const activeConfirmedExp = confirmedExpenses[activeExpenseIdx] || confirmedExpenses[0];
+      if (activeConfirmedExp?.bankTransactions && activeConfirmedExp.bankTransactions.length > 0) {
+        return activeConfirmedExp.bankTransactions;
+      }
+    }
+    return [tx];
+  })();
+
+  const activeExpense: Expense | null = expensesList[activeExpenseIdx] || (type === "receipt" ? expense : (confirmedExpenses[0] || null));
+  const activeTx: BankTransaction | null = transactionsList[activeTxIdx] || (type === "transaction" ? tx : (confirmedTransactions[0] || null));
+
+  const isDeposit = type === "transaction" && tx && tx.amount > 0;
+
+  const formatMoney = (amount: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+  const expenseReceiptCount = (activeExpense || expense)?.receipts?.length ?? 0;
+  const canAddMoreTransactions = !(expenseReceiptCount > 1 && transactionsList.length >= 1);
 
   const handleUploadReceipt = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     
-    const targetExpenseId = type === "receipt" ? expense?.id : currentLinkedExpense?.id;
+    const targetExpenseId = activeExpense?.id || expense?.id;
     if (!targetExpenseId) return;
 
     const doUpload = async (allowDuplicate = false) => {
@@ -159,16 +204,6 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
     }
   };
 
-  const currentLinkedExpense = type === "transaction" && confirmedExpenses.length > 0 ? confirmedExpenses[activeLinkedIdx] : null;
-  const currentLinkedTx = type === "receipt" && confirmedTransactions.length > 0 ? confirmedTransactions[activeLinkedIdx] : null;
-  const totalLinked = type === "transaction" ? confirmedExpenses.length : confirmedTransactions.length;
-
-  const isDeposit = type === "transaction" && tx && tx.amount > 0;
-
-  const formatMoney = (amount: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
-  const expenseReceiptCount = expense?.receipts?.length ?? 0;
-  const canAddMoreTransactions = !(expenseReceiptCount > 1 && confirmedTransactions.length >= 1);
-
   useEffect(() => {
     if (type && id) requestAnimationFrame(() => setIsVisible(true));
   }, [type, id]);
@@ -179,15 +214,39 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
   }, [id, type]);
 
   useEffect(() => {
-    setIsEditingLinked(false);
-    if (type === "transaction" && confirmedExpenses[activeLinkedIdx]) {
-      const e = confirmedExpenses[activeLinkedIdx];
-      setLinkedForm({ timestamp: e.timestamp ? e.timestamp.split('T')[0] : '', vendor: e.vendor, description: e.description, amount: e.amount, taxAmount: e.taxAmount || 0, currencyCode: e.currencyCode || 'USD', tender: e.tender, notes: e.notes || '', chartAccountId: e.chartAccountId || '' });
-    } else if (type === "receipt" && confirmedTransactions[activeLinkedIdx]) {
-      const t = confirmedTransactions[activeLinkedIdx];
-      setLinkedForm({ date: t.date ? t.date.split('T')[0] : '', description: t.description, amount: t.amount, notes: t.notes || '', chartAccountId: t.chartAccountId || '', categoryAccountId: t.categoryAccountId || '' });
+    setIsEditingExpense(false);
+    if (activeExpense) {
+      setExpenseForm({
+        timestamp: activeExpense.timestamp ? activeExpense.timestamp.split('T')[0] : '',
+        vendor: activeExpense.vendor,
+        description: activeExpense.description,
+        amount: activeExpense.amount,
+        taxAmount: activeExpense.taxAmount || 0,
+        currencyCode: activeExpense.currencyCode || 'USD',
+        tender: activeExpense.tender,
+        notes: activeExpense.notes || '',
+        chartAccountId: activeExpense.chartAccountId || ''
+      });
+    } else {
+      setExpenseForm({});
     }
-  }, [activeLinkedIdx, confirmedExpenses, confirmedTransactions, type]);
+  }, [activeExpense?.id]);
+
+  useEffect(() => {
+    setIsEditingTx(false);
+    if (activeTx) {
+      setTxForm({
+        date: activeTx.date ? activeTx.date.split('T')[0] : '',
+        description: activeTx.description,
+        amount: activeTx.amount,
+        notes: activeTx.notes || '',
+        chartAccountId: activeTx.chartAccountId || '',
+        categoryAccountId: activeTx.categoryAccountId || ''
+      });
+    } else {
+      setTxForm({});
+    }
+  }, [activeTx?.id]);
 
   useEffect(() => {
     if (showLinkPanel) loadUnlinkedData();
@@ -195,8 +254,8 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
 
   const loadUnlinkedData = async () => {
     try {
-      const rootAmount = type === "transaction" ? tx?.amount : expense?.amount;
-      const rootDate = type === "transaction" ? tx?.date : expense?.timestamp;
+      const rootAmount = type === "transaction" ? activeTx?.amount : activeExpense?.amount;
+      const rootDate = type === "transaction" ? activeTx?.date : activeExpense?.timestamp;
       const data = await getUnlinkedItems({
         search: linkSearch,
         startDate: linkStartDate,
@@ -217,10 +276,14 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
   const loadData = async (resetIdx = false) => {
     const reqId = ++activeRequestId.current;
     setIsLoading(true);
-    if (resetIdx) setActiveLinkedIdx(0);
-    setIsEditingRoot(false);
-    setIsEditingLinked(false);
+    if (resetIdx) {
+      setActiveExpenseIdx(0);
+      setActiveTxIdx(0);
+    }
+    setIsEditingExpense(false);
+    setIsEditingTx(false);
     setShowLinkPanel(false);
+    setShowSplitCategories(false);
     setHasBackgroundUpdate(false);
 
     let loadedDate = "";
@@ -236,11 +299,18 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
         loadedDate = data.transaction.date;
         loadedReview = data.transaction.reviewStatus;
         setTx(data.transaction);
-        setRootForm({ date: data.transaction.date ? data.transaction.date.split('T')[0] : '', description: data.transaction.description, amount: data.transaction.amount, notes: data.transaction.notes || '', chartAccountId: data.transaction.chartAccountId || '', categoryAccountId: data.transaction.categoryAccountId || '' });
         setConfirmedExpenses(data.confirmedExpenses);
         setSuggestedExpenses(data.suggestedExpenses);
         
-        setActiveLinkedIdx(prev => {
+        // Find which transaction in the active expense's bank transactions matches the loaded transaction
+        const activeExp = data.confirmedExpenses[0];
+        if (activeExp?.bankTransactions && activeExp.bankTransactions.length > 0) {
+          const matchIdx = activeExp.bankTransactions.findIndex((t: BankTransaction) => t.id === data.transaction.id);
+          setActiveTxIdx(matchIdx >= 0 ? matchIdx : 0);
+        } else {
+          setActiveTxIdx(0);
+        }
+        setActiveExpenseIdx(prev => {
           const maxIdx = Math.max(0, data.confirmedExpenses.length - 1);
           return Math.min(prev, maxIdx);
         });
@@ -251,17 +321,22 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
         loadedDate = data.expense.timestamp;
         loadedReview = data.expense.reviewStatus || "";
         setExpense(data.expense);
-        setRootForm({ timestamp: data.expense.timestamp ? data.expense.timestamp.split('T')[0] : '', vendor: data.expense.vendor, description: data.expense.description, amount: data.expense.amount, taxAmount: data.expense.taxAmount || 0, currencyCode: data.expense.currencyCode || 'USD', tender: data.expense.tender, notes: data.expense.notes || '', chartAccountId: data.expense.chartAccountId || '' });
         setConfirmedTransactions(data.confirmedTransactions);
         setSuggestedTransactions(data.suggestedTransactions);
         
-        setActiveLinkedIdx(prev => {
+        // Find which expense in the active transaction's linked expenses matches the loaded expense
+        const activeTxItem = data.confirmedTransactions[0];
+        if (activeTxItem?.expenses && activeTxItem.expenses.length > 0) {
+          const matchIdx = activeTxItem.expenses.findIndex((e: Expense) => e.id === data.expense.id);
+          setActiveExpenseIdx(matchIdx >= 0 ? matchIdx : 0);
+        } else {
+          setActiveExpenseIdx(0);
+        }
+        setActiveTxIdx(prev => {
           const maxIdx = Math.max(0, data.confirmedTransactions.length - 1);
           return Math.min(prev, maxIdx);
         });
       }
-
-      // unlinked data loaded separately
 
       const settings = await getSettings();
       if (reqId !== activeRequestId.current) return;
@@ -289,7 +364,7 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
 
   useLiveEvent(["TRANSACTIONS_UPDATED", "EXPENSES_UPDATED", "RECONCILIATION_UPDATED"], () => {
     if (!id || !type) return;
-    if (isEditingExpense || isEditingLinked) {
+    if (isEditingExpense || isEditingTx) {
       setHasBackgroundUpdate(true);
     } else {
       loadData(false);
@@ -303,12 +378,35 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const isInputFocused = ["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement)?.tagName);
       if (e.key === "Escape") {
         const hasSubModal = showCreateModal || showReceiptModal || Boolean(excludeTarget) ||
           Boolean(ignoreTarget) || Boolean(actionChoiceModal) || Boolean(conflictModalData) ||
           Boolean(overAllocatedModalData) || Boolean(replaceOrAddModalData) || Boolean(allowConfirmTarget);
         if (!hasSubModal) {
           handleClose();
+        }
+        return;
+      }
+
+      if (isInputFocused) return;
+
+      if (showReceiptModal) {
+        const receipts = activeExpense?.receipts || [];
+        if (receipts.length > 1) {
+          if (e.key === "ArrowLeft") {
+            setActiveReceiptIdx(prev => Math.max(0, prev - 1));
+          } else if (e.key === "ArrowRight") {
+            setActiveReceiptIdx(prev => Math.min(receipts.length - 1, prev + 1));
+          }
+        }
+      } else {
+        if ((e.key === "a" || e.key === "A") && !isClosed) {
+          if (type === "transaction" && suggestedExpenses.length > 0) {
+            handleApproveSuggestedExpense(suggestedExpenses[0].id);
+          } else if (type === "receipt" && suggestedTransactions.length > 0) {
+            handleApproveSuggestedTx(suggestedTransactions[0].id);
+          }
         }
       }
     };
@@ -317,7 +415,8 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
   }, [
     showCreateModal, showReceiptModal, excludeTarget, ignoreTarget,
     actionChoiceModal, conflictModalData, overAllocatedModalData,
-    replaceOrAddModalData, allowConfirmTarget, onClose
+    replaceOrAddModalData, allowConfirmTarget, onClose,
+    type, suggestedExpenses, suggestedTransactions, activeExpense, isClosed
   ]);
 
   const validateForm = async (formState: any, isTx: boolean): Promise<boolean> => {
@@ -338,147 +437,127 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
     return true;
   };
 
-  const handleSaveRoot = async () => {
+  const handleSaveExpense = async () => {
+    if (!activeExpense) return;
     try {
-      const isValid = await validateForm(expenseForm, type === "transaction");
+      const isValid = await validateForm(expenseForm, false);
       if (!isValid) return;
 
-      let categoryChanged = false;
-      if (type === "transaction" && tx) {
-        categoryChanged = String(tx.categoryAccountId || '') !== String(expenseForm.categoryAccountId || '');
-        await updateTransaction(tx.id, {
-          date: expenseForm.date ? new Date(expenseForm.date).toISOString() : undefined,
-          description: expenseForm.description,
-          amount: Number(expenseForm.amount),
-          notes: expenseForm.notes,
-          chartAccountId: expenseForm.chartAccountId ? Number(expenseForm.chartAccountId) : undefined,
-          categoryAccountId: expenseForm.categoryAccountId ? Number(expenseForm.categoryAccountId) : (null as any),
-        });
-      } else if (type === "receipt" && expense) {
-        categoryChanged = String(expense.chartAccountId || '') !== String(expenseForm.chartAccountId || '');
-        await updateExpense(expense.id, {
-          timestamp: expenseForm.timestamp ? new Date(expenseForm.timestamp).toISOString() : undefined,
-          vendor: expenseForm.vendor,
-          description: expenseForm.description,
-          amount: Number(expenseForm.amount),
-          taxAmount: Number(expenseForm.taxAmount),
-          currencyCode: expenseForm.currencyCode,
-          tender: expenseForm.tender,
-          notes: expenseForm.notes,
-          chartAccountId: expenseForm.chartAccountId ? Number(expenseForm.chartAccountId) : (null as any),
-        });
-      }
-      
-      const isLinked = confirmedTransactions.length > 0 || confirmedExpenses.length > 0;
-      if (categoryChanged && isLinked) {
+      const categoryChanged = String(activeExpense.chartAccountId || '') !== String(expenseForm.chartAccountId || '');
+      await updateExpense(activeExpense.id, {
+        timestamp: expenseForm.timestamp ? new Date(expenseForm.timestamp).toISOString() : undefined,
+        vendor: expenseForm.vendor,
+        description: expenseForm.description,
+        amount: Number(expenseForm.amount),
+        taxAmount: Number(expenseForm.taxAmount),
+        currencyCode: expenseForm.currencyCode,
+        tender: expenseForm.tender,
+        notes: expenseForm.notes,
+        chartAccountId: expenseForm.chartAccountId ? Number(expenseForm.chartAccountId) : (null as any),
+      });
+
+      if (categoryChanged && transactionsList.length > 0) {
         await alert({
           title: "Category Synced",
           message: "The category has been synced across all linked items."
         });
       }
 
-      setIsEditingRoot(false);
+      setIsEditingExpense(false);
       loadData();
-    } catch {
-      await alert({ title: "Save Failed", message: "Failed to save", variant: "danger" });
+    } catch (err: any) {
+      await alert({ title: "Save Failed", message: err.data?.error || err.message || "Failed to save", variant: "danger" });
     }
   };
 
-  const handleSaveLinked = async () => {
+  const handleSaveTx = async () => {
+    if (!activeTx) return;
     try {
-      const isValid = await validateForm(linkedForm, type === "receipt"); // if drawer is receipt, linked is tx
+      const isValid = await validateForm(txForm, true);
       if (!isValid) return;
 
-      let categoryChanged = false;
-      if (type === "transaction" && currentLinkedExpense) {
-        categoryChanged = String(currentLinkedExpense.chartAccountId || '') !== String(linkedForm.chartAccountId || '');
-        await updateExpense(currentLinkedExpense.id, {
-          timestamp: linkedForm.timestamp ? new Date(linkedForm.timestamp).toISOString() : undefined,
-          vendor: linkedForm.vendor,
-          description: linkedForm.description,
-          amount: Number(linkedForm.amount),
-          taxAmount: Number(linkedForm.taxAmount),
-          currencyCode: linkedForm.currencyCode,
-          tender: linkedForm.tender,
-          notes: linkedForm.notes,
-          chartAccountId: linkedForm.chartAccountId ? Number(linkedForm.chartAccountId) : (null as any),
-        });
-      } else if (type === "receipt" && currentLinkedTx) {
-        categoryChanged = String(currentLinkedTx.categoryAccountId || '') !== String(linkedForm.categoryAccountId || '');
-        await updateTransaction(currentLinkedTx.id, {
-          date: linkedForm.date ? new Date(linkedForm.date).toISOString() : undefined,
-          description: linkedForm.description,
-          amount: Number(linkedForm.amount),
-          notes: linkedForm.notes,
-          chartAccountId: linkedForm.chartAccountId ? Number(linkedForm.chartAccountId) : undefined,
-          categoryAccountId: linkedForm.categoryAccountId ? Number(linkedForm.categoryAccountId) : (null as any),
-        });
-      }
+      const categoryChanged = String(activeTx.categoryAccountId || '') !== String(txForm.categoryAccountId || '');
+      await updateTransaction(activeTx.id, {
+        date: txForm.date ? new Date(txForm.date).toISOString() : undefined,
+        description: txForm.description,
+        amount: Number(txForm.amount),
+        notes: txForm.notes,
+        chartAccountId: txForm.chartAccountId ? Number(txForm.chartAccountId) : undefined,
+        categoryAccountId: txForm.categoryAccountId ? Number(txForm.categoryAccountId) : (null as any),
+      });
 
-      if (categoryChanged) {
+      if (categoryChanged && expensesList.length === 1) {
         await alert({
           title: "Category Synced",
           message: "The category has been synced across all linked items."
         });
       }
 
-      setIsEditingLinked(false);
+      setIsEditingTx(false);
       loadData();
-    } catch {
-      await alert({ title: "Save Failed", message: "Failed to save", variant: "danger" });
+    } catch (err: any) {
+      await alert({ title: "Save Failed", message: err.data?.error || err.message || "Failed to save", variant: "danger" });
     }
   };
 
-  const handleDeleteRoot = async () => {
+  const handleDeleteExpense = async () => {
+    if (!activeExpense) return;
     const ok = await confirm({
-      title: "Move to Deleted Items",
-      message: "Move this item to Deleted Items?\n\nIt will be removed from your books and kept in Deleted Items for 30 days before permanent deletion. You can restore it anytime from the sidebar.",
+      title: "Move Expense to Deleted Items",
+      message: "Move this expense to Deleted Items?\n\nIt will be unlinked, removed from your books, and kept in Deleted Items for 30 days before permanent deletion. You can restore it anytime from the sidebar.",
       confirmText: "Move to Deleted Items",
       variant: "danger"
     });
     if (!ok) return;
     try {
-      if (type === "transaction" && tx) await deleteTransaction(tx.id);
-      else if (type === "receipt" && expense) await deleteExpense(expense.id);
-      handleClose();
-    } catch {
-      await alert({ title: "Delete Failed", message: "Failed to delete", variant: "danger" });
+      await deleteExpense(activeExpense.id);
+      if (type === "receipt" && activeExpense.id === expense?.id) {
+        handleClose();
+      } else {
+        setActiveExpenseIdx(prev => Math.max(0, prev - 1));
+        loadData();
+      }
+    } catch (err: any) {
+      await alert({ title: "Delete Failed", message: err.data?.error || err.message || "Failed to delete", variant: "danger" });
     }
   };
 
-  const handleDeleteLinked = async () => {
+  const handleDeleteTx = async () => {
+    if (!activeTx) return;
     const ok = await confirm({
-      title: "Move Linked Item to Deleted Items",
-      message: "Move this linked item to Deleted Items?\n\nIt will be unlinked, removed from your books, and kept in Deleted Items for 30 days before permanent deletion. You can restore it anytime from the sidebar.",
+      title: "Move Transaction to Deleted Items",
+      message: "Move this transaction to Deleted Items?\n\nIt will be unlinked, removed from your books, and kept in Deleted Items for 30 days before permanent deletion. You can restore it anytime from the sidebar.",
       confirmText: "Move to Deleted Items",
       variant: "danger"
     });
     if (!ok) return;
     try {
-      if (type === "transaction" && currentLinkedExpense) await deleteExpense(currentLinkedExpense.id);
-      else if (type === "receipt" && currentLinkedTx) await deleteTransaction(currentLinkedTx.id);
-      setActiveLinkedIdx(Math.max(0, activeLinkedIdx - 1));
-      loadData();
-    } catch {
-      await alert({ title: "Delete Failed", message: "Failed to delete", variant: "danger" });
+      await deleteTransaction(activeTx.id);
+      if (type === "transaction" && activeTx.id === tx?.id) {
+        handleClose();
+      } else {
+        setActiveTxIdx(prev => Math.max(0, prev - 1));
+        loadData();
+      }
+    } catch (err: any) {
+      await alert({ title: "Delete Failed", message: err.data?.error || err.message || "Failed to delete", variant: "danger" });
     }
   };
 
-  const handleUnlinkLinked = async () => {
+  const handleUnlink = async () => {
+    if (!activeExpense || !activeTx) return;
     const ok = await confirm({
       title: "Remove Link",
-      message: "Remove this link?",
+      message: `Remove the link between this expense (${formatMoney(activeExpense.amount)}) and transaction (${formatMoney(activeTx.amount)})?`,
       confirmText: "Remove Link",
       variant: "danger"
     });
     if (!ok) return;
     try {
-      if (type === "transaction" && tx && currentLinkedExpense) await unlinkExpenseFromTransaction(currentLinkedExpense.id, tx.id);
-      else if (type === "receipt" && expense && currentLinkedTx) await unlinkExpenseFromTransaction(expense.id, currentLinkedTx.id);
-      setActiveLinkedIdx(Math.max(0, activeLinkedIdx - 1));
+      await unlinkExpenseFromTransaction(activeExpense.id, activeTx.id);
       loadData();
-    } catch {
-      await alert({ title: "Unlink Failed", message: "Failed to unlink", variant: "danger" });
+    } catch (err: any) {
+      await alert({ title: "Unlink Failed", message: err.data?.error || err.message || "Failed to unlink", variant: "danger" });
     }
   };
 
@@ -590,7 +669,7 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
 
   const handleLink = async () => {
     if (selectedLinkId === null) return;
-    const isAlreadyLinked = type === "transaction" ? confirmedExpenses.length > 0 : confirmedTransactions.length > 0;
+    const isAlreadyLinked = type === "transaction" ? expensesList.length > 0 : transactionsList.length > 0;
     if (isAlreadyLinked) {
       setReplaceOrAddModalData({ selectedLinkId, isCreateMode: false });
       return;
@@ -600,7 +679,7 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
   };
 
   const handleCardAction = async (action: "EXCLUDE" | "IGNORE", targetType: "transaction" | "expense", targetId: number) => {
-    const isLinked = (type === "transaction" && confirmedExpenses.length > 0) || (type === "receipt" && confirmedTransactions.length > 0);
+    const isLinked = (type === "transaction" && expensesList.length > 0) || (type === "receipt" && transactionsList.length > 0);
     if (!isLinked) {
       if (action === "EXCLUDE") setExcludeTarget({ type: targetType, id: targetId });
       else setIgnoreTarget({ type: targetType, id: targetId });
@@ -611,7 +690,7 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
 
   const handleApproveSuggestedExpense = async (expId: number) => {
     if (!tx) return;
-    if (confirmedExpenses.length > 0) {
+    if (expensesList.length > 0) {
       setReplaceOrAddModalData({ suggestedExpId: expId, isCreateMode: false, isSuggested: true });
       return;
     }
@@ -620,7 +699,7 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
 
   const handleApproveSuggestedTx = async (txId: number) => {
     if (!expense) return;
-    if (confirmedTransactions.length > 0) {
+    if (transactionsList.length > 0) {
       setReplaceOrAddModalData({ suggestedTxId: txId, isCreateMode: false, isSuggested: true });
       return;
     }
@@ -636,7 +715,7 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
         if (createForm.date) payload.date = new Date(createForm.date).toISOString();
         if (createForm.chartAccountId) payload.chartAccountId = Number(createForm.chartAccountId);
         
-        if (confirmedExpenses.length > 0) {
+        if (expensesList.length > 0) {
           setReplaceOrAddModalData({ createPayload: payload, isCreateMode: true });
           return;
         }
@@ -655,7 +734,7 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
         if (createForm.chartAccountId) payload.chartAccountId = Number(createForm.chartAccountId);
         if (createForm.categoryAccountId) payload.categoryAccountId = Number(createForm.categoryAccountId);
         
-        if (confirmedTransactions.length > 0) {
+        if (transactionsList.length > 0) {
           setReplaceOrAddModalData({ createPayload: payload, isCreateMode: true });
           return;
         }
@@ -665,27 +744,131 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
     } finally { setIsSaving(false); }
   };
 
+  const renderTransactionPagination = () => {
+    const total = transactionsList.length;
+    if (total <= 1) return null;
 
+    const goToPrev = () => {
+      setActiveTxIdx(prev => Math.max(0, prev - 1));
+      setIsEditingTx(false);
+    };
 
-  const goToPrev = () => setActiveLinkedIdx(prev => Math.max(0, prev - 1));
-  const goToNext = () => setActiveLinkedIdx(prev => Math.min(totalLinked - 1, prev + 1));
+    const goToNext = () => {
+      setActiveTxIdx(prev => Math.min(total - 1, prev + 1));
+      setIsEditingTx(false);
+    };
+
+    return (
+      <div className="flex items-center justify-center gap-2 mb-4 py-1.5">
+        <Button
+          variant="ghost"
+          size="sm"
+          type="button"
+          onClick={goToPrev}
+          disabled={activeTxIdx === 0}
+          className="p-0! w-9 h-9 sm:w-8 sm:h-8 flex items-center justify-center rounded-full bg-zinc-800 text-zinc-300 hover:text-white text-base disabled:opacity-30 transition cursor-pointer shrink-0"
+          title="Previous Transaction"
+        >
+          ‹
+        </Button>
+        <span className="text-xs text-zinc-400 font-medium px-1">
+          {activeTxIdx + 1} / {total}
+        </span>
+        <div className="flex items-center gap-1.5 px-1">
+          {transactionsList.map((_, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => { setActiveTxIdx(i); setIsEditingTx(false); }}
+              className={`p-1 cursor-pointer`}
+              title={`Transaction ${i + 1}`}
+            >
+              <span className={`block w-2.5 h-2.5 rounded-full transition-all ${
+                i === activeTxIdx ? 'bg-blue-400 scale-125' : 'bg-zinc-600 hover:bg-zinc-400'
+              }`} />
+            </button>
+          ))}
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          type="button"
+          onClick={goToNext}
+          disabled={activeTxIdx === total - 1}
+          className="p-0! w-9 h-9 sm:w-8 sm:h-8 flex items-center justify-center rounded-full bg-zinc-800 text-zinc-300 hover:text-white text-base disabled:opacity-30 transition cursor-pointer shrink-0"
+          title="Next Transaction"
+        >
+          ›
+        </Button>
+      </div>
+    );
+  };
+
+  const renderExpensePagination = () => {
+    const total = expensesList.length;
+    if (total <= 1) return null;
+
+    const goToPrev = () => {
+      setActiveExpenseIdx(prev => Math.max(0, prev - 1));
+      setIsEditingExpense(false);
+    };
+
+    const goToNext = () => {
+      setActiveExpenseIdx(prev => Math.min(total - 1, prev + 1));
+      setIsEditingExpense(false);
+    };
+
+    return (
+      <div className="flex items-center justify-center gap-2 mb-4 py-1.5">
+        <Button
+          variant="ghost"
+          size="sm"
+          type="button"
+          onClick={goToPrev}
+          disabled={activeExpenseIdx === 0}
+          className="p-0! w-9 h-9 sm:w-8 sm:h-8 flex items-center justify-center rounded-full bg-zinc-800 text-zinc-300 hover:text-white text-base disabled:opacity-30 transition cursor-pointer shrink-0"
+          title="Previous Expense"
+        >
+          ‹
+        </Button>
+        <span className="text-xs text-zinc-400 font-medium px-1">
+          {activeExpenseIdx + 1} / {total}
+        </span>
+        <div className="flex items-center gap-1.5 px-1">
+          {expensesList.map((_, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => { setActiveExpenseIdx(i); setIsEditingExpense(false); }}
+              className={`p-1 cursor-pointer`}
+              title={`Expense ${i + 1}`}
+            >
+              <span className={`block w-2.5 h-2.5 rounded-full transition-all ${
+                i === activeExpenseIdx ? 'bg-emerald-400 scale-125' : 'bg-zinc-600 hover:bg-zinc-400'
+              }`} />
+            </button>
+          ))}
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          type="button"
+          onClick={goToNext}
+          disabled={activeExpenseIdx === total - 1}
+          className="p-0! w-9 h-9 sm:w-8 sm:h-8 flex items-center justify-center rounded-full bg-zinc-800 text-zinc-300 hover:text-white text-base disabled:opacity-30 transition cursor-pointer shrink-0"
+          title="Next Expense"
+        >
+          ›
+        </Button>
+      </div>
+    );
+  };
 
   const inputCls = "w-full bg-zinc-900 border border-zinc-700 rounded p-2 text-sm text-white focus:outline-none focus:border-zinc-500 transition-colors";
   const labelCls = "block text-xs font-medium text-zinc-400 mb-1";
   const btnSmGray = "text-xs text-zinc-400 hover:text-zinc-200 transition";
   const btnSmBlue = "text-xs text-blue-400 hover:text-blue-300 transition";
   const btnSmGreen = "text-xs text-emerald-400 hover:text-emerald-300 transition";
-
-  const CarouselNav = () => totalLinked > 1 ? (
-    <div className="flex items-center justify-center gap-2 mb-4 py-2">
-      <Button variant="ghost" onClick={goToPrev} disabled={activeLinkedIdx === 0} className="p-0! w-7 h-7 flex items-center justify-center rounded-full bg-zinc-800 text-zinc-400 hover:text-white disabled:opacity-30 transition">‹</Button>
-      <span className="text-xs text-zinc-400 font-medium px-1">{activeLinkedIdx + 1} / {totalLinked}</span>
-      {Array.from({ length: totalLinked }).map((_, i) => (
-        <button key={i} onClick={() => { setActiveLinkedIdx(i); setIsEditingLinked(false); }} className={`w-2 h-2 rounded-full transition ${i === activeLinkedIdx ? 'bg-white' : 'bg-zinc-600 hover:bg-zinc-400'}`} />
-      ))}
-      <Button variant="ghost" onClick={goToNext} disabled={activeLinkedIdx === totalLinked - 1} className="p-0! w-7 h-7 flex items-center justify-center rounded-full bg-zinc-800 text-zinc-400 hover:text-white disabled:opacity-30 transition">›</Button>
-    </div>
-  ) : null;
 
   const itemReviewStatus = type === "transaction" ? tx?.reviewStatus : expense?.reviewStatus;
   const itemAwaitingReview = itemReviewStatus === 'PENDING' && isDateInClosedPeriod;
@@ -713,7 +896,7 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
             <Input type="text" placeholder="Search Amount / Text..." value={linkSearch} onChange={(e) => { setLinkSearch(e.target.value); setLinkPage(1); }} className="w-full sm:w-40 text-xs py-1 flex-1" />
           </div>
         </div>
-        <div className="max-h-60 overflow-y-auto border border-zinc-800 rounded-md bg-zinc-950 mb-3">
+        <div className="max-h-80 overflow-y-auto border border-zinc-800 rounded-md bg-zinc-950 mb-3">
           {((type === "transaction" && unlinked.expenses.length === 0) || (type === "receipt" && unlinked.transactions.length === 0)) ? (
             <div className="p-6 text-center text-zinc-400 text-sm">No unlinked items available.</div>
           ) : (
@@ -722,7 +905,17 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                 <li key={e.id}>
                   <Card active={selectedLinkId === e.id} onClick={() => setSelectedLinkId(e.id)} className="flex-col! items-start! gap-1 cursor-pointer hover:bg-zinc-800/50">
                     <div className="w-full flex justify-between items-center">
-                      <span className="font-semibold text-white">{formatMoney(e.amount)}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-white">{formatMoney(e.amount)}</span>
+                        {e.allocationStatus === "PARTIALLY_ALLOCATED" && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Under-Allocated</span>
+                        )}
+                        {e.chartAccount && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded font-mono bg-purple-500/10 text-purple-300 border border-purple-500/20">
+                            {e.chartAccount.code} {e.chartAccount.name}
+                          </span>
+                        )}
+                      </div>
                       <span className="text-xs text-zinc-400">{formatDate(e.timestamp)}</span>
                     </div>
                     <div className="text-sm text-zinc-400 truncate w-full">{e.vendor} — {e.description}</div>
@@ -733,7 +926,17 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                 <li key={t.id}>
                   <Card active={selectedLinkId === t.id} onClick={() => setSelectedLinkId(t.id)} className="flex-col! items-start! gap-1 cursor-pointer hover:bg-zinc-800/50">
                     <div className="w-full flex justify-between items-center">
-                      <span className="font-semibold text-white">{formatMoney(t.amount)}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-white">{formatMoney(t.amount)}</span>
+                        {t.allocationStatus === "PARTIALLY_ALLOCATED" && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Under-Allocated</span>
+                        )}
+                        {t.chartAccount && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded font-mono bg-blue-500/10 text-blue-300 border border-blue-500/20">
+                            {t.chartAccount.code} {t.chartAccount.name}
+                          </span>
+                        )}
+                      </div>
                       <span className="text-xs text-zinc-400">{formatDate(t.date)}</span>
                     </div>
                     <div className="text-sm text-zinc-400 truncate w-full">{t.description}</div>
@@ -869,12 +1072,12 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                 <div className="hidden lg:block absolute left-1/2 top-4 bottom-4 w-px bg-zinc-800 -translate-x-1/2 z-0" />
 
                 {/* UNLINK MIDDLE BUTTON */}
-                {((type === "transaction" && currentLinkedExpense) || (type === "receipt" && currentLinkedTx)) && !isClosed && (
+                {activeExpense && activeTx && !isClosed && !isEditingExpense && !isEditingTx && (
                   <div className="hidden lg:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-20">
                     <Button 
-                       onClick={() => type === "transaction" ? handleUnlinkLinked() : handleUnlinkLinked()} 
+                       onClick={handleUnlink} 
                        variant="secondary" 
-                       className="rounded-full shadow-2xl border border-red-500/30 bg-black text-zinc-400 hover:text-red-400 hover:bg-red-500/10 p-3 flex flex-col items-center justify-center w-14 h-14 transition-colors" 
+                       className="rounded-full shadow-2xl border border-red-500/30 bg-black text-zinc-400 hover:text-red-400 hover:bg-red-500/10 p-3 flex flex-col items-center justify-center w-14 h-14 transition-colors cursor-pointer" 
                        title="Unlink Pair"
                     >
                       <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.73 21a2 2 0 01-3.46 0m9.73-8v-3a2 2 0 00-2-2h-3m-6 0H5a2 2 0 00-2 2v3m12 0l-4 4m0 0l-4-4m4 4V10" /></svg>
@@ -884,14 +1087,16 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                 )}
 
                 {/* EXPENSE COLUMN */}
-                <div className="bg-white/2 border border-white/5 rounded-2xl p-6 backdrop-blur-md shadow-lg flex flex-col relative z-10">
+                <div className={`bg-white/2 border border-white/5 rounded-2xl p-6 backdrop-blur-md shadow-lg flex flex-col relative z-10 transition-colors duration-200 ${
+                  isEditingExpense ? 'ring-1 ring-emerald-500/20' : ''
+                }`}>
                   {isDeposit ? (
                     <div className="flex flex-col items-center justify-center py-12 text-zinc-400 text-center h-full">
                       <svg className="w-12 h-12 mb-3 opacity-20 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                       <h3 className="text-lg font-bold text-emerald-400/50 mb-2">Income Categorization</h3>
                       <p className="max-w-xs text-sm">Deposits don't require expense receipts. Edit the transaction details to assign a Revenue Account.</p>
-                      {!isEditingExpense && !tx?.categoryAccountId && (
-                        <Button variant="primary" onClick={() => setIsEditingRoot(true)} className="mt-4">Categorize Deposit</Button>
+                      {!isEditingTx && !activeTx?.categoryAccountId && (
+                        <Button variant="primary" onClick={() => setIsEditingTx(true)} className="mt-4">Categorize Deposit</Button>
                       )}
                     </div>
                   ) : (
@@ -900,34 +1105,40 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                         <div className="flex flex-wrap items-center gap-2">
                           <svg className="w-5 h-5 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                           <h2 className="text-xl font-bold">Expense Details</h2>
-                          {(() => {
-                            const e = type === "receipt" ? expense : currentLinkedExpense;
-                            if (!e) return null;
-                            return <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${e.isManual ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'}`}>{e.isManual ? "Manual" : "AI Extracted"}</span>
-                          })()}
-                          {type === "transaction" && totalLinked > 1 && <span className="text-xs text-zinc-400 ml-1 whitespace-nowrap">{activeLinkedIdx + 1} of {totalLinked}</span>}
+                          {activeExpense && (
+                            <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${activeExpense.isManual ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'}`}>{activeExpense.isManual ? "Manual" : "AI Extracted"}</span>
+                          )}
+                          {expensesList.length > 1 && <span className="text-xs text-zinc-400 ml-1 whitespace-nowrap">({expensesList.length} linked)</span>}
                         </div>
-                        {(() => {
-                           const e = type === "receipt" ? expense : currentLinkedExpense;
-                           if (!e) return null;
-                           const editing = type === "receipt" ? isEditingExpense : isEditingLinked;
-                           if (editing) {
-                             return <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={() => type === "receipt" ? setIsEditingRoot(false) : setIsEditingLinked(false)} className={btnSmGray}>Cancel</Button><Button variant="primary" size="sm" onClick={type === "receipt" ? handleSaveRoot : handleSaveLinked} >Save</Button></div>;
-                           } else if (!isClosed) {
-                             return <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={() => type === "receipt" ? setIsEditingRoot(true) : setIsEditingLinked(true)} className={btnSmGreen}>Edit</Button><Button variant="danger" size="sm" onClick={type === "receipt" ? handleDeleteRoot : handleDeleteLinked} >Delete</Button></div>;
-                           }
-                           return null;
-                        })()}
+                        {activeExpense && (
+                          isEditingExpense ? (
+                            <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={() => setIsEditingExpense(false)} className={btnSmGray}>Cancel</Button><Button variant="primary" size="sm" onClick={handleSaveExpense} >Save</Button></div>
+                          ) : !isClosed ? (
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => setIsSplitModalOpen(true)}
+                                className="text-amber-300 border-amber-500/30 hover:bg-amber-500/10 font-medium"
+                                title="Split receipt into multiple items (e.g. personal vs business)"
+                              >
+                                ✂ Split Receipt
+                              </Button>
+                              <Button variant="ghost" onClick={() => setIsEditingExpense(true)} className={btnSmGreen}>Edit</Button>
+                              <Button variant="danger" size="sm" onClick={handleDeleteExpense} >Delete</Button>
+                            </div>
+                          ) : null
+                        )}
                       </div>
 
-                      {type === "transaction" && totalLinked > 1 && <CarouselNav />}
+                      {renderExpensePagination()}
 
                       {(() => {
-                        const item = type === "receipt" ? expense : currentLinkedExpense;
-                        const form = type === "receipt" ? expenseForm : linkedForm;
-                        const setForm = type === "receipt" ? setRootForm : setLinkedForm;
-                        const editing = type === "receipt" ? isEditingExpense : isEditingLinked;
-                        if (!item) return <div className="py-12 text-zinc-400 text-center">No Expense Linked</div>;
+                        const item = activeExpense;
+                        const form = expenseForm;
+                        const setForm = setExpenseForm;
+                        const editing = isEditingExpense;
+                        if (!item) return <div className="py-6 text-zinc-400 text-center">No Expense Linked</div>;
 
                         const e = item as Expense;
                         
@@ -951,7 +1162,7 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                                   await loadData();
                                 }} className="text-blue-200 hover:text-white px-3 py-1 h-auto text-xs not-italic bg-blue-500/20 hover:bg-blue-500/40 rounded">Undo</Button>
                               </div>
-                            ) : warnings.length > 0 && !isEditingExpense && !isEditingLinked && (
+                            ) : warnings.length > 0 && !isEditingExpense && (
                                 <div className="mb-2 bg-orange-500/10 border border-orange-500/20 text-orange-400 p-3 rounded-xl text-sm">
                                     <ul className="list-disc pl-4 space-y-1">
                                         {warnings.map((w, i) => <li key={i}>{w}</li>)}
@@ -972,7 +1183,12 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                                   </div>
                                   <div className="w-24">
                                     <label className="text-xs text-zinc-400 block mb-1">Currency</label>
-                                    <Select searchable value={form.currencyCode || 'USD'} onChange={ev => setForm({ ...form, currencyCode: ev.target.value })}>
+                                    <Select 
+                                      searchable 
+                                      dropdownAlign="right"
+                                      value={form.currencyCode || 'USD'} 
+                                      onChange={ev => setForm({ ...form, currencyCode: ev.target.value })}
+                                    >
                                       {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
                                     </Select>
                                   </div>
@@ -1030,19 +1246,20 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
                                     View Receipt
                                   </Button>
-                                  <Button variant="ghost" onClick={() => fileInputRef.current?.click()} className="bg-zinc-800 text-white rounded-md hover:bg-zinc-700 transition flex items-center justify-center text-sm px-3" title="Upload another receipt">
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                                  </Button>
+                                  {!isClosed && (
+                                    <Button variant="ghost" onClick={() => fileInputRef.current?.click()} className="bg-zinc-800 text-white rounded-md hover:bg-zinc-700 transition flex items-center justify-center text-sm px-3" title="Upload another receipt">
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                                    </Button>
+                                  )}
                                 </div>
-                              ) : (
+                              ) : !isClosed ? (
                                 <div className="text-center mt-2">
-
                                   <Button variant="ghost" onClick={() => fileInputRef.current?.click()} className="w-full px-4 py-2 bg-zinc-800 text-white rounded-md hover:bg-zinc-700 transition flex items-center justify-center gap-2 text-sm">
                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
                                     Upload Receipt
                                   </Button>
                                 </div>
-                              )}
+                              ) : null}
                               <input type="file" ref={fileInputRef} className="hidden" accept=".jpg,.jpeg,.png,.pdf,.heic" onChange={handleUploadReceipt} />
                             </div>
 
@@ -1052,57 +1269,98 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
 
                       {type === "transaction" && !isClosed && (
                         <>
-                          <div className="mt-5 pt-4 border-t border-zinc-800 flex flex-wrap gap-2">
-                            <Button variant={showLinkPanel ? "info" : "secondary"} size="sm" onClick={() => { setShowLinkPanel(p => !p); setSelectedLinkId(null); }}>
-                              {showLinkPanel ? "Close Link Picker" : "Link Existing Expense"}
+                          <div className="mt-4 pt-3 border-t border-zinc-800 grid grid-cols-2 gap-2">
+                            <Button
+                              variant={showLinkPanel ? "info" : "secondary"}
+                              size="sm"
+                              onClick={() => { setShowLinkPanel(p => !p); setSelectedLinkId(null); }}
+                              className="w-full text-xs font-semibold px-2 py-1.5 justify-center"
+                              title={showLinkPanel ? "Close Link Picker" : "Link Existing Expense"}
+                            >
+                              <span className="truncate">
+                                {showLinkPanel ? "Close Picker" : (
+                                  <>Link Existing <span className="hidden xl:inline">Expense</span></>
+                                )}
+                              </span>
                             </Button>
-                            <Button variant="ghost" onClick={() => {
-                              const txDateStr = tx?.date ? tx.date.split('T')[0] : '';
-                              const txAmtStr = tx?.amount ? String(Math.abs(tx.amount)) : '';
-                              const txVendor = tx?.description || '';
-                              const txCatId = tx?.categoryAccountId || '';
-                              setCreateForm({
-                                timestamp: txDateStr,
-                                vendor: extractCleanVendor(txVendor),
-                                description: txVendor,
-                                amount: txAmtStr,
-                                tender: 'card',
-                                chartAccountId: txCatId ? Number(txCatId) : undefined
-                              });
-                              setShowCreateModal(true);
-                            }} className="text-xs bg-zinc-800 hover:bg-zinc-700 px-3 py-1.5 rounded-md text-white transition">Create New Expense</Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                const targetTx = activeTx || tx;
+                                const txDateStr = targetTx?.date ? targetTx.date.split('T')[0] : '';
+                                const linkedExpSum = expensesList.reduce((s, ce) => s + ce.amount, 0);
+                                const remainingTxAmt = targetTx?.amount ? Math.max(0, Math.abs(targetTx.amount) - linkedExpSum) : 0;
+                                const txAmtStr = remainingTxAmt > 0 ? String(remainingTxAmt) : (targetTx?.amount ? String(Math.abs(targetTx.amount)) : '');
+                                const txVendor = targetTx?.description || '';
+                                const txCatId = targetTx?.categoryAccountId || '';
+                                setCreateForm({
+                                  timestamp: txDateStr,
+                                  vendor: extractCleanVendor(txVendor),
+                                  description: txVendor,
+                                  amount: txAmtStr,
+                                  tender: 'card',
+                                  chartAccountId: txCatId ? Number(txCatId) : undefined
+                                });
+                                setShowCreateModal(true);
+                              }}
+                              className="w-full text-xs font-semibold px-2 py-1.5 justify-center bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition"
+                              title="Create New Expense"
+                            >
+                              <span className="truncate">
+                                Create New <span className="hidden xl:inline">Expense</span>
+                              </span>
+                            </Button>
                           </div>
                           {renderLinkPicker()}
                         </>
                       )}
 
                       {(() => {
-                        const currentExp = type === "receipt" ? expense : currentLinkedExpense;
+                        const currentExp = activeExpense;
                         if (!currentExp) return null;
                         
-                        let expAllocated = 0;
-                        let hasLinks = false;
-                        
-                        if (type === "receipt") {
-                           hasLinks = confirmedTransactions.length > 0;
-                           expAllocated = confirmedTransactions.reduce((sum, t) => sum + Math.abs(t.amount), 0);
-                        } else {
-                           hasLinks = (currentExp.bankTransactions && currentExp.bankTransactions.length > 0) || false;
-                           expAllocated = hasLinks ? (currentExp.bankTransactions?.reduce((sum, t) => sum + Math.abs(t.amount), 0) ?? 0) : 0;
-                        }
-
+                        const hasLinks = transactionsList.length > 0 || (currentExp.bankTransactions && currentExp.bankTransactions.length > 0);
                         if (!hasLinks) return null;
 
-                        const total = currentExp.amount;
+                        const isMultiExpense = expensesList.length > 1;
+                        const sumExp = expensesList.reduce((sum, e) => sum + e.amount, 0);
+                        const sumTx = transactionsList.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+                        // If multiple expenses are linked to the transaction(s), the progress bar and allocation math
+                        // are tied to the accumulative sum of the linked expenses.
+                        const total = isMultiExpense ? sumExp : currentExp.amount;
+
+                        let expAllocated = 0;
+                        if (isMultiExpense) {
+                          // In a split transaction (1 Tx -> N Exp):
+                          // If the transaction(s) cover or equal the sum of expenses, all expenses are 100% allocated.
+                          if (transactionsList.length <= 1 && sumTx >= sumExp) {
+                            expAllocated = sumExp;
+                          } else {
+                            expAllocated = sumTx;
+                          }
+                        } else {
+                          // Single expense:
+                          // If covered by a transaction that is >= its amount and balanced, it is 100% absorbed.
+                          if (transactionsList.length <= 1 && sumTx >= total && currentExp.allocationStatus === "BALANCED") {
+                            expAllocated = total;
+                          } else {
+                            expAllocated = sumTx;
+                          }
+                        }
+
                         const remaining = total - expAllocated;
-                        const pct = Math.min(100, Math.max(0, (expAllocated / total) * 100));
+                        const pct = Math.min(100, Math.max(0, total > 0 ? (expAllocated / total) * 100 : 0));
                         
                         return (
                            <div className="mt-5 pt-4 border-t border-zinc-800">
                               <div className="space-y-2">
                                  <div className="flex justify-between text-xs font-semibold">
                                     <span className="text-zinc-400">Allocated: {formatMoney(expAllocated)}</span>
-                                    <span className="text-white">{formatMoney(total)} Total</span>
+                                    <span className="text-white">
+                                      {formatMoney(total)} Total{isMultiExpense ? ` (${expensesList.length} linked)` : ''}
+                                    </span>
                                  </div>
                                  <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden">
                                     <div className={`h-full transition-all ${remaining < -0.01 ? "bg-red-500" : remaining > 0.01 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${pct}%` }} />
@@ -1119,7 +1377,7 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                       })()}
 
                       {(() => {
-                        const e = type === "receipt" ? expense : currentLinkedExpense;
+                        const e = activeExpense;
                         if (!e || e.reviewStatus === "IGNORED") return null;
                         if (isClosed && !itemAwaitingReview) return null;
 
@@ -1165,12 +1423,12 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                 </div>
                 
                 {/* MOBILE UNLINK BUTTON */}
-                {((type === "transaction" && currentLinkedExpense) || (type === "receipt" && currentLinkedTx)) && !isClosed && (
+                {activeExpense && activeTx && !isClosed && !isEditingExpense && !isEditingTx && (
                   <div className="lg:hidden flex justify-center -my-4 relative z-20">
                     <Button 
-                       onClick={() => type === "transaction" ? handleUnlinkLinked() : handleUnlinkLinked()} 
+                       onClick={handleUnlink} 
                        variant="secondary" 
-                       className="rounded-full shadow-xl border border-red-500/30 bg-zinc-900 text-zinc-400 hover:text-red-400 hover:bg-red-500/10 px-6 py-2 flex items-center justify-center gap-2" 
+                       className="rounded-full shadow-xl border border-red-500/30 bg-zinc-900 text-zinc-400 hover:text-red-400 hover:bg-red-500/10 px-6 py-2 flex items-center justify-center gap-2 cursor-pointer" 
                        title="Unlink Pair"
                     >
                       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.73 21a2 2 0 01-3.46 0m9.73-8v-3a2 2 0 00-2-2h-3m-6 0H5a2 2 0 00-2 2v3m12 0l-4 4m0 0l-4-4m4 4V10" /></svg>
@@ -1180,44 +1438,40 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                 )}
 
                 {/* BANK TRANSACTION COLUMN */}
-                <div className="bg-white/2 border border-white/5 rounded-2xl p-6 backdrop-blur-md shadow-lg flex flex-col relative z-0">
+                <div className={`bg-white/2 border border-white/5 rounded-2xl p-6 backdrop-blur-md shadow-lg flex flex-col relative z-10 transition-colors duration-200 ${
+                  isEditingTx ? 'ring-1 ring-blue-500/20' : ''
+                }`}>
                   <div className="flex flex-wrap items-center justify-between gap-3 mb-4 border-b border-zinc-800 pb-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <svg className="w-5 h-5 text-blue-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
                       <h2 className="text-xl font-bold">Bank Transaction</h2>
-                      {(() => {
-                        const t = type === "transaction" ? tx : currentLinkedTx;
-                        if (!t) return null;
-                        const isManual = t.isManual || (t.fitId && t.fitId.startsWith("MANUAL-"));
-                        return <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${isManual ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'}`}>{isManual ? "Manual" : "Bank Import"}</span>
+                      {activeTx && (() => {
+                        const isManual = activeTx.isManual || (activeTx.fitId && activeTx.fitId.startsWith("MANUAL-"));
+                        return <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${isManual ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'}`}>{isManual ? "Manual" : "Bank Import"}</span>;
                       })()}
-                      {type === "receipt" && totalLinked > 1 && <span className="text-xs text-zinc-400 ml-1 whitespace-nowrap">{activeLinkedIdx + 1} of {totalLinked}</span>}
+                      {transactionsList.length > 1 && <span className="text-xs text-zinc-400 ml-1 whitespace-nowrap">({transactionsList.length} linked)</span>}
                     </div>
-                    {(() => {
-                       const t = type === "transaction" ? tx : currentLinkedTx;
-                       if (!t) return null;
-                       const editing = type === "transaction" ? isEditingExpense : isEditingLinked;
-                       if (editing) {
-                         return <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={() => type === "transaction" ? setIsEditingRoot(false) : setIsEditingLinked(false)} className={btnSmGray}>Cancel</Button><Button variant="primary" size="sm" onClick={type === "transaction" ? handleSaveRoot : handleSaveLinked} >Save</Button></div>;
-                       } else if (!isClosed) {
-                         return <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={() => type === "transaction" ? setIsEditingRoot(true) : setIsEditingLinked(true)} className={btnSmBlue}>Edit</Button><Button variant="danger" size="sm" onClick={type === "transaction" ? handleDeleteRoot : handleDeleteLinked} >Delete</Button></div>;
-                       }
-                       return null;
-                    })()}
+                    {activeTx && (
+                      isEditingTx ? (
+                        <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={() => setIsEditingTx(false)} className={btnSmGray}>Cancel</Button><Button variant="primary" size="sm" onClick={handleSaveTx} >Save</Button></div>
+                      ) : !isClosed ? (
+                        <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={() => setIsEditingTx(true)} className={btnSmBlue}>Edit</Button><Button variant="danger" size="sm" onClick={handleDeleteTx} >Delete</Button></div>
+                      ) : null
+                    )}
                   </div>
 
-                  {type === "receipt" && totalLinked > 1 && <CarouselNav />}
+                  {renderTransactionPagination()}
 
                   {(() => {
-                    const item = type === "transaction" ? tx : currentLinkedTx;
-                    const form = type === "transaction" ? expenseForm : linkedForm;
-                    const setForm = type === "transaction" ? setRootForm : setLinkedForm;
-                    const editing = type === "transaction" ? isEditingExpense : isEditingLinked;
+                    const item = activeTx;
+                    const form = txForm;
+                    const setForm = setTxForm;
+                    const editing = isEditingTx;
                     if (!item) {
-                      if (type === "receipt" && expense?.tender?.toLowerCase() === "cash") {
-                        return <div className="py-12 text-zinc-400 text-center">Not Applicable (Cash Expense)</div>;
+                      if (type === "receipt" && activeExpense?.tender?.toLowerCase() === "cash") {
+                        return <div className="py-6 text-zinc-400 text-center">Not Applicable (Cash Expense)</div>;
                       }
-                      return <div className="py-12 text-zinc-400 text-center">No Bank Transaction Linked</div>;
+                      return <div className="py-6 text-zinc-400 text-center">No Bank Transaction Linked</div>;
                     }
 
                     const t = item as BankTransaction;
@@ -1249,10 +1503,10 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                             </div>
                         )}
                         <div>
+                          <label className={labelCls}>Amount</label>
                           {editing ? (
                             <div className="flex gap-2">
                               <div className="flex-1">
-                                <label className="text-xs text-zinc-400 block mb-1">Amount</label>
                                 <MoneyInput allowNegative value={form.amount} onChange={val => {
                                   let amt = val;
                                   const isOutgoing = t.transactionType === 'DEBIT' || t.transactionType === 'PAYMENT';
@@ -1268,7 +1522,29 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                             </div>
                           )}
                         </div>
-                        <div><label className={labelCls}>Description</label>{editing ? <Input type="text" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /> : <p className="text-zinc-300">{t.description}</p>}</div>
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <label className={labelCls}>Description</label>
+                            {onCreateRule && !editing && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const clean = extractCleanVendor(t.description);
+                                  onCreateRule({
+                                    name: clean || t.description,
+                                    descriptionKeyword: clean || t.description,
+                                    categoryAccountId: t.categoryAccountId || null,
+                                  });
+                                }}
+                                className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium inline-flex items-center gap-1 transition-colors cursor-pointer pb-1"
+                                title="Create an automated rule for this merchant"
+                              >
+                                ⚡ Create Rule
+                              </button>
+                            )}
+                          </div>
+                          {editing ? <Input type="text" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /> : <p className="text-zinc-300">{t.description}</p>}
+                        </div>
                         <div className="flex gap-6">
                           <div><label className={labelCls}>Date</label>{editing ? <Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /> : <p className="text-zinc-300">{formatDate(t.date)}</p>}</div>
                           <div className="flex-1"><label className={labelCls}>Type</label><p className="text-zinc-300 uppercase mt-2">{t.transactionType}</p></div>
@@ -1301,10 +1577,89 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                         </div>
                         <div>
                           <label className={labelCls}>Category</label>
-                          {confirmedExpenses.length > 1 ? (
-                            <div className="flex items-center gap-2 p-2 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-300 text-xs mt-1">
-                              <span className="font-semibold uppercase tracking-wider">Split Transaction:</span>
-                              <span>{confirmedExpenses.length} categories on linked expenses</span>
+                          {expensesList.length > 1 ? (
+                            <div className="rounded-xl border border-purple-500/30 bg-purple-500/10 overflow-hidden text-xs mt-1 shadow-sm">
+                              {/* Header Bar */}
+                              <button
+                                type="button"
+                                onClick={() => setShowSplitCategories(prev => !prev)}
+                                className="w-full flex items-center justify-between p-2.5 hover:bg-purple-500/15 transition-colors text-purple-300 text-left cursor-pointer"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold uppercase tracking-wider text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded border border-purple-500/30">
+                                    Split
+                                  </span>
+                                  <span className="font-medium text-white">
+                                    {expensesList.length} Linked Categories
+                                  </span>
+                                </div>
+                                <svg
+                                  className={`w-4 h-4 text-purple-400 transition-transform duration-200 ${showSplitCategories ? "rotate-180" : ""}`}
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </button>
+
+                              {/* Expanded Category Details */}
+                              {showSplitCategories && (
+                                <div className="border-t border-purple-500/20 divide-y divide-purple-500/15 bg-zinc-950/60">
+                                  {expensesList.map((exp, idx) => (
+                                    <div
+                                      key={exp.id}
+                                      onClick={() => setActiveExpenseIdx(idx)}
+                                      className={`p-2.5 flex items-center justify-between gap-3 cursor-pointer transition-colors ${
+                                        activeExpenseIdx === idx
+                                          ? "bg-purple-500/20 text-white"
+                                          : "hover:bg-purple-500/10 text-zinc-300"
+                                      }`}
+                                      title={`Click to view Expense #${idx + 1} (${formatMoney(exp.amount)}) in left panel`}
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 ${
+                                          activeExpenseIdx === idx
+                                            ? "bg-purple-400 text-zinc-950 font-bold"
+                                            : "bg-purple-500/20 text-purple-300 border border-purple-500/30"
+                                        }`}>
+                                          #{idx + 1}
+                                        </span>
+                                        <div className="min-w-0">
+                                          {exp.chartAccount ? (
+                                            <div className="flex items-center gap-1.5 truncate">
+                                              <span className="font-mono text-purple-300 text-xs font-semibold">
+                                                {exp.chartAccount.code}
+                                              </span>
+                                              <span className="text-zinc-200 text-xs truncate">
+                                                {exp.chartAccount.name}
+                                              </span>
+                                              {!exp.chartAccount.active && (
+                                                <span className="text-[9px] bg-red-500/20 text-red-400 px-1 py-0.2 rounded border border-red-500/30">
+                                                  Archived
+                                                </span>
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <span className="text-zinc-500 italic text-xs">Uncategorized</span>
+                                          )}
+                                          {exp.description && (
+                                            <span className="text-[11px] text-zinc-400 truncate block">
+                                              {exp.description}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <span className="font-semibold text-white text-xs shrink-0">
+                                        {formatMoney(exp.amount)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                  <div className="p-2 text-[10px] text-zinc-400 bg-zinc-900/40 text-center italic">
+                                    Click a category row to view its receipt details on the left.
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           ) : editing ? (
                             <Select searchable value={form.categoryAccountId || ''} onChange={e => setForm({ ...form, categoryAccountId: e.target.value })}>
@@ -1335,20 +1690,31 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                     );
                   })()}
 
-                  {type === "receipt" && !isClosed && expense?.tender?.toLowerCase() !== "cash" && (
+                  {type === "receipt" && !isClosed && activeExpense?.tender?.toLowerCase() !== "cash" && (
                     <>
-                      <div className="mt-5 pt-4 border-t border-zinc-800 flex flex-wrap gap-2">
-                        <Button variant={showLinkPanel ? "info" : "secondary"} size="sm" onClick={() => { setShowLinkPanel(p => !p); setSelectedLinkId(null); }}>
-                          {showLinkPanel ? "Close Link Picker" : "Link Existing Transaction"}
+                      <div className="mt-4 pt-3 border-t border-zinc-800 grid grid-cols-2 gap-2">
+                        <Button
+                          variant={showLinkPanel ? "info" : "secondary"}
+                          size="sm"
+                          onClick={() => { setShowLinkPanel(p => !p); setSelectedLinkId(null); }}
+                          className="w-full text-xs font-semibold px-2 py-1.5 justify-center"
+                          title={showLinkPanel ? "Close Link Picker" : "Link Existing Transaction"}
+                        >
+                          <span className="truncate">
+                            {showLinkPanel ? "Close Picker" : (
+                              <>Link Existing <span className="hidden xl:inline">Transaction</span></>
+                            )}
+                          </span>
                         </Button>
                         <Button
                           variant="ghost"
+                          size="sm"
                           onClick={() => {
                             setShowCreateModal(true);
-                            const remainingAmt = expense ? Math.max(0, expense.amount - confirmedTransactions.reduce((s, ct) => s + Math.abs(ct.amount), 0)) : 0;
+                            const remainingAmt = activeExpense ? Math.max(0, activeExpense.amount - transactionsList.reduce((s, ct) => s + Math.abs(ct.amount), 0)) : 0;
 
                             let defaultBankId: number | '' = '';
-                            const tender = expense?.tender?.toLowerCase();
+                            const tender = activeExpense?.tender?.toLowerCase();
                             if (tender === 'card') {
                               const cc = accounts.find(a => a.type === 'LIABILITY' && a.code.startsWith('20') && a.active);
                               defaultBankId = cc ? cc.id : (accounts.find(a => a.type === 'ASSET' && a.code === '1010' && a.active)?.id || '');
@@ -1361,18 +1727,21 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                             }
 
                             setCreateForm({
-                              date: expense?.timestamp ? expense.timestamp.split('T')[0] : '',
-                              description: expense?.vendor ? `${expense.vendor}${expense.description ? ` - ${expense.description}` : ''}` : (expense?.description || ''),
-                              amount: remainingAmt > 0 ? remainingAmt : (expense?.amount || ''),
+                              date: activeExpense?.timestamp ? activeExpense.timestamp.split('T')[0] : '',
+                              description: activeExpense?.vendor ? `${activeExpense.vendor}${activeExpense.description ? ` - ${activeExpense.description}` : ''}` : (activeExpense?.description || ''),
+                              amount: remainingAmt > 0 ? remainingAmt : (activeExpense?.amount || ''),
                               transactionType: 'DEBIT',
                               chartAccountId: defaultBankId,
-                              categoryAccountId: expense?.chartAccountId || '',
+                              categoryAccountId: activeExpense?.chartAccountId || '',
                             });
                           }}
-                          className="text-xs bg-zinc-800 hover:bg-zinc-700 px-3 py-1.5 rounded-md text-white transition"
+                          className="w-full text-xs font-semibold px-2 py-1.5 justify-center bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition"
                           disabled={!canAddMoreTransactions}
+                          title="Create New Transaction"
                         >
-                          Create New Transaction
+                          <span className="truncate">
+                            Create New <span className="hidden xl:inline">Transaction</span>
+                          </span>
                         </Button>
                       </div>
                       {renderLinkPicker()}
@@ -1380,32 +1749,50 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                   )}
 
                   {(() => {
-                    const currentTx = type === "transaction" ? tx : currentLinkedTx;
+                    const currentTx = activeTx;
                     if (!currentTx) return null;
                     
-                    let txAllocated = 0;
-                    let hasLinks = false;
-                    
-                    if (type === "transaction") {
-                      hasLinks = confirmedExpenses.length > 0;
-                      txAllocated = confirmedExpenses.reduce((sum, e) => sum + e.amount, 0);
-                    } else {
-                      hasLinks = (currentTx.expenses && currentTx.expenses.length > 0) || false;
-                      txAllocated = hasLinks ? (currentTx.expenses?.reduce((sum, e) => sum + e.amount, 0) ?? 0) : 0;
-                    }
-                    
+                    const hasLinks = expensesList.length > 0 || (currentTx.expenses && currentTx.expenses.length > 0);
                     if (!hasLinks) return null;
-                    
-                    const total = Math.abs(currentTx.amount);
+
+                    const isMultiTx = transactionsList.length > 1;
+                    const sumTx = transactionsList.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+                    const sumExp = expensesList.reduce((sum, e) => sum + e.amount, 0);
+
+                    // If multiple transactions are linked (split expense N:1), the progress bar and allocation math
+                    // are tied to the accumulative sum of the transactions.
+                    const total = isMultiTx ? sumTx : Math.abs(currentTx.amount);
+
+                    let txAllocated = 0;
+                    if (isMultiTx) {
+                      // In an N:1 split (multiple transactions funding 1 expense):
+                      // If the single expense covers or equals the sum of transactions, the transactions are 100% absorbed.
+                      if (expensesList.length <= 1 && sumExp >= sumTx) {
+                        txAllocated = sumTx;
+                      } else {
+                        txAllocated = sumExp;
+                      }
+                    } else {
+                      // Single transaction:
+                      // If absorbed by an expense that is >= its amount and balanced, it is 100% absorbed.
+                      if (expensesList.length === 1 && sumExp >= total && currentTx.allocationStatus === "BALANCED") {
+                        txAllocated = total;
+                      } else {
+                        txAllocated = sumExp;
+                      }
+                    }
+
                     const remaining = total - txAllocated;
-                    const pct = Math.min(100, Math.max(0, (txAllocated / total) * 100));
+                    const pct = Math.min(100, Math.max(0, total > 0 ? (txAllocated / total) * 100 : 0));
                     
                     return (
                       <div className="mt-5 pt-4 border-t border-zinc-800">
                         <div className="space-y-2">
                           <div className="flex justify-between text-xs font-semibold">
                             <span className="text-zinc-400">Allocated: {formatMoney(txAllocated)}</span>
-                            <span className="text-white">{formatMoney(total)} Total</span>
+                            <span className="text-white">
+                              {formatMoney(total)} Total{isMultiTx ? ` (${transactionsList.length} linked)` : ''}
+                            </span>
                           </div>
                           <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden">
                             <div className={`h-full transition-all ${remaining < -0.01 ? "bg-red-500" : remaining > 0.01 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${pct}%` }} />
@@ -1422,7 +1809,7 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                   })()}
                   
                   {(() => {
-                    const t = type === "transaction" ? tx : currentLinkedTx;
+                    const t = activeTx;
                     if (!t || t.reviewStatus === "IGNORED") return null;
                     if (isClosed && !itemAwaitingReview) return null;
                     
@@ -1467,46 +1854,134 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
 
               {/* SUGGESTED MATCHES */}
               {type === "transaction" && suggestedExpenses.length > 0 && (
-                <div className="border border-blue-900/50 bg-blue-900/10 rounded-xl p-6">
-                  <div className="flex items-center gap-3 mb-2">
-                    <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                    <h3 className="text-lg font-bold text-blue-400">Suggested Link{suggestedExpenses.length > 1 ? 's' : ''} Found</h3>
+                <div className="border border-blue-900/50 bg-blue-900/10 rounded-xl p-5">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2.5">
+                      <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                      <h3 className="text-base font-bold text-blue-400">Suggested Match{suggestedExpenses.length > 1 ? 'es' : ''}</h3>
+                    </div>
+                    {!isClosed && (
+                      <span className="text-[11px] text-zinc-400 bg-zinc-800/80 px-2 py-0.5 rounded border border-zinc-700">
+                        Press <kbd className="font-mono text-zinc-200 font-bold">A</kbd> to quick-approve
+                      </span>
+                    )}
                   </div>
-                  <p className="text-zinc-300 text-sm mb-4">Our scoring system found {suggestedExpenses.length > 1 ? 'these likely links' : 'a likely link'} for this transaction. Review and approve if correct.</p>
+                  <p className="text-zinc-300 text-xs mb-3.5">Review scoring details below and approve if correct.</p>
                   <div className="space-y-3">
-                    {suggestedExpenses.map(e => (
-                      <div key={e.id} className="border border-blue-900/30 bg-black rounded-lg p-4 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-                        <div className="text-sm grid grid-cols-2 gap-x-4 gap-y-1 flex-1 min-w-0">
-                          <div><span className="text-zinc-400">Amount:</span> <span className="font-bold">{formatMoney(e.amount)}</span></div>
-                          <div><span className="text-zinc-400">Date:</span> {formatDate(e.timestamp)}</div>
-                          <div className="col-span-2 truncate"><span className="text-zinc-400">Vendor:</span> {e.vendor}</div>
-                          <div className="col-span-2 truncate text-zinc-400">{e.description}</div>
+                    {suggestedExpenses.map(e => {
+                      const matchInfo = computeMatchScore(
+                        activeTx?.amount || 0,
+                        activeTx?.date || '',
+                        activeTx?.description || '',
+                        e.amount,
+                        e.timestamp,
+                        e.vendor
+                      );
+
+                      return (
+                        <div key={e.id} className="border border-blue-900/40 bg-zinc-950 rounded-xl p-3.5 flex flex-col gap-2.5">
+                          <div className="flex items-center justify-between gap-3 border-b border-zinc-800/80 pb-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                                matchInfo.score >= 90 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
+                                matchInfo.score >= 75 ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
+                                'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                              }`}>
+                                {matchInfo.score}% {matchInfo.label}
+                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {matchInfo.reasons.map((r, ri) => (
+                                  <span key={ri} className="text-[10px] text-zinc-400 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">
+                                    ✓ {r}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                            <Button 
+                              variant="primary" 
+                              size="sm"
+                              onClick={() => handleApproveSuggestedExpense(e.id)} 
+                              className="font-bold text-xs shrink-0"
+                            >
+                              Approve Link
+                            </Button>
+                          </div>
+
+                          <div className="text-xs grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            <div><span className="text-zinc-500 text-[10px] block">Amount</span> <span className="font-bold text-white">{formatMoney(e.amount)}</span></div>
+                            <div><span className="text-zinc-500 text-[10px] block">Date</span> <span className="text-zinc-300">{formatDate(e.timestamp)}</span></div>
+                            <div><span className="text-zinc-500 text-[10px] block">Vendor</span> <span className="text-zinc-300 truncate block">{e.vendor || 'Unknown'}</span></div>
+                            <div><span className="text-zinc-500 text-[10px] block">Category</span> <span className="text-zinc-300 truncate block">{e.chartAccount?.name || 'Uncategorized'}</span></div>
+                          </div>
                         </div>
-                        <Button variant="ghost" onClick={() => handleApproveSuggestedExpense(e.id)} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-500 transition text-sm font-bold shrink-0">Approve Link</Button>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
 
               {type === "receipt" && suggestedTransactions.length > 0 && (
-                <div className="border border-blue-900/50 bg-blue-900/10 rounded-xl p-6">
-                  <div className="flex items-center gap-3 mb-2">
-                    <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                    <h3 className="text-lg font-bold text-blue-400">Suggested Link{suggestedTransactions.length > 1 ? 's' : ''} Found</h3>
+                <div className="border border-blue-900/50 bg-blue-900/10 rounded-xl p-5">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2.5">
+                      <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                      <h3 className="text-base font-bold text-blue-400">Suggested Match{suggestedTransactions.length > 1 ? 'es' : ''}</h3>
+                    </div>
+                    {!isClosed && (
+                      <span className="text-[11px] text-zinc-400 bg-zinc-800/80 px-2 py-0.5 rounded border border-zinc-700">
+                        Press <kbd className="font-mono text-zinc-200 font-bold">A</kbd> to quick-approve
+                      </span>
+                    )}
                   </div>
-                  <p className="text-zinc-300 text-sm mb-4">Our scoring system found {suggestedTransactions.length > 1 ? 'these likely links' : 'a likely link'} for this expense.</p>
+                  <p className="text-zinc-300 text-xs mb-3.5">Review scoring details below and approve if correct.</p>
                   <div className="space-y-3">
-                    {suggestedTransactions.map(t => (
-                      <div key={t.id} className="border border-blue-900/30 bg-black rounded-lg p-4 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-                        <div className="text-sm grid grid-cols-2 gap-x-4 gap-y-1 flex-1 min-w-0">
-                          <div><span className="text-zinc-400">Amount:</span> <span className="font-bold">{formatMoney(t.amount)}</span></div>
-                          <div><span className="text-zinc-400">Date:</span> {formatDate(t.date)}</div>
-                          <div className="col-span-2 truncate"><span className="text-zinc-400">Desc:</span> {t.description}</div>
+                    {suggestedTransactions.map(t => {
+                      const matchInfo = computeMatchScore(
+                        t.amount,
+                        t.date,
+                        t.description,
+                        activeExpense?.amount || 0,
+                        activeExpense?.timestamp || '',
+                        activeExpense?.vendor || ''
+                      );
+
+                      return (
+                        <div key={t.id} className="border border-blue-900/40 bg-zinc-950 rounded-xl p-3.5 flex flex-col gap-2.5">
+                          <div className="flex items-center justify-between gap-3 border-b border-zinc-800/80 pb-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                                matchInfo.score >= 90 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
+                                matchInfo.score >= 75 ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
+                                'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                              }`}>
+                                {matchInfo.score}% {matchInfo.label}
+                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {matchInfo.reasons.map((r, ri) => (
+                                  <span key={ri} className="text-[10px] text-zinc-400 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">
+                                    ✓ {r}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                            <Button 
+                              variant="primary" 
+                              size="sm"
+                              onClick={() => handleApproveSuggestedTx(t.id)} 
+                              className="font-bold text-xs shrink-0"
+                            >
+                              Approve Link
+                            </Button>
+                          </div>
+
+                          <div className="text-xs grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            <div><span className="text-zinc-500 text-[10px] block">Amount</span> <span className="font-bold text-white">{formatMoney(t.amount)}</span></div>
+                            <div><span className="text-zinc-500 text-[10px] block">Date</span> <span className="text-zinc-300">{formatDate(t.date)}</span></div>
+                            <div className="col-span-2"><span className="text-zinc-500 text-[10px] block">Description</span> <span className="text-zinc-300 truncate block">{t.description}</span></div>
+                          </div>
                         </div>
-                        <Button variant="ghost" onClick={() => handleApproveSuggestedTx(t.id)} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-500 transition text-sm font-bold shrink-0">Approve Link</Button>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1528,7 +2003,7 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
             </div>
             <div className="p-4 flex-1 overflow-auto bg-zinc-950 min-h-[50vh]">
               {(() => {
-                const receipts = (type === "receipt" ? expense : currentLinkedExpense)?.receipts;
+                const receipts = activeExpense?.receipts;
                 return receipts && receipts.length > 0 ? (
                     <div className="w-full flex flex-col items-center py-4 relative">
                       {receipts.length > 1 && (
@@ -1562,11 +2037,13 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
                             {receipts.length > 1 && (
                               <p className="text-zinc-500 text-xs font-semibold">Image {activeReceiptIdx + 1} of {receipts.length}</p>
                             )}
-                            <div className="mt-4">
-                              <Button variant="danger" size="sm" onClick={() => handleDeleteReceipt(receipt.id)} disabled={isSaving}>
-                                {isSaving ? "Deleting..." : "Delete Receipt"}
-                              </Button>
-                            </div>
+                            {!isClosed && (
+                              <div className="mt-4">
+                                <Button variant="danger" size="sm" onClick={() => handleDeleteReceipt(receipt.id)} disabled={isSaving}>
+                                  {isSaving ? "Deleting..." : "Delete Receipt"}
+                                </Button>
+                              </div>
+                            )}
                           </div>
                         );
                       })()}
@@ -1941,6 +2418,17 @@ export default function DetailDrawer({ type, id, onClose }: DetailDrawerProps) {
             </div>
           </div>
         </div>
+      )}
+      {isSplitModalOpen && activeExpense && (
+        <SplitExpenseModal
+          isOpen={true}
+          onClose={() => setIsSplitModalOpen(false)}
+          expense={activeExpense}
+          accounts={accounts}
+          onSplitSuccess={async () => {
+            await loadData();
+          }}
+        />
       )}
     </>,
     document.body

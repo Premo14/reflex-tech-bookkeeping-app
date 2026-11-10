@@ -7,7 +7,7 @@ import { Select } from "./ui/Select";
 import { Modal } from "./ui/Modal";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
 import DetailDrawer from "./DetailDrawer";
-import { getTransactions, getExpenses, createTransaction, createExpense, getSummary } from "../services/api";
+import { getTransactions, getExpenses, createTransaction, createExpense, getSummary, uploadReceiptToExpense } from "../services/api";
 import type { BankTransaction, Expense, ChartAccount, LedgerSummary } from "../types/models";
 import CreateExpenseForm from "./CreateExpenseForm";
 import CreateTransactionForm from "./CreateTransactionForm";
@@ -21,10 +21,12 @@ interface LedgerGridProps {
   accounts: ChartAccount[];
   activeAccountId: number | null;
   viewUnlinkedTrigger?: number;
+  viewUncategorizedTrigger?: number;
   onItemsChanged?: () => void;
+  onCreateRule?: (data: { name: string; descriptionKeyword: string; categoryAccountId?: number | null }) => void;
 }
 
-export default function LedgerGrid({ startDate, endDate, accounts, activeAccountId, viewUnlinkedTrigger, onItemsChanged }: LedgerGridProps) {
+export default function LedgerGrid({ startDate, endDate, accounts, activeAccountId, viewUnlinkedTrigger, viewUncategorizedTrigger, onItemsChanged, onCreateRule }: LedgerGridProps) {
   const { alert } = useConfirm();
   const [transactions, setTransactions] = useState<BankTransaction[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -48,7 +50,7 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [txForm, setTxForm] = useState<Partial<BankTransaction>>({ transactionType: 'DEBIT' });
-  const [expenseForm, setExpenseForm] = useState<Partial<Expense>>({ tender: 'card' });
+  const [expenseForm, setExpenseForm] = useState<Partial<Expense> & { date?: string; receiptFile?: File | null }>({ tender: 'card' });
 
   const [txPage, setTxPage] = useState(1);
   const [txTotalPages, setTxTotalPages] = useState(1);
@@ -77,12 +79,15 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
         endDate, 
         accountId: activeAccountId === null ? undefined : activeAccountId,
         search: searchQuery,
+        status: txFilter,
+        sortBy: sortField,
+        sortOrder,
         page: txPage,
         limit: LIMIT
       };
       const txData = await getTransactions(filters);
       setTransactions(txData.transactions || []);
-      setTxTotalPages(Math.ceil((txData.total || 0) / LIMIT));
+      setTxTotalPages(Math.max(1, Math.ceil((txData.total || 0) / LIMIT)));
     } catch (err) {
       console.error("Failed to load transactions:", err);
     } finally {
@@ -98,12 +103,15 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
         endDate, 
         accountId: activeAccountId === null ? undefined : activeAccountId,
         search: searchQuery,
+        status: expFilter,
+        sortBy: sortField,
+        sortOrder,
         page: expPage,
         limit: LIMIT
       };
       const expData = await getExpenses(filters);
       setExpenses(expData.expenses || []);
-      setExpTotalPages(Math.ceil((expData.total || 0) / LIMIT));
+      setExpTotalPages(Math.max(1, Math.ceil((expData.total || 0) / LIMIT)));
     } catch (err) {
       console.error("Failed to load expenses:", err);
     } finally {
@@ -132,20 +140,20 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
     await Promise.all([loadTransactions(silent), loadExpenses(silent), loadSummary(silent)]);
   };
 
-  // Filters / account / dates changed -> reload everything
+  // Filters / account / dates / sort changed -> reload everything
   useEffect(() => {
     loadGridData(false);
-  }, [startDate, endDate, activeAccountId, searchQuery]);
+  }, [startDate, endDate, activeAccountId, searchQuery, sortField, sortOrder]);
 
-  // Page changed on transactions -> only reload transactions
+  // Page or status filter changed on transactions -> reload transactions
   useEffect(() => {
     loadTransactions(false);
-  }, [txPage]);
+  }, [txPage, txFilter]);
 
-  // Page changed on expenses -> only reload expenses
+  // Page or status filter changed on expenses -> reload expenses
   useEffect(() => {
     loadExpenses(false);
-  }, [expPage]);
+  }, [expPage, expFilter]);
 
   // Real-time live background event listeners
   useLiveEvent("TRANSACTIONS_UPDATED", () => {
@@ -170,6 +178,13 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
       setExpFilter("NEEDS_ATTENTION");
     }
   }, [viewUnlinkedTrigger]);
+
+  useEffect(() => {
+    if (viewUncategorizedTrigger && viewUncategorizedTrigger > 0) {
+      setTxFilter("UNCATEGORIZED");
+      setExpFilter("UNCATEGORIZED");
+    }
+  }, [viewUncategorizedTrigger]);
 
   // Reset drawer if resized to desktop
   useEffect(() => {
@@ -217,8 +232,8 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
       setShowAddTx(false);
       setTxForm({ transactionType: 'DEBIT' });
       loadGridData();
-    } catch {
-      await alert({ title: "Error", message: "Failed to create transaction" });
+    } catch (err: any) {
+      await alert({ title: "Error", message: err.data?.error || err.message || "Failed to create transaction", variant: "danger" });
     }
     finally { setIsSaving(false); }
   };
@@ -235,8 +250,15 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
       const primaryChecking = accounts.find(a => a.code === '1010' && a.active);
       if (primaryChecking) defaultBankId = primaryChecking.id;
     }
-    setTxForm({ transactionType: 'DEBIT', chartAccountId: defaultBankId });
+    const todayStr = new Date().toISOString().split('T')[0];
+    setTxForm({ date: todayStr, transactionType: 'DEBIT', chartAccountId: defaultBankId });
     setShowAddTx(true);
+  };
+
+  const handleOpenAddExpense = () => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    setExpenseForm({ timestamp: todayStr, date: todayStr, tender: 'card' });
+    setShowAddExpense(true);
   };
 
   const handleCreateExpense = async () => {
@@ -261,12 +283,19 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
         timestamp: new Date(dateField).toISOString()
       };
       if (payload.date) payload.date = new Date(payload.date).toISOString();
-      await createExpense(payload as any);
+      const createdExpense = await createExpense(payload as any);
+      if (expenseForm.receiptFile && createdExpense?.id) {
+        try {
+          await uploadReceiptToExpense(createdExpense.id, expenseForm.receiptFile);
+        } catch (uploadErr) {
+          console.error("Failed to upload attached receipt:", uploadErr);
+        }
+      }
       setShowAddExpense(false);
       setExpenseForm({ tender: 'card' });
       loadGridData();
-    } catch {
-      await alert({ title: "Error", message: "Failed to create expense" });
+    } catch (err: any) {
+      await alert({ title: "Error", message: err.data?.error || err.message || "Failed to create expense", variant: "danger" });
     }
     finally { setIsSaving(false); }
   };
@@ -429,25 +458,33 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
 
       {/* GRID */}
       <div 
-        className="flex-1 overflow-hidden flex flex-col relative z-20 bg-[#0a0a0a] shadow-[0_-10px_40px_rgba(0,0,0,0.5)] lg:shadow-none transition-none"
+        className="flex-1 overflow-hidden flex flex-col relative z-20 bg-[#0a0a0a] shadow-[0_-10px_40px_rgba(0,0,0,0.5)] lg:shadow-none transition-[margin-top] duration-150 ease-out"
         style={{
-          marginTop: `-${drawerOffset}px`
+          marginTop: `-${Math.min(220, Math.max(0, drawerOffset))}px`
         }}
       >
         {/* Mobile Tabs & Drag Handle */}
         <div 
-          className="lg:hidden h-5 w-full bg-[#121212] flex items-center justify-center cursor-row-resize border-t border-white/10 shrink-0 touch-none relative z-10"
+          className="lg:hidden h-6 w-full bg-[#121212] flex items-center justify-center cursor-row-resize border-t border-white/10 shrink-0 touch-none relative z-10"
+          title="Drag or tap to expand/collapse view"
+          onClick={() => setDrawerOffset((prev) => (prev > 50 ? 0 : 200))}
           onTouchStart={(e) => {
             const startY = e.touches[0].clientY;
             const startOffset = drawerOffset;
-            const onMove = (e: TouchEvent) => setDrawerOffset(Math.min(startOffset + startY - 80, Math.max(0, startOffset + (startY - e.touches[0].clientY))));
+            const onMove = (e: TouchEvent) => {
+              const delta = startY - e.touches[0].clientY;
+              setDrawerOffset(Math.min(220, Math.max(0, startOffset + delta)));
+            };
             const onEnd = () => { document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onEnd); };
             document.addEventListener('touchmove', onMove); document.addEventListener('touchend', onEnd);
           }}
           onMouseDown={(e) => {
             const startY = e.clientY;
             const startOffset = drawerOffset;
-            const onMove = (e: MouseEvent) => setDrawerOffset(Math.min(startOffset + startY - 80, Math.max(0, startOffset + (startY - e.clientY))));
+            const onMove = (e: MouseEvent) => {
+              const delta = startY - e.clientY;
+              setDrawerOffset(Math.min(220, Math.max(0, startOffset + delta)));
+            };
             const onEnd = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onEnd); };
             document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onEnd);
           }}
@@ -485,20 +522,21 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
                 <div className="w-auto shrink-0">
                   <Select
                     value={expFilter}
-                    onChange={e => setExpFilter(e.target.value)}
+                    onChange={e => { setExpFilter(e.target.value); setExpPage(1); }}
                     className="py-1.5! text-xs! whitespace-nowrap"
                     autoWidth
                     dropdownAlign="right"
                   >
                     <option value="ALL">All</option>
                     <option value="NEEDS_ATTENTION">Needs Attention</option>
+                    <option value="UNCATEGORIZED">Uncategorized</option>
                     <option value="UNLINKED">Unlinked</option>
                     <option value="BALANCED">Balanced</option>
                     <option value="PARTIALLY_ALLOCATED">Under-Allocated</option>
                     <option value="OVER_ALLOCATED">Over-Allocated</option>
                   </Select>
                 </div>
-                <Button variant="secondary" onClick={() => setShowAddExpense(true)} title="Add Expense" className="p-1.5!" size="sm">
+                <Button variant="secondary" onClick={handleOpenAddExpense} title="Add Expense" className="p-1.5!" size="sm">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
                 </Button>
               </div>
@@ -532,13 +570,14 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
                 <div className="w-auto shrink-0">
                   <Select
                     value={txFilter}
-                    onChange={e => setTxFilter(e.target.value)}
+                    onChange={e => { setTxFilter(e.target.value); setTxPage(1); }}
                     className="py-1.5! text-xs! whitespace-nowrap"
                     autoWidth
                     dropdownAlign="right"
                   >
                     <option value="ALL">All</option>
                     <option value="NEEDS_ATTENTION">Needs Attention</option>
+                    <option value="UNCATEGORIZED">Uncategorized</option>
                     <option value="UNLINKED">Unlinked</option>
                     <option value="BALANCED">Balanced</option>
                     <option value="PARTIALLY_ALLOCATED">Under-Allocated</option>
@@ -567,7 +606,12 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
         </div>
       </div>
 
-      <DetailDrawer type={drawerConfig.type} id={drawerConfig.id} onClose={() => { setDrawerConfig({ type: null, id: null }); loadGridData(); onItemsChanged?.(); }} />
+      <DetailDrawer 
+        type={drawerConfig.type} 
+        id={drawerConfig.id} 
+        onClose={() => { setDrawerConfig({ type: null, id: null }); loadGridData(); onItemsChanged?.(); }}
+        onCreateRule={onCreateRule}
+      />
 
       {/* ADD TRANSACTION MODAL */}
       <Modal isOpen={showAddTx} onClose={() => setShowAddTx(false)} title="Add Transaction" footer={

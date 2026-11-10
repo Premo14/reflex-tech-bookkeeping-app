@@ -4,23 +4,41 @@ import { Button } from "./ui/Button";
 import { Badge } from "./ui/Badge";
 import { Input } from "./ui/Input";
 import { updateSettings, browseHostDirectories } from "../services/api";
+import BankRulesTab from "./BankRulesTab";
 
 interface AppSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   settings: Record<string, string>;
   refreshSettings: () => void;
+  initialTab?: 'storage' | 'rules';
+  initialRuleData?: {
+    name?: string;
+    descriptionKeyword?: string;
+    categoryAccountId?: number | null;
+  } | null;
+  onRulesApplied?: () => void;
 }
 
-export default function AppSettingsModal({ isOpen, onClose, settings, refreshSettings }: AppSettingsModalProps) {
+export default function AppSettingsModal({
+  isOpen,
+  onClose,
+  settings,
+  refreshSettings,
+  initialTab = 'storage',
+  initialRuleData,
+  onRulesApplied,
+}: AppSettingsModalProps) {
   const currentPath = settings["DocumentDropboxPath"] || "./document-data";
+  const hostHome = settings["HostHomePath"] || "/Users/aj";
+  const [activeTab, setActiveTab] = useState<'storage' | 'rules'>(initialTab);
   const [folderPath, setFolderPath] = useState(currentPath);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Host folder browser state
   const [showBrowser, setShowBrowser] = useState(false);
-  const [browserPath, setBrowserPath] = useState("/home/premo");
+  const [browserPath, setBrowserPath] = useState(hostHome);
   const [browserParent, setBrowserParent] = useState("");
   const [browserDirs, setBrowserDirs] = useState<string[]>([]);
   const [isLoadingDirs, setIsLoadingDirs] = useState(false);
@@ -31,9 +49,9 @@ export default function AppSettingsModal({ isOpen, onClose, settings, refreshSet
       return './document-data';
     }
     if (trimmed.startsWith('~')) {
-      trimmed = trimmed.replace(/^~/, '/home/premo');
+      trimmed = trimmed.replace(/^~/, hostHome);
     }
-    if (trimmed.startsWith('home/')) {
+    if (trimmed.startsWith('home/') || trimmed.startsWith('Users/')) {
       trimmed = '/' + trimmed;
     }
     if (trimmed.endsWith('/document-data')) {
@@ -48,14 +66,15 @@ export default function AppSettingsModal({ isOpen, onClose, settings, refreshSet
 
   useEffect(() => {
     if (isOpen) {
+      setActiveTab(initialTab || 'storage');
       setFolderPath(settings["DocumentDropboxPath"] || "./document-data");
       setStatusMessage(null);
       setShowBrowser(false);
     }
-  }, [isOpen, settings]);
+  }, [isOpen, settings, initialTab]);
 
   const handleOpenBrowser = async (startPath?: string) => {
-    const p = startPath || (folderPath.startsWith('/') || folderPath.startsWith('home/') ? folderPath.replace(/\/document-data$/, '') : '/home/premo');
+    const p = startPath || (folderPath.startsWith('/') || folderPath.startsWith('home/') || folderPath.startsWith('Users/') ? folderPath.replace(/\/document-data$/, '') : hostHome);
     setShowBrowser(true);
     await navigateBrowser(p);
   };
@@ -68,9 +87,9 @@ export default function AppSettingsModal({ isOpen, onClose, settings, refreshSet
       setBrowserParent(res.parentPath);
       setBrowserDirs(res.directories || []);
     } catch {
-      // Fallback to /home/premo
+      // Fallback to hostHome
       try {
-        const fallback = await browseHostDirectories('/home/premo');
+        const fallback = await browseHostDirectories(hostHome);
         setBrowserPath(fallback.currentPath);
         setBrowserParent(fallback.parentPath);
         setBrowserDirs(fallback.directories || []);
@@ -124,28 +143,75 @@ export default function AppSettingsModal({ isOpen, onClose, settings, refreshSet
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37.996.608 2.296.07 2.572-1.065z" />
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
-          <span className="font-bold text-white">Application Settings</span>
+          <span className="font-bold text-white">Settings</span>
         </div>
       }
-      maxWidth="xl"
-      bodyClassName="p-5 overflow-y-auto flex-1 min-h-0 custom-scrollbar"
+      maxWidth="4xl"
+      bodyClassName="p-5 overflow-y-auto flex-1 min-h-0 custom-scrollbar max-h-[85vh]"
       footer={
-        <div className="flex justify-end w-full gap-2.5">
-          <Button variant="secondary" onClick={onClose}>
-            Close
-          </Button>
-          <Button
-            variant="primary"
-            onClick={handleSave}
-            disabled={isSaving || !isChanged}
-          >
-            {isSaving ? "Moving Folder..." : isChanged ? "Move Folder & Connect" : "Location Connected"}
-          </Button>
-        </div>
+        activeTab === 'storage' ? (
+          <div className="flex justify-end w-full gap-2.5">
+            <Button variant="secondary" onClick={onClose}>
+              Close
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleSave}
+              disabled={isSaving || !isChanged}
+            >
+              {isSaving ? "Moving Folder..." : isChanged ? "Move Folder & Connect" : "Location Connected"}
+            </Button>
+          </div>
+        ) : (
+          <div className="flex justify-end w-full">
+            <Button variant="secondary" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        )
       }
     >
       <div className="space-y-4">
-        {/* Document Intake & Storage Card */}
+        {/* Navigation Tabs */}
+        <div className="flex border-b border-white/10 gap-1 pb-1">
+          <button
+            type="button"
+            onClick={() => setActiveTab('storage')}
+            className={`px-4 py-2 text-xs font-bold transition-all border-b-2 flex items-center gap-2 cursor-pointer ${
+              activeTab === 'storage'
+                ? 'border-emerald-500 text-emerald-400 bg-white/5 rounded-t-lg'
+                : 'border-transparent text-zinc-400 hover:text-white hover:bg-white/5 rounded-t-lg'
+            }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
+            Storage & System
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('rules')}
+            className={`px-4 py-2 text-xs font-bold transition-all border-b-2 flex items-center gap-2 cursor-pointer ${
+              activeTab === 'rules'
+                ? 'border-emerald-500 text-emerald-400 bg-white/5 rounded-t-lg'
+                : 'border-transparent text-zinc-400 hover:text-white hover:bg-white/5 rounded-t-lg'
+            }`}
+          >
+            <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            Bank Rules
+          </button>
+        </div>
+
+        {activeTab === 'rules' ? (
+          <BankRulesTab
+            initialRuleData={initialRuleData}
+            onRulesApplied={onRulesApplied}
+          />
+        ) : (
+          <div className="space-y-4">
+            {/* Document Intake & Storage Card */}
         <div className="p-4 rounded-xl bg-zinc-950 border border-white/10 space-y-3.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
@@ -168,7 +234,7 @@ export default function AppSettingsModal({ isOpen, onClose, settings, refreshSet
                   type="text"
                   value={folderPath}
                   onChange={(e) => setFolderPath(e.target.value)}
-                  placeholder="/home/premo/Desktop"
+                  placeholder={`${hostHome}/Desktop`}
                   className="font-mono text-xs flex-1 break-all"
                 />
                 <Button
@@ -210,28 +276,28 @@ export default function AppSettingsModal({ isOpen, onClose, settings, refreshSet
                   <span className="text-zinc-500 text-[10px] uppercase font-bold pr-1">Jump to:</span>
                   <button
                     type="button"
-                    onClick={() => navigateBrowser('/home/premo/Desktop')}
+                    onClick={() => navigateBrowser(`${hostHome}/Desktop`)}
                     className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
                   >
                     Desktop
                   </button>
                   <button
                     type="button"
-                    onClick={() => navigateBrowser('/home/premo/Documents')}
+                    onClick={() => navigateBrowser(`${hostHome}/Documents`)}
                     className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
                   >
                     Documents
                   </button>
                   <button
                     type="button"
-                    onClick={() => navigateBrowser('/home/premo/Downloads')}
+                    onClick={() => navigateBrowser(`${hostHome}/Downloads`)}
                     className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
                   >
                     Downloads
                   </button>
                   <button
                     type="button"
-                    onClick={() => navigateBrowser('/home/premo')}
+                    onClick={() => navigateBrowser(hostHome)}
                     className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
                   >
                     Home (~)
@@ -340,7 +406,7 @@ export default function AppSettingsModal({ isOpen, onClose, settings, refreshSet
           )}
 
           {/* Subdirectories Preview (Non-redundant, explains layout) */}
-          <div className="grid grid-cols-2 gap-2.5 pt-0.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-0.5">
             <div className="p-2.5 bg-zinc-900 border border-white/5 rounded-lg space-y-1">
               <span className="block text-[10px] font-bold text-emerald-400 uppercase tracking-wider">
                 📥 Incoming Folder
@@ -349,7 +415,7 @@ export default function AppSettingsModal({ isOpen, onClose, settings, refreshSet
                 /inbox
               </p>
               <p className="text-[11px] text-zinc-500 leading-snug">
-                Drop OFX, QFX, PNG, JPG, or PDF files here
+                Drop OFX, QFX, PNG, JPG, HEIC, or PDF files here
               </p>
             </div>
             <div className="p-2.5 bg-zinc-900 border border-white/5 rounded-lg space-y-1">
@@ -382,7 +448,7 @@ export default function AppSettingsModal({ isOpen, onClose, settings, refreshSet
           <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
             General Preferences
           </span>
-          <div className="grid grid-cols-2 gap-2.5 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
             <div className="p-2.5 bg-zinc-900 border border-white/5 rounded-lg space-y-0.5">
               <span className="text-zinc-500 font-semibold uppercase text-[10px]">Accounting Basis</span>
               <p className="font-bold text-zinc-200">Single-Entry Cash Basis</p>
@@ -396,6 +462,8 @@ export default function AppSettingsModal({ isOpen, onClose, settings, refreshSet
           </div>
         </div>
       </div>
-    </Modal>
+    )}
+  </div>
+</Modal>
   );
 }

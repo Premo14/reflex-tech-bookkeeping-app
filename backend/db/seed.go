@@ -7,10 +7,11 @@ import (
 
 // seedEntry is a helper struct for defining the default COA seed data.
 type seedEntry struct {
-	Code        string
-	Name        string
-	Type        string
-	Description string
+	Code          string
+	Name          string
+	Type          string
+	Description   string
+	ScheduleCLine string
 }
 
 // defaultAccounts is the standard small-business chart of accounts that gets seeded
@@ -45,23 +46,23 @@ var defaultAccounts = []seedEntry{
 	{Code: "3020", Name: "Retained Earnings", Type: "EQUITY", Description: "Cumulative profit kept in the business"},
 	{Code: "3110", Name: "Owner's Draw", Type: "EQUITY", Description: "Distributions and withdrawals by owner"},
 
-	// Revenue
-	{Code: "4010", Name: "Sales Revenue", Type: "REVENUE", Description: "Income from product sales"},
-	{Code: "4110", Name: "Service Fees", Type: "REVENUE", Description: "Income from services rendered"},
-	{Code: "4210", Name: "Interest Income", Type: "REVENUE", Description: "Interest earned on accounts"},
+	// Revenue (IRS Schedule C Form 1040 Part I)
+	{Code: "4010", Name: "Sales Revenue", Type: "REVENUE", Description: "Income from product sales", ScheduleCLine: "Line 1 - Gross receipts or sales"},
+	{Code: "4110", Name: "Service Fees", Type: "REVENUE", Description: "Income from services rendered", ScheduleCLine: "Line 1 - Gross receipts or sales"},
+	{Code: "4210", Name: "Interest Income", Type: "REVENUE", Description: "Interest earned on accounts", ScheduleCLine: "Line 6 - Other income"},
 
-	// Expenses
-	{Code: "5010", Name: "Rent", Type: "EXPENSE", Description: "Office or workspace rent"},
-	{Code: "5020", Name: "Payroll", Type: "EXPENSE", Description: "Employee wages and salaries"},
-	{Code: "5030", Name: "Utilities", Type: "EXPENSE", Description: "Electricity, water, internet, etc."},
-	{Code: "5050", Name: "Office Supplies", Type: "EXPENSE", Description: "Stationery, printer supplies, etc."},
-	{Code: "5080", Name: "Insurance", Type: "EXPENSE", Description: "Business insurance premiums"},
-	{Code: "5090", Name: "Meals & Entertainment", Type: "EXPENSE", Description: "Client meals and business entertainment"},
-	{Code: "5110", Name: "Professional Services", Type: "EXPENSE", Description: "Accountant, lawyer, consultant fees"},
-	{Code: "5210", Name: "Software & Subscriptions", Type: "EXPENSE", Description: "SaaS tools, software licenses"},
-	{Code: "5310", Name: "Advertising", Type: "EXPENSE", Description: "Marketing and advertising costs"},
-	{Code: "5410", Name: "Travel", Type: "EXPENSE", Description: "Business travel and transportation"},
-	{Code: "5910", Name: "Bank Fees", Type: "EXPENSE", Description: "Bank service charges and fees"},
+	// Expenses (IRS Schedule C Form 1040 Part II)
+	{Code: "5010", Name: "Rent", Type: "EXPENSE", Description: "Office or workspace rent", ScheduleCLine: "Line 20b - Rent or lease (other business property)"},
+	{Code: "5020", Name: "Payroll", Type: "EXPENSE", Description: "Employee wages and salaries", ScheduleCLine: "Line 26 - Wages"},
+	{Code: "5030", Name: "Utilities", Type: "EXPENSE", Description: "Electricity, water, internet, etc.", ScheduleCLine: "Line 25 - Utilities"},
+	{Code: "5050", Name: "Office Supplies", Type: "EXPENSE", Description: "Stationery, printer supplies, etc.", ScheduleCLine: "Line 18 - Office expense"},
+	{Code: "5080", Name: "Insurance", Type: "EXPENSE", Description: "Business insurance premiums", ScheduleCLine: "Line 15 - Insurance (other than health)"},
+	{Code: "5090", Name: "Meals & Entertainment", Type: "EXPENSE", Description: "Client meals and business entertainment", ScheduleCLine: "Line 24b - Deductible meals (50%)"},
+	{Code: "5110", Name: "Professional Services", Type: "EXPENSE", Description: "Accountant, lawyer, consultant fees", ScheduleCLine: "Line 17 - Legal and professional services"},
+	{Code: "5210", Name: "Software & Subscriptions", Type: "EXPENSE", Description: "SaaS tools, software licenses", ScheduleCLine: "Line 27a - Other expenses (Software & online services)"},
+	{Code: "5310", Name: "Advertising", Type: "EXPENSE", Description: "Marketing and advertising costs", ScheduleCLine: "Line 8 - Advertising"},
+	{Code: "5410", Name: "Travel", Type: "EXPENSE", Description: "Business travel and transportation", ScheduleCLine: "Line 24a - Travel"},
+	{Code: "5910", Name: "Bank Fees", Type: "EXPENSE", Description: "Bank service charges and fees", ScheduleCLine: "Line 27a - Other expenses (Bank & merchant fees)"},
 }
 
 // SeedChartOfAccounts inserts the default accounts only when the chart_accounts table
@@ -76,12 +77,13 @@ func SeedChartOfAccounts() {
 	log.Println("Seeding default Chart of Accounts...")
 	for _, entry := range defaultAccounts {
 		account := models.ChartAccount{
-			Code:        entry.Code,
-			Name:        entry.Name,
-			Type:        entry.Type,
-			Description: entry.Description,
-			Active:      true,
-			IsDefault:   true,
+			Code:          entry.Code,
+			Name:          entry.Name,
+			Type:          entry.Type,
+			Description:   entry.Description,
+			ScheduleCLine: entry.ScheduleCLine,
+			Active:        true,
+			IsDefault:     true,
 		}
 		if err := DB.Create(&account).Error; err != nil {
 			log.Printf("Failed to seed account %s (%s): %v\n", entry.Code, entry.Name, err)

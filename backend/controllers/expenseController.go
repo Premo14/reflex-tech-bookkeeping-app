@@ -30,8 +30,10 @@ func GetExpense(c fiber.Ctx) error {
 	db.DB.Joins("JOIN expense_bank_transactions ebt ON ebt.bank_transaction_id = bank_transactions.id").
 		Where("ebt.expense_id = ? AND ebt.status = ?", expense.ID, "confirmed").
 		Preload("ChartAccount").Preload("Category").Preload("Expenses", func(db *gorm.DB) *gorm.DB {
-			return db.Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").Where("ebt.status = ?", "confirmed")
-		}).
+			return db.Where("expenses.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = ?)", "confirmed").
+				Order("expenses.timestamp ASC, expenses.id ASC")
+		}).Preload("Expenses.Receipts").Preload("Expenses.ChartAccount").
+		Order("bank_transactions.date ASC, bank_transactions.id ASC").
 		Find(&confirmedTransactions)
 
 	// Load suggested transactions — these are scoring system guesses awaiting user action.
@@ -67,13 +69,15 @@ func ValidateExpenseCategory(acc *models.ChartAccount) error {
 // Optional chartAccountId can be provided to categorize the expense.
 func CreateExpense(c fiber.Ctx) error {
 	type createInput struct {
-		Timestamp      time.Time `json:"timestamp"`
-		Vendor         string    `json:"vendor"`
-		Description    string    `json:"description"`
-		Amount         float64   `json:"amount"`
-		Tender         string    `json:"tender"`
-		ChartAccountID *uint     `json:"chartAccountId"`
-		Notes          string    `json:"notes"`
+		Date           *string `json:"date"`
+		Timestamp      *string `json:"timestamp"`
+		Vendor         string  `json:"vendor"`
+		Description    string  `json:"description"`
+		Amount         float64 `json:"amount"`
+		TaxAmount      float64 `json:"taxAmount"`
+		Tender         string  `json:"tender"`
+		ChartAccountID *uint   `json:"chartAccountId"`
+		Notes          string  `json:"notes"`
 	}
 
 	var input createInput
@@ -81,8 +85,27 @@ func CreateExpense(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid input"})
 	}
 
+	var expenseTime time.Time
+	dateStr := ""
+	if input.Timestamp != nil && *input.Timestamp != "" {
+		dateStr = *input.Timestamp
+	} else if input.Date != nil && *input.Date != "" {
+		dateStr = *input.Date
+	}
+
+	if dateStr != "" {
+		if t, err := time.Parse(time.RFC3339, dateStr); err == nil {
+			expenseTime = t
+		} else if t, err := time.Parse("2006-01-02", dateStr); err == nil {
+			expenseTime = t
+		}
+	}
+	if expenseTime.IsZero() {
+		expenseTime = time.Now().UTC()
+	}
+
 	// Guard against creating expenses in a closed period
-	if utils.IsDateInClosedPeriod(input.Timestamp) {
+	if utils.IsDateInClosedPeriod(expenseTime) {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 			"error": "Cannot create an expense in a closed accounting period.",
 		})
@@ -99,16 +122,23 @@ func CreateExpense(c fiber.Ctx) error {
 		}
 	}
 
+	normTender := utils.NormalizeTender(input.Tender)
+	initialAllocation := "UNLINKED"
+	if utils.IsCashTender(normTender) {
+		initialAllocation = "BALANCED"
+	}
+
 	expense := models.Expense{
-		Timestamp:      input.Timestamp,
-		Vendor:         input.Vendor,
-		Description:    input.Description,
-		Amount:         math.Abs(input.Amount), // always store positive amounts for expenses
-		Tender:         utils.NormalizeTender(input.Tender),
-		ChartAccountID: input.ChartAccountID,
-		Notes:          input.Notes,
-		IsManual:       true,
-		AllocationStatus: "UNLINKED",
+		Timestamp:        expenseTime,
+		Vendor:           input.Vendor,
+		Description:      input.Description,
+		Amount:           math.Abs(input.Amount), // always store positive amounts for expenses
+		TaxAmount:        math.Abs(input.TaxAmount),
+		Tender:           normTender,
+		ChartAccountID:   input.ChartAccountID,
+		Notes:            input.Notes,
+		IsManual:         true,
+		AllocationStatus: initialAllocation,
 		ReviewStatus:     "APPROVED",
 	}
 
@@ -141,7 +171,7 @@ func GetExpenses(c fiber.Ctx) error {
 		if parsedID, err := strconv.ParseUint(accountId, 10, 32); err == nil {
 			accountIDs := GetAccountAndDescendantIDs(uint(parsedID))
 			query = query.Where(
-				"chart_account_id IN ? OR id IN (SELECT ebt.expense_id FROM expense_bank_transactions ebt JOIN bank_transactions bt ON bt.id = ebt.bank_transaction_id WHERE bt.chart_account_id IN ?)",
+				"chart_account_id IN ? OR id IN (SELECT ebt.expense_id FROM expense_bank_transactions ebt JOIN bank_transactions bt ON bt.id = ebt.bank_transaction_id WHERE ebt.status = 'confirmed' AND bt.chart_account_id IN ?)",
 				accountIDs, accountIDs,
 			)
 		} else {
@@ -156,6 +186,22 @@ func GetExpenses(c fiber.Ctx) error {
 		} else {
 			query = query.Where("vendor ILIKE ? OR description ILIKE ?", "%"+search+"%", "%"+search+"%")
 		}
+	}
+
+	statusFilter := strings.ToUpper(strings.TrimSpace(c.Query("status")))
+	switch statusFilter {
+	case "NEEDS_ATTENTION":
+		query = query.Where(notCashClause).Where(needsAttentionClause)
+	case "UNLINKED":
+		query = query.Where(notCashClause).Where("allocation_status IS NULL OR allocation_status = '' OR allocation_status = 'UNLINKED'")
+	case "BALANCED":
+		query = query.Where("allocation_status = 'BALANCED' OR LOWER(COALESCE(tender, '')) = 'cash'")
+	case "PARTIALLY_ALLOCATED":
+		query = query.Where("allocation_status = 'PARTIALLY_ALLOCATED'")
+	case "OVER_ALLOCATED":
+		query = query.Where("allocation_status = 'OVER_ALLOCATED'")
+	case "UNCATEGORIZED":
+		query = query.Where("chart_account_id IS NULL")
 	}
 
 	pageStr := c.Query("page", "1")
@@ -173,8 +219,33 @@ func GetExpenses(c fiber.Ctx) error {
 	var total int64
 	query.Count(&total)
 
-	// Preload BankTransactions so the frontend knows if it's linked
-	query.Order("timestamp DESC").Preload("Receipts").Preload("BankTransactions").Preload("BankTransactions.Category").Preload("ChartAccount").Offset(offset).Limit(limit).Find(&expenses)
+	sortBy := strings.ToLower(strings.TrimSpace(c.Query("sortBy", "date")))
+	sortOrder := strings.ToUpper(strings.TrimSpace(c.Query("sortOrder", "desc")))
+	if sortOrder != "ASC" {
+		sortOrder = "DESC"
+	}
+	secondaryOrder := "timestamp " + sortOrder
+
+	priorityOrder := `CASE
+		WHEN COALESCE(review_status, '') IN ('WARNINGS_IGNORED', 'IGNORED') THEN 5
+		WHEN COALESCE(allocation_status, 'UNLINKED') = 'UNLINKED' AND has_suggestions = true THEN 0
+		WHEN allocation_status = 'OVER_ALLOCATED' THEN 1
+		WHEN allocation_status = 'PARTIALLY_ALLOCATED' THEN 2
+		WHEN LOWER(COALESCE(tender, '')) != 'cash' AND COALESCE(allocation_status, 'UNLINKED') = 'UNLINKED' THEN 3
+		ELSE 4
+	END ASC, ` + secondaryOrder
+
+	orderClause := priorityOrder
+	if sortBy == "amount" {
+		orderClause = "amount " + sortOrder + ", timestamp DESC"
+	} else if sortOrder == "ASC" {
+		orderClause = "timestamp ASC"
+	}
+
+	// Preload confirmed BankTransactions so the frontend knows if it's linked
+	query.Order(orderClause).Preload("Receipts").Preload("BankTransactions", func(db *gorm.DB) *gorm.DB {
+		return db.Where("bank_transactions.id IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = ?)", "confirmed")
+	}).Preload("BankTransactions.Category").Preload("ChartAccount").Offset(offset).Limit(limit).Find(&expenses)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":   "success",
@@ -237,7 +308,15 @@ func UpdateExpense(c fiber.Ctx) error {
 		updates["currency_code"] = *input.CurrencyCode
 	}
 	if input.Tender != nil {
-		updates["tender"] = utils.NormalizeTender(*input.Tender)
+		normTender := utils.NormalizeTender(*input.Tender)
+		updates["tender"] = normTender
+		if utils.IsCashTender(normTender) {
+			updates["allocation_status"] = "BALANCED"
+			db.DB.Where("expense_id = ?", expense.ID).Delete(&models.ExpenseBankTransaction{})
+		} else if utils.IsCashTender(expense.Tender) {
+			// Changed from cash to non-cash: becomes UNLINKED
+			updates["allocation_status"] = "UNLINKED"
+		}
 	}
 	if input.Notes != nil {
 		updates["notes"] = *input.Notes
@@ -255,12 +334,12 @@ func UpdateExpense(c fiber.Ctx) error {
 			}
 			updates["chart_account_id"] = input.ChartAccountID
 
-			// Sync category to linked bank transaction ONLY if it's a 1:1 link (not part of a 1:N split)
-			var parentTxID uint
-			err := db.DB.Model(&models.ExpenseBankTransaction{}).
+			// Sync category to linked bank transactions (1:1 or N:1) as long as the transaction isn't a 1:N split across multiple expenses
+			var parentTxIDs []uint
+			db.DB.Model(&models.ExpenseBankTransaction{}).
 				Where("expense_id = ? AND status = 'confirmed'", expense.ID).
-				Select("bank_transaction_id").Row().Scan(&parentTxID)
-			if err == nil && parentTxID > 0 {
+				Pluck("bank_transaction_id", &parentTxIDs)
+			for _, parentTxID := range parentTxIDs {
 				var siblingsCount int64
 				db.DB.Model(&models.ExpenseBankTransaction{}).
 					Where("bank_transaction_id = ? AND status = 'confirmed'", parentTxID).
@@ -272,11 +351,11 @@ func UpdateExpense(c fiber.Ctx) error {
 		} else {
 			// Explicit null or 0 clears category
 			updates["chart_account_id"] = nil
-			var parentTxID uint
-			err := db.DB.Model(&models.ExpenseBankTransaction{}).
+			var parentTxIDs []uint
+			db.DB.Model(&models.ExpenseBankTransaction{}).
 				Where("expense_id = ? AND status = 'confirmed'", expense.ID).
-				Select("bank_transaction_id").Row().Scan(&parentTxID)
-			if err == nil && parentTxID > 0 {
+				Pluck("bank_transaction_id", &parentTxIDs)
+			for _, parentTxID := range parentTxIDs {
 				var siblingsCount int64
 				db.DB.Model(&models.ExpenseBankTransaction{}).
 					Where("bank_transaction_id = ? AND status = 'confirmed'", parentTxID).
@@ -350,4 +429,196 @@ func DeleteExpense(c fiber.Ctx) error {
 	utils.RunReconciliation()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success"})
+}
+
+type SplitLineInput struct {
+	Amount          float64 `json:"amount"`
+	ChartAccountID  *uint   `json:"chartAccountId"`
+	Description     string  `json:"description"`
+	Vendor          string  `json:"vendor"`
+	IsPersonal      bool    `json:"isPersonal"`
+	ExclusionReason string  `json:"exclusionReason"`
+}
+
+type SplitExpenseInput struct {
+	Splits []SplitLineInput `json:"splits"`
+}
+
+// SplitExpense splits an existing expense (receipt) into multiple distinct items (e.g. for co-mingled personal/business purchases).
+func SplitExpense(c fiber.Ctx) error {
+	id := c.Params("id")
+	var expense models.Expense
+
+	if err := db.DB.Preload("Receipts").First(&expense, "id = ?", id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Expense not found"})
+	}
+
+	if utils.IsDateInClosedPeriod(expense.Timestamp) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Cannot split an expense in a closed accounting period.",
+		})
+	}
+
+	var input SplitExpenseInput
+	if err := c.Bind().JSON(&input); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid input"})
+	}
+
+	if len(input.Splits) < 2 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "A receipt split requires at least two lines",
+		})
+	}
+
+	var totalSplit float64
+	for i, s := range input.Splits {
+		if s.Amount <= 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": fmt.Sprintf("Split line %d must have an amount greater than 0", i+1),
+			})
+		}
+		totalSplit += s.Amount
+	}
+
+	if math.Abs(totalSplit-expense.Amount) > 0.015 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fmt.Sprintf("Total of split lines ($%.2f) does not match receipt total ($%.2f)", totalSplit, expense.Amount),
+		})
+	}
+
+	// Begin DB transaction
+	tx := db.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// Check if this expense is already linked to bank transactions
+	var existingLinks []models.ExpenseBankTransaction
+	tx.Where("expense_id = ?", expense.ID).Find(&existingLinks)
+
+	originalTotal := expense.Amount
+	originalTax := expense.TaxAmount
+
+	// Pre-calculate tax distribution across splits so the sum matches originalTax to the exact cent
+	splitTaxes := make([]float64, len(input.Splits))
+	if originalTotal > 0 && originalTax != 0 {
+		var allocatedTaxSum float64
+		for i := 0; i < len(input.Splits)-1; i++ {
+			t := roundCents((input.Splits[i].Amount / originalTotal) * originalTax)
+			splitTaxes[i] = t
+			allocatedTaxSum += t
+		}
+		// Remainder allocated to the final line to avoid penny drift
+		splitTaxes[len(input.Splits)-1] = roundCents(originalTax - allocatedTaxSum)
+	}
+
+	// 1. Update the original expense to become Split Line 1
+	first := input.Splits[0]
+	expense.Amount = first.Amount
+	if first.Description != "" {
+		expense.Description = strings.TrimSpace(first.Description)
+	}
+	if first.Vendor != "" {
+		expense.Vendor = strings.TrimSpace(first.Vendor)
+	}
+	expense.ChartAccountID = first.ChartAccountID
+	expense.TaxAmount = splitTaxes[0]
+
+	if first.IsPersonal {
+		expense.ReviewStatus = "IGNORED"
+		expense.ExclusionReason = "PERSONAL"
+		expense.ExclusionNote = "Personal portion of split receipt"
+	}
+
+	if err := tx.Save(&expense).Error; err != nil {
+		tx.Rollback()
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update primary expense line"})
+	}
+
+	var createdExpenses []models.Expense
+
+	// 2. Create child expenses for the remaining splits
+	for i := 1; i < len(input.Splits); i++ {
+		split := input.Splits[i]
+		vendor := split.Vendor
+		if vendor == "" {
+			vendor = expense.Vendor
+		}
+		desc := split.Description
+		if desc == "" {
+			desc = fmt.Sprintf("%s (split item %d)", expense.Description, i+1)
+		}
+
+		child := models.Expense{
+			IsManual:         false,
+			Timestamp:        expense.Timestamp,
+			Vendor:           vendor,
+			Description:      desc,
+			Amount:           split.Amount,
+			TaxAmount:        splitTaxes[i],
+			CurrencyCode:     expense.CurrencyCode,
+			Tender:           expense.Tender,
+			ChartAccountID:   split.ChartAccountID,
+			AllocationStatus: expense.AllocationStatus,
+			ReviewStatus:     "APPROVED",
+			Notes:            fmt.Sprintf("Split from Expense #%d", expense.ID),
+		}
+
+		if split.IsPersonal {
+			child.ReviewStatus = "IGNORED"
+			child.ExclusionReason = "PERSONAL"
+			child.ExclusionNote = "Personal portion of split receipt"
+		}
+
+		if err := tx.Create(&child).Error; err != nil {
+			tx.Rollback()
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create child expense split"})
+		}
+
+		// Propagate bank transaction link so bank debit remains balanced
+		for _, l := range existingLinks {
+			childLink := models.ExpenseBankTransaction{
+				ExpenseID:         child.ID,
+				BankTransactionID: l.BankTransactionID,
+				Status:            l.Status,
+			}
+			if err := tx.Create(&childLink).Error; err != nil {
+				tx.Rollback()
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to link split item to bank transaction"})
+			}
+		}
+
+		// Attach shared receipt files so user can view original receipt image from child expense
+		for _, r := range expense.Receipts {
+			sharedReceipt := models.Receipt{
+				ExpenseID:   &child.ID,
+				DocumentURI: r.DocumentURI,
+				FileExt:     r.FileExt,
+				FileHash:    r.FileHash,
+			}
+			if err := tx.Create(&sharedReceipt).Error; err != nil {
+				tx.Rollback()
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to link receipt to split item"})
+			}
+		}
+
+		createdExpenses = append(createdExpenses, child)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to commit expense split"})
+	}
+
+	BroadcastEvent("EXPENSES_UPDATED", nil)
+	BroadcastEvent("SUMMARY_UPDATED", nil)
+	utils.RunReconciliation()
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status":          "success",
+		"originalExpense": expense,
+		"createdExpenses": createdExpenses,
+		"message":         fmt.Sprintf("Successfully split receipt into %d lines", len(input.Splits)),
+	})
 }

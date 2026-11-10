@@ -3,6 +3,7 @@ package controllers
 import (
 	"errors"
 	"fmt"
+	"os"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/utils"
@@ -99,9 +100,23 @@ func GetReviewQueue(c fiber.Ctx) error {
 		var oldExpIDs []uint
 		db.DB.Model(&models.Expense{}).Where("review_status = ? AND deleted_at < ?", "DELETED", purgeThreshold).Pluck("id", &oldExpIDs)
 		if len(oldExpIDs) > 0 {
+			var oldReceipts []models.Receipt
+			db.DB.Where("expense_id IN ?", oldExpIDs).Find(&oldReceipts)
+
 			db.DB.Where("expense_id IN ?", oldExpIDs).Delete(&models.ExpenseBankTransaction{})
 			db.DB.Where("expense_id IN ?", oldExpIDs).Delete(&models.Receipt{})
 			db.DB.Where("id IN ?", oldExpIDs).Delete(&models.Expense{})
+
+			// Remove physical files if no other receipt references them
+			for _, r := range oldReceipts {
+				if r.DocumentURI != "" {
+					var remainingCount int64
+					db.DB.Model(&models.Receipt{}).Where("document_uri = ?", r.DocumentURI).Count(&remainingCount)
+					if remainingCount == 0 {
+						_ = os.Remove(r.DocumentURI)
+					}
+				}
+			}
 		}
 	}
 
@@ -426,4 +441,145 @@ func reopenBooksForAllowedItems(tx *gorm.DB, allowed []GroupItem, groupID string
 		autoApproved = len(others)
 	}
 	return
+}
+
+// BatchCategorizeRequest defines the payload for batch assigning a category
+type BatchCategorizeRequest struct {
+	TransactionIDs []uint `json:"transactionIds"`
+	ExpenseIDs     []uint `json:"expenseIds"`
+	CategoryID     uint   `json:"categoryId"`
+}
+
+// BatchCategorizeItems updates the category on multiple transactions and expenses in a single atomic transaction.
+func BatchCategorizeItems(c fiber.Ctx) error {
+	var req BatchCategorizeRequest
+	if err := c.Bind().JSON(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid input"})
+	}
+
+	if len(req.TransactionIDs) == 0 && len(req.ExpenseIDs) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No items were selected."})
+	}
+
+	if req.CategoryID == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Category account is required."})
+	}
+
+	var catAccount models.ChartAccount
+	if err := db.DB.First(&catAccount, req.CategoryID).Error; err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Category account not found"})
+	}
+
+	if !catAccount.Active {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot assign an archived or inactive category."})
+	}
+
+	groupID := fmt.Sprintf("BATCH_CAT_%d", time.Now().UnixNano())
+
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		// Check for closed period violations
+		if len(req.TransactionIDs) > 0 {
+			var txs []models.BankTransaction
+			if err := tx.Where("id IN ?", req.TransactionIDs).Find(&txs).Error; err != nil {
+				return err
+			}
+			for _, t := range txs {
+				if utils.IsDateInClosedPeriod(t.Date) {
+					return fmt.Errorf("transaction %d is in a closed accounting period", t.ID)
+				}
+			}
+
+			// Update transaction category
+			if err := tx.Model(&models.BankTransaction{}).
+				Where("id IN ?", req.TransactionIDs).
+				Update("category_account_id", req.CategoryID).Error; err != nil {
+				return err
+			}
+
+			// If category is EXPENSE, sync to 1:1 linked expenses
+			if catAccount.Type == "EXPENSE" {
+				for _, tID := range req.TransactionIDs {
+					var linkedExpCount int64
+					tx.Model(&models.ExpenseBankTransaction{}).
+						Where("bank_transaction_id = ? AND status = 'confirmed'", tID).
+						Count(&linkedExpCount)
+					if linkedExpCount == 1 {
+						tx.Exec("UPDATE expenses SET chart_account_id = ? WHERE id IN (SELECT expense_id FROM expense_bank_transactions WHERE bank_transaction_id = ? AND status = 'confirmed')", req.CategoryID, tID)
+					}
+				}
+			}
+
+			// Audit logs
+			for _, tID := range req.TransactionIDs {
+				_ = tx.Create(&models.ItemAuditLog{
+					ItemType: "transaction",
+					ItemID:   tID,
+					Action:   "BATCH_CATEGORIZE",
+					Reason:   fmt.Sprintf("Category set to %s - %s", catAccount.Code, catAccount.Name),
+					GroupID:  groupID,
+				})
+			}
+		}
+
+		if len(req.ExpenseIDs) > 0 {
+			var exps []models.Expense
+			if err := tx.Where("id IN ?", req.ExpenseIDs).Find(&exps).Error; err != nil {
+				return err
+			}
+			for _, e := range exps {
+				if utils.IsDateInClosedPeriod(e.Timestamp) {
+					return fmt.Errorf("expense %d is in a closed accounting period", e.ID)
+				}
+			}
+
+			// Update expense category
+			if err := tx.Model(&models.Expense{}).
+				Where("id IN ?", req.ExpenseIDs).
+				Update("chart_account_id", req.CategoryID).Error; err != nil {
+				return err
+			}
+
+			// Sync to 1:1 linked bank transactions
+			for _, eID := range req.ExpenseIDs {
+				var parentTxIDs []uint
+				tx.Model(&models.ExpenseBankTransaction{}).
+					Where("expense_id = ? AND status = 'confirmed'", eID).
+					Pluck("bank_transaction_id", &parentTxIDs)
+				for _, parentID := range parentTxIDs {
+					var siblingCount int64
+					tx.Model(&models.ExpenseBankTransaction{}).
+						Where("bank_transaction_id = ? AND status = 'confirmed'", parentID).
+						Count(&siblingCount)
+					if siblingCount == 1 {
+						tx.Model(&models.BankTransaction{}).
+							Where("id = ?", parentID).
+							Update("category_account_id", req.CategoryID)
+					}
+				}
+			}
+
+			// Audit logs
+			for _, eID := range req.ExpenseIDs {
+				_ = tx.Create(&models.ItemAuditLog{
+					ItemType: "expense",
+					ItemID:   eID,
+					Action:   "BATCH_CATEGORIZE",
+					Reason:   fmt.Sprintf("Category set to %s - %s", catAccount.Code, catAccount.Name),
+					GroupID:  groupID,
+				})
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": fmt.Sprintf("Successfully categorized %d items as %s - %s", len(req.TransactionIDs)+len(req.ExpenseIDs), catAccount.Code, catAccount.Name),
+		"count":   len(req.TransactionIDs) + len(req.ExpenseIDs),
+	})
 }

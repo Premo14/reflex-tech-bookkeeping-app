@@ -120,6 +120,9 @@ export function ConfirmationProvider({ children }: { children: React.ReactNode }
 
   const confirm = useCallback((options: ConfirmOptions | string): Promise<boolean> => {
     return new Promise((resolve) => {
+      if (resolverRef.current) {
+        resolverRef.current(false);
+      }
       resolverRef.current = resolve;
       if (typeof options === "string") {
         setDialogState({
@@ -147,6 +150,9 @@ export function ConfirmationProvider({ children }: { children: React.ReactNode }
 
   const alert = useCallback((options: AlertOptions | string, titleOverride?: string): Promise<void> => {
     return new Promise((resolve) => {
+      if (resolverRef.current) {
+        resolverRef.current(false);
+      }
       resolverRef.current = () => resolve();
       if (typeof options === "string") {
         setDialogState({

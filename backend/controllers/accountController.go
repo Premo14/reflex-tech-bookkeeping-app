@@ -39,11 +39,12 @@ func GetChartAccounts(c fiber.Ctx) error {
 // CreateChartAccount creates a new account in the chart of accounts.
 func CreateChartAccount(c fiber.Ctx) error {
 	type createInput struct {
-		Code        string `json:"code"`
-		Name        string `json:"name"`
-		Type        string `json:"type"`
-		ParentID    *uint  `json:"parentId"`
-		Description string `json:"description"`
+		Code          string `json:"code"`
+		Name          string `json:"name"`
+		Type          string `json:"type"`
+		ParentID      *uint  `json:"parentId"`
+		Description   string `json:"description"`
+		ScheduleCLine string `json:"scheduleCLine"`
 	}
 
 	var input createInput
@@ -112,12 +113,13 @@ func CreateChartAccount(c fiber.Ctx) error {
 	}
 
 	account := models.ChartAccount{
-		Code:        input.Code,
-		Name:        input.Name,
-		Type:        input.Type,
-		ParentID:    input.ParentID,
-		Description: strings.TrimSpace(input.Description),
-		Active:      true,
+		Code:          input.Code,
+		Name:          input.Name,
+		Type:          input.Type,
+		ParentID:      input.ParentID,
+		Description:   strings.TrimSpace(input.Description),
+		ScheduleCLine: strings.TrimSpace(input.ScheduleCLine),
+		Active:        true,
 	}
 
 	if err := db.DB.Create(&account).Error; err != nil {
@@ -145,12 +147,14 @@ func UpdateChartAccount(c fiber.Ctx) error {
 	}
 
 	type updateInput struct {
-		Code        *string `json:"code"`
-		Name        *string `json:"name"`
-		Type        *string `json:"type"`
-		ParentID    *uint   `json:"parentId"`
-		Description *string `json:"description"`
-		Active      *bool   `json:"active"`
+		Code          *string `json:"code"`
+		Name          *string `json:"name"`
+		Type          *string `json:"type"`
+		ParentID      *uint   `json:"parentId"`
+		Description   *string `json:"description"`
+		ScheduleCLine *string `json:"scheduleCLine"`
+		OfxAccountID  *string `json:"ofxAccountId"`
+		Active        *bool   `json:"active"`
 	}
 
 	var input updateInput
@@ -241,6 +245,17 @@ func UpdateChartAccount(c fiber.Ctx) error {
 
 	if input.Description != nil {
 		account.Description = strings.TrimSpace(*input.Description)
+	}
+	if input.ScheduleCLine != nil {
+		account.ScheduleCLine = strings.TrimSpace(*input.ScheduleCLine)
+	}
+	if input.OfxAccountID != nil {
+		cleanOfx := strings.TrimSpace(*input.OfxAccountID)
+		if cleanOfx == "" {
+			account.OfxAccountID = nil
+		} else {
+			account.OfxAccountID = &cleanOfx
+		}
 	}
 	if input.Active != nil {
 		if !*input.Active && account.Active {

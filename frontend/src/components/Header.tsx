@@ -15,6 +15,8 @@ interface HeaderProps {
   refreshData: () => void;
   settings: Record<string, string>;
   onViewItems?: (date: string) => void;
+  onViewUncategorized?: () => void;
+  onOpenInvoices?: () => void;
   isAccountsLoading?: boolean;
   startDate?: string;
   endDate?: string;
@@ -28,6 +30,8 @@ export default function Header({
   refreshData,
   settings,
   onViewItems,
+  onViewUncategorized,
+  onOpenInvoices,
   isAccountsLoading = false,
   startDate,
   endDate
@@ -119,12 +123,12 @@ export default function Header({
   return (
     <>
       {isTaxWarning && (
-        <div className="bg-gradient-to-r from-amber-500/20 to-amber-600/10 border-b border-amber-500/20 px-6 py-3 flex items-center justify-between text-sm text-amber-200 shrink-0 shadow-inner">
+        <div className="bg-gradient-to-r from-amber-500/20 to-amber-600/10 border-b border-amber-500/20 px-4 sm:px-6 py-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-sm text-amber-200 shrink-0 shadow-inner">
           <div className="flex items-center gap-3">
             <svg className="w-5 h-5 text-amber-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
             <p><strong>Reminder:</strong> You haven't locked your books for {currentYear - 1}. We recommend setting a Closing Date to prevent accidental changes to your past records.</p>
           </div>
-          <Button variant="warning" size="sm" onClick={() => setShowSettingsModal(true)}>
+          <Button variant="warning" size="sm" onClick={() => setShowSettingsModal(true)} className="self-end sm:self-auto shrink-0">
             Lock Books
           </Button>
         </div>
@@ -149,13 +153,13 @@ export default function Header({
                 <button
                   type="button"
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className={`bg-[#121212] border ${isDropdownOpen ? 'border-emerald-500 ring-1 ring-emerald-500/20' : 'border-white/10 hover:border-white/20'} text-white rounded-xl px-4 py-2.5 font-bold transition-all shadow-sm flex items-center justify-between w-full sm:w-auto sm:min-w-[260px] whitespace-nowrap`}
+                  className={`bg-[#121212] border ${isDropdownOpen ? 'border-emerald-500 ring-1 ring-emerald-500/20' : 'border-white/10 hover:border-white/20'} text-white rounded-xl px-4 py-2.5 font-bold transition-all shadow-sm flex items-center justify-between w-full sm:w-auto sm:min-w-[260px]`}
                 >
-                  <span className="whitespace-nowrap flex items-center gap-2">
+                  <span className="min-w-0 flex items-center gap-2 overflow-hidden">
                     {isAccountsLoading && (
                       <LoadingSpinner size="xs" color="text-emerald-400" />
                     )}
-                    <span className="whitespace-nowrap">{selectedText}</span>
+                    <span className="truncate max-w-[170px] sm:max-w-[260px]">{selectedText}</span>
                     {childCountForSelected > 0 && (
                       <span className="text-[10px] text-emerald-400/80 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.2 rounded font-normal shrink-0">
                         +{childCountForSelected} sub
@@ -173,6 +177,8 @@ export default function Header({
                     <div className="p-2 border-b border-white/5 bg-zinc-900/95 sticky top-0 z-10 shrink-0">
                       <div className="relative">
                         <input
+                          id="header-account-search"
+                          name="accountSearch"
                           type="text"
                           placeholder="Filter accounts..."
                           value={accountSearch}
@@ -232,7 +238,7 @@ export default function Header({
                               <span className={`text-xs font-mono shrink-0 ${activeAccountId === acc.id ? 'text-emerald-500/70' : depth > 0 ? 'text-zinc-400' : 'text-zinc-400'}`}>
                                  {acc.code}
                               </span>
-                              <span className="whitespace-nowrap pr-2">{acc.name}</span>
+                              <span className="truncate max-w-[180px] sm:max-w-xs pr-2">{acc.name}</span>
                               {childCount > 0 && depth === 0 && (
                                 <span className="text-[10px] text-zinc-400 bg-white/5 border border-white/5 px-1.5 py-0.2 rounded ml-1 shrink-0 font-normal">
                                   {childCount} sub
@@ -264,6 +270,14 @@ export default function Header({
 
         {/* Global Actions */}
         <div className="flex items-center gap-3 flex-wrap">
+          {onOpenInvoices && (
+            <Button variant="secondary" onClick={onOpenInvoices} title="Invoices & Receivables" className="!px-3 lg:!px-4">
+              <svg className="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span className="hidden lg:inline">Invoices</span>
+            </Button>
+          )}
           <Button variant="secondary" onClick={() => setShowReportsModal(true)} title="View Reports" className="!px-3 lg:!px-4">
             <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
             <span className="hidden lg:inline">Reports</span>
@@ -308,6 +322,7 @@ export default function Header({
           onClose={() => setShowReportsModal(false)}
           initialStartDate={startDate}
           initialEndDate={endDate}
+          onViewUncategorized={onViewUncategorized}
         />
       )}
     </>

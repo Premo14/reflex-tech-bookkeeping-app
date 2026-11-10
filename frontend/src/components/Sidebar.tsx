@@ -303,8 +303,10 @@ export default function Sidebar({
             <div className="mx-4 mt-4 p-4 bg-[#121212] border border-white/5 rounded-xl shadow-inner">
               <div className="space-y-4">
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5">Start Date</label>
+                  <label htmlFor="sidebar-start-date" className="block text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5 cursor-pointer">Start Date</label>
                   <input
+                    id="sidebar-start-date"
+                    name="sidebarStartDate"
                     type="date"
                     className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:border-emerald-500 transition-colors"
                     value={startDate}
@@ -312,8 +314,10 @@ export default function Sidebar({
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5">End Date</label>
+                  <label htmlFor="sidebar-end-date" className="block text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5 cursor-pointer">End Date</label>
                   <input
+                    id="sidebar-end-date"
+                    name="sidebarEndDate"
                     type="date"
                     className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:border-emerald-500 transition-colors"
                     value={endDate}
@@ -326,11 +330,11 @@ export default function Sidebar({
         </div>
 
         {/* SETTINGS FOOTER */}
-        <div className="p-4 border-t border-white/5 bg-[#0a0a0a] shrink-0">
+        <div className="p-4 border-t border-white/5 bg-[#0a0a0a] shrink-0 space-y-1">
           <button
             type="button"
             onClick={onOpenSettings}
-            className="w-full flex items-center gap-3 py-2.5 px-4 rounded-xl text-zinc-400 font-medium hover:text-white hover:bg-white/5 transition-all duration-200 border border-transparent group cursor-pointer"
+            className="w-full flex items-center gap-3 py-2 px-4 rounded-xl text-zinc-400 font-medium hover:text-white hover:bg-white/5 transition-all duration-200 border border-transparent group cursor-pointer"
           >
             <svg
               className="w-5 h-5 text-zinc-400 group-hover:text-white transition-colors"

@@ -66,7 +66,7 @@ type Receipt struct {
 	// File metadata
 	DocumentURI string `gorm:"not null" json:"documentUri"`
 	FileExt     string `gorm:"not null" json:"fileExt"`
-	FileHash    string `gorm:"unique" json:"fileHash"` // SHA256, prevents duplicate uploads
+	FileHash    string `gorm:"index" json:"fileHash"` // SHA256, indexed for duplicate detection while allowing shared receipts & re-upload after soft-delete
 
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`

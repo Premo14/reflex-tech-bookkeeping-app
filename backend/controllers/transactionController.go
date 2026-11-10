@@ -53,6 +53,24 @@ func GetTransactions(c fiber.Ctx) error {
 		}
 	}
 
+	statusFilter := strings.ToUpper(strings.TrimSpace(c.Query("status")))
+	switch statusFilter {
+	case "NEEDS_ATTENTION":
+		query = query.Where(needsAttentionClause)
+	case "UNLINKED":
+		query = query.Where("amount < 0 AND (allocation_status IS NULL OR allocation_status = '' OR allocation_status = 'UNLINKED')")
+	case "BALANCED":
+		query = query.Where("allocation_status = 'BALANCED' OR amount >= 0")
+	case "PARTIALLY_ALLOCATED":
+		query = query.Where("allocation_status = 'PARTIALLY_ALLOCATED'")
+	case "OVER_ALLOCATED":
+		query = query.Where("allocation_status = 'OVER_ALLOCATED'")
+	case "UNCATEGORIZED":
+		query = query.Where("category_account_id IS NULL").
+			Where("id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')").
+			Where("NOT (amount > 0 AND chart_account_id IN (SELECT id FROM chart_accounts WHERE type = 'LIABILITY'))")
+	}
+
 	pageStr := c.Query("page", "1")
 	limitStr := c.Query("limit", "50")
 	page, _ := strconv.Atoi(pageStr)
@@ -68,7 +86,32 @@ func GetTransactions(c fiber.Ctx) error {
 	var total int64
 	query.Count(&total)
 
-	query.Order("date DESC").Preload("Expenses.Receipts").Preload("ChartAccount").Preload("Category").Offset(offset).Limit(limit).Find(&txs)
+	sortBy := strings.ToLower(strings.TrimSpace(c.Query("sortBy", "date")))
+	sortOrder := strings.ToUpper(strings.TrimSpace(c.Query("sortOrder", "desc")))
+	if sortOrder != "ASC" {
+		sortOrder = "DESC"
+	}
+	secondaryOrder := "date " + sortOrder
+
+	priorityOrder := `CASE
+		WHEN COALESCE(review_status, '') IN ('WARNINGS_IGNORED', 'IGNORED') THEN 5
+		WHEN COALESCE(allocation_status, 'UNLINKED') = 'UNLINKED' AND has_suggestions = true THEN 0
+		WHEN allocation_status = 'OVER_ALLOCATED' THEN 1
+		WHEN allocation_status = 'PARTIALLY_ALLOCATED' THEN 2
+		WHEN amount < 0 AND COALESCE(allocation_status, 'UNLINKED') = 'UNLINKED' THEN 3
+		ELSE 4
+	END ASC, ` + secondaryOrder
+
+	orderClause := priorityOrder
+	if sortBy == "amount" {
+		orderClause = "ABS(amount) " + sortOrder + ", date DESC"
+	} else if sortOrder == "ASC" {
+		orderClause = "date ASC"
+	}
+
+	query.Order(orderClause).Preload("Expenses", func(db *gorm.DB) *gorm.DB {
+		return db.Where("expenses.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = ?)", "confirmed")
+	}).Preload("Expenses.Receipts").Preload("ChartAccount").Preload("Category").Offset(offset).Limit(limit).Find(&txs)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":       "success",
@@ -94,8 +137,10 @@ func GetTransaction(c fiber.Ctx) error {
 	db.DB.Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
 		Where("ebt.bank_transaction_id = ? AND ebt.status = ?", tx.ID, "confirmed").
 		Preload("Receipts").Preload("ChartAccount").Preload("BankTransactions", func(db *gorm.DB) *gorm.DB {
-			return db.Joins("JOIN expense_bank_transactions ebt ON ebt.bank_transaction_id = bank_transactions.id").Where("ebt.status = ?", "confirmed")
-		}).
+			return db.Where("bank_transactions.id IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = ?)", "confirmed").
+				Order("bank_transactions.date ASC, bank_transactions.id ASC")
+		}).Preload("BankTransactions.ChartAccount").Preload("BankTransactions.Category").
+		Order("expenses.timestamp ASC, expenses.id ASC").
 		Find(&confirmedExpenses)
 
 	// Load suggested expenses — scoring system guesses awaiting user action.
@@ -155,13 +200,13 @@ func ValidateTransactionCategory(acc *models.ChartAccount) error {
 // categoryAccountId optionally specifies the transaction category (EXPENSE or REVENUE).
 func CreateTransaction(c fiber.Ctx) error {
 	type createInput struct {
-		Date              time.Time `json:"date"`
-		Description       string    `json:"description"`
-		Amount            float64   `json:"amount"`
-		TransactionType   string    `json:"transactionType"`
-		ChartAccountID    *uint     `json:"chartAccountId"`
-		CategoryAccountID *uint     `json:"categoryAccountId"`
-		Notes             string    `json:"notes"`
+		Date              *string `json:"date"`
+		Description       string  `json:"description"`
+		Amount            float64 `json:"amount"`
+		TransactionType   string  `json:"transactionType"`
+		ChartAccountID    *uint   `json:"chartAccountId"`
+		CategoryAccountID *uint   `json:"categoryAccountId"`
+		Notes             string  `json:"notes"`
 	}
 
 	var input createInput
@@ -169,8 +214,20 @@ func CreateTransaction(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid input"})
 	}
 
+	var txTime time.Time
+	if input.Date != nil && *input.Date != "" {
+		if t, err := time.Parse(time.RFC3339, *input.Date); err == nil {
+			txTime = t
+		} else if t, err := time.Parse("2006-01-02", *input.Date); err == nil {
+			txTime = t
+		}
+	}
+	if txTime.IsZero() {
+		txTime = time.Now().UTC()
+	}
+
 	// Guard against creating transactions in a closed period
-	if utils.IsDateInClosedPeriod(input.Date) {
+	if utils.IsDateInClosedPeriod(txTime) {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 			"error": "Cannot create a transaction in a closed accounting period.",
 		})
@@ -207,7 +264,7 @@ func CreateTransaction(c fiber.Ctx) error {
 	}
 
 	tx := models.BankTransaction{
-		Date:              input.Date,
+		Date:              txTime,
 		Description:       input.Description,
 		Amount:            input.Amount,
 		TransactionType:   input.TransactionType,
@@ -220,6 +277,11 @@ func CreateTransaction(c fiber.Ctx) error {
 		AllocationStatus: allocationStatus,
 		ReviewStatus:     "APPROVED",
 		// BankStatementID left nil — manual entries don't belong to an imported statement.
+	}
+
+	// Auto-evaluate bank rules if category is unassigned
+	if tx.CategoryAccountID == nil {
+		utils.ApplyBankRulesToTransaction(&tx, db.DB)
 	}
 
 	if err := db.DB.Create(&tx).Error; err != nil {
@@ -313,11 +375,13 @@ func UpdateTransaction(c fiber.Ctx) error {
 			}
 			updates["category_account_id"] = input.CategoryAccountID
 
-			// Sync category to linked expenses ONLY if it's a 1:1 link (not a split)
-			var linkedExpCount int64
-			db.DB.Model(&models.ExpenseBankTransaction{}).Where("bank_transaction_id = ? AND status = 'confirmed'", tx.ID).Count(&linkedExpCount)
-			if linkedExpCount == 1 {
-				db.DB.Exec("UPDATE expenses SET chart_account_id = ? WHERE id IN (SELECT expense_id FROM expense_bank_transactions WHERE bank_transaction_id = ? AND status = 'confirmed')", input.CategoryAccountID, tx.ID)
+			// Sync category to linked expenses ONLY if it's a 1:1 link (not a split) and the category is an EXPENSE account
+			if catAccount.Type == "EXPENSE" {
+				var linkedExpCount int64
+				db.DB.Model(&models.ExpenseBankTransaction{}).Where("bank_transaction_id = ? AND status = 'confirmed'", tx.ID).Count(&linkedExpCount)
+				if linkedExpCount == 1 {
+					db.DB.Exec("UPDATE expenses SET chart_account_id = ? WHERE id IN (SELECT expense_id FROM expense_bank_transactions WHERE bank_transaction_id = ? AND status = 'confirmed')", input.CategoryAccountID, tx.ID)
+				}
 			}
 		} else {
 			// Explicit null or 0 means un-categorize

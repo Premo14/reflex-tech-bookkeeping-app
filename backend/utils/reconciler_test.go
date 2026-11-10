@@ -121,4 +121,76 @@ func TestNormalizeStringWithApostrophes(t *testing.T) {
 	if !vendorMatchesDescription("WENDYS RESTAURANT #44", "Wendy's") {
 		t.Errorf("expected WENDYS to match Wendy's")
 	}
+
+	// Advanced POS prefix, alias, and token overlap tests
+	if !vendorMatchesDescription("Withdrawal Instant Issue VENMO *Courtney Dumas New York NY Date 07/25/26", "Courtney Dumas") {
+		t.Errorf("expected VENMO Courtney Dumas to match Courtney Dumas")
+	}
+	if !vendorMatchesDescription("SQ *JOES COFFEE NEW YORK NY", "Joe's Coffee LLC") {
+		t.Errorf("expected SQ *JOES COFFEE to match Joe's Coffee LLC")
+	}
+	if !vendorMatchesDescription("WAL-MART #3334", "Walmart #3334") {
+		t.Errorf("expected WAL-MART #3334 to match Walmart #3334")
+	}
+	if !vendorMatchesDescription("AMZN Mktp US*1A2B3C", "Amazon") {
+		t.Errorf("expected AMZN Mktp US to match Amazon")
+	}
+	if vendorMatchesDescription("Withdrawal at ATM #382230 PIT STOP DIN-705743", "Staples #0412") {
+		t.Errorf("Staples should NOT match ATM Pit Stop withdrawal")
+	}
+}
+
+func TestCalculateMatchScoreHardening(t *testing.T) {
+	now := time.Now()
+
+	// Case 1: Exact amount + Same day = 80
+	tx1 := models.BankTransaction{Amount: -50.00, Date: now, Description: "Walmart #3334"}
+	exp1 := models.Expense{Amount: 50.00, Timestamp: now, Vendor: "Walmart #3334"}
+	score1 := calculateMatchScore(exp1, tx1)
+	if score1 < 80 {
+		t.Errorf("expected exact amount + vendor + date score >= 80, got %d", score1)
+	}
+
+	// Case 2: Complete mismatch (Staples $49.99 vs ATM -$62.50) must score 0
+	txATM := models.BankTransaction{Amount: -62.50, Date: now, Description: "Withdrawal at ATM #382230 PIT STOP"}
+	expStaples := models.Expense{Amount: 49.99, Timestamp: now, Vendor: "Staples #0412"}
+	scoreATM := calculateMatchScore(expStaples, txATM)
+	if scoreATM != 0 {
+		t.Errorf("expected mismatch (Staples vs ATM) score == 0, got %d", scoreATM)
+	}
+
+	// Case 3: Restaurant tip (receipt $40 vs bank debit -$46 with 15% tip) and matching vendor
+	txRest := models.BankTransaction{Amount: -46.00, Date: now, Description: "Bokie's Burgers Malone NY"}
+	expRest := models.Expense{Amount: 40.00, Timestamp: now, Vendor: "Bokie's Burgers & Catering"}
+	scoreRest := calculateMatchScore(expRest, txRest)
+	if scoreRest < 70 {
+		t.Errorf("expected tip variance with matching vendor score >= 70, got %d", scoreRest)
+	}
+}
+
+func TestUnlinkedPairTombstoneMatching(t *testing.T) {
+	// Simulate unlinked tombstone pairs
+	unlinkedPairs := []models.ExpenseBankTransaction{
+		{ExpenseID: 190, BankTransactionID: 217, Status: "unlinked"},
+	}
+
+	unlinkedMap := make(map[[2]uint]bool, len(unlinkedPairs))
+	for _, p := range unlinkedPairs {
+		unlinkedMap[[2]uint{p.ExpenseID, p.BankTransactionID}] = true
+	}
+
+	// 1. Specifically unlinked pair must be blocked
+	if !unlinkedMap[[2]uint{190, 217}] {
+		t.Errorf("expected unlinked pair (190, 217) to be blocked by unlinkedMap")
+	}
+
+	// 2. Same expense with a different transaction must NOT be blocked
+	if unlinkedMap[[2]uint{190, 218}] {
+		t.Errorf("unrelated pair (190, 218) should NOT be blocked")
+	}
+
+	// 3. Same transaction with a different expense must NOT be blocked
+	if unlinkedMap[[2]uint{191, 217}] {
+		t.Errorf("unrelated pair (191, 217) should NOT be blocked")
+	}
 }

@@ -142,13 +142,14 @@ The React frontend provides three primary views:
 
 ---
 
-### Step 7 — Accounting Period Close
+### Step 7 — Period Lock & Books Closed Control
 
-When a month is complete, a user can **close** the accounting period. The system enforces that:
-- No `UNLINKED` transactions remain
-- No orphaned (unlinked, non-cash) expenses remain
+When a period (e.g. month-end or fiscal year-end) is complete, a user locks the books up to a selected date via **Books Closed Date** in Global Settings.
 
-Once closed, all records for that period become **read-only** — edits, links, and unlinks are rejected with a `403 Forbidden` response.
+The system enforces strict accounting controls:
+- **Preflight Validation (`GET /api/settings/close-preflight`)**: The books cannot be closed if any unlinked bank transactions or orphaned expenses exist on or before the target closing date.
+- **Immutable Historical Records**: Once locked, all transactions, expenses, receipts, splits, and reconciliations on or before the `BooksClosedDate` are strictly **read-only**. Any attempt to create, edit, delete, link, unlink, or exclude records in a closed period is rejected with HTTP `403 Forbidden`.
+- **Tamper-Evident Audit Trail**: Every change to the Books Closed Date is logged in `period_audit_logs` with the previous date, new date, timestamp, user IP, and client user-agent.
 
 ---
 
@@ -253,126 +254,204 @@ Once closed, all records for that period become **read-only** — edits, links, 
 
 ## Data Models
 
-### `Receipt`
-Represents a physical file on disk. Created immediately when a file is ingested.
+### `ChartAccount`
+Defines the five-tier Chart of Accounts (COA) for single-entry categorization.
+- `id`: uint (Primary Key)
+- `code`: string (e.g. "1010", "4010", "5020", unique)
+- `name`: string (e.g. "Operating Checking", "Consulting Revenue", "Advertising")
+- `type`: string (`ASSET`, `LIABILITY`, `EQUITY`, `REVENUE`, `EXPENSE`)
+- `parentId`: *uint (Sub-account hierarchy)
+- `ofxAccountId`: *string (Statement mapping key for auto-attributing imported transactions)
+- `scheduleCLine`: string (Tax line mapping, e.g. "Line 8 - Advertising", "Line 24b - Meals")
+- `active`: bool (Soft-disable inactive accounts)
+- `isDefault`: bool (System default accounts protected from deletion)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | uint | Primary key |
-| `expenseId` | *uint | FK to `Expense` (nullable — set after AI extraction completes) |
-| `documentUri` | string | Absolute path to the file in `processed/` |
-| `fileExt` | string | Original file extension (e.g. `.jpg`, `.pdf`) |
-| `fileHash` | string | SHA-256 hash — unique, prevents duplicate file ingestion |
+### `BankRule`
+Automated categorization engine executing regex/exact rules upon statement import or manual re-application.
+- `id`: uint (Primary Key)
+- `name`: string (User-friendly rule label)
+- `priority`: int (Execution order — evaluated ascending)
+- `active`: bool (Rule enabled/disabled state)
+- `conditions`: JSON string/array (Array of `field`, `operator` (`contains`, `equals`, `starts_with`, `ends_with`, `regex`), `value`, `caseSensitive`)
+- `targetCategoryId`: uint (FK to `ChartAccount`)
+- `renameVendor`: string (Standardized merchant name override)
 
-### `Expense`
-AI-extracted structured data representing one purchase.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | uint | Primary key |
-| `timestamp` | time | Date/time of the purchase as read from the receipt |
-| `vendor` | string | Store or business name |
-| `description` | string | Short description of the purchase |
-| `amount` | float64 | Total amount paid (not subtotal, inclusive of tax) |
-| `tender` | string | Payment method (`VISA`, `CASH`, `DEBIT`, etc.) |
-| `allocationStatus` | string | `BALANCED`, `PARTIALLY_ALLOCATED`, `OVER_ALLOCATED`, or `UNLINKED` |
-| `hasSuggestions` | bool | True if the reconciler found a suggested bank link |
-| `receipts` | []Receipt | All physical files belonging to this expense |
+### `Invoice`
+Lightweight client invoicing with accounts receivable aging and 1-click deposit matching.
+- `id`: uint (Primary Key)
+- `invoiceNumber`: string (e.g. "INV-1001", unique)
+- `clientName`: string (Client or company name)
+- `clientEmail`: string (Billing contact email)
+- `clientAddress`: string (Billing address)
+- `issueDate`: time (Invoice date)
+- `dueDate`: time (Payment due date — validated `dueDate >= issueDate`)
+- `items`: string (JSON serialized line items `[{description, quantity, unitPrice, amount}]`)
+- `subtotal`: float64 (Sum of line items)
+- `taxRate`: float64 (Sales tax percentage)
+- `taxAmount`: float64 (Calculated sales tax)
+- `totalAmount`: float64 (Total invoice amount)
+- `amountPaid`: float64 (Total payments matched)
+- `balanceDue`: float64 (Remaining unpaid balance)
+- `paymentTerms`: string (e.g. "Net 30", "Due on Receipt")
+- `status`: string (`DRAFT`, `SENT`, `PARTIALLY_PAID`, `PAID`, `OVERDUE`, `VOID`)
+- `paidDate`: *time (Date full or partial payment was received)
+- `bankTransactionId`: *uint (Matched bank deposit FK)
+- `categoryAccountId`: *uint (Target revenue account FK)
 
 ### `BankTransaction`
 One line item from an imported bank statement.
+- `id`: uint (Primary key)
+- `bankStatementId`: *uint (FK to parent `BankStatement`)
+- `chartAccountId`: *uint (Bank/Credit-Card account FK — ASSET or LIABILITY)
+- `categoryAccountId`: *uint (Category account FK — REVENUE or EXPENSE)
+- `date`: time (Transaction date)
+- `description`: string (Merchant name reported by bank)
+- `amount`: float64 (Amount: negative for debits/withdrawals, positive for deposits)
+- `transactionType`: string (`DEBIT`, `DEP`, `PAYMENT`, etc.)
+- `fitId`: string (Bank-issued unique ID — prevents duplicate statement imports)
+- `allocationStatus`: string (`BALANCED`, `PARTIALLY_ALLOCATED`, `OVER_ALLOCATED`, `UNLINKED`)
+- `reviewStatus`: string (`PENDING`, `APPROVED`, `IGNORED`, `WARNINGS_IGNORED`, `DELETED`)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | uint | Primary key |
-| `bankStatementId` | *uint | FK to parent `BankStatement` (nullable for manually created transactions) |
-| `date` | time | Transaction date |
-| `description` | string | Merchant name as reported by the bank |
-| `amount` | float64 | Transaction amount |
-| `transactionType` | string | `DEBIT`, `DEP`, `PAYMENT`, or `OTHER` |
-| `fitId` | string | Bank-issued unique ID — unique constraint prevents duplicate imports |
-| `allocationStatus` | string | `BALANCED`, `PARTIALLY_ALLOCATED`, `OVER_ALLOCATED`, or `UNLINKED` |
-| `hasSuggestions` | bool | True if the reconciler has a suggested expense link |
+### `Expense`
+AI-extracted structured data representing one receipt purchase.
+- `id`: uint (Primary key)
+- `timestamp`: time (Date/time from receipt)
+- `vendor`: string (Merchant name)
+- `description`: string (Short purchase description)
+- `amount`: float64 (Total purchase amount)
+- `tender`: string (Payment method: `card`, `cash`, `check`, etc.)
+- `chartAccountId`: *uint (Assigned expense category FK)
+- `allocationStatus`: string (`BALANCED`, `PARTIALLY_ALLOCATED`, `OVER_ALLOCATED`, `UNLINKED`)
+- `reviewStatus`: string (`PENDING`, `APPROVED`, `IGNORED`, `WARNINGS_IGNORED`, `DELETED`)
+- `receipts`: []Receipt (Attached image or PDF files)
 
 ### `BankStatement`
 Metadata about an imported OFX/QFX file.
+- `id`: uint (Primary key)
+- `documentUri`: string (Path to file in `processed/`)
+- `fileExt`: string (`.ofx` or `.qfx`)
+- `accountId`: string (Bank account number from OFX header)
+- `bankId`: string (Routing/institution ID)
+- `startDate`: time / `endDate`: time (Statement period)
+- `endingBalance`: *float64 / `balanceAsOf`: *time (Authoritative ending ledger balance)
+- `chartAccountId`: *uint (Linked bank ChartAccount FK)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | uint | Primary key |
-| `documentUri` | string | Path to the raw statement file in `processed/` |
-| `fileExt` | string | `.ofx` or `.qfx` |
-| `accountId` | string | Bank account number from the OFX header |
-| `bankId` | string | Bank routing/institution ID from the OFX header |
-| `startDate` | time | Statement period start |
-| `endDate` | time | Statement period end |
+### `Receipt`
+Physical file record stored in `document-data/processed/`.
+- `id`: uint (Primary key)
+- `expenseId`: *uint (FK to parent `Expense`)
+- `documentUri`: string (Absolute file path)
+- `fileExt`: string (`.jpg`, `.png`, `.pdf`, etc.)
+- `fileHash`: string (SHA-256 hash for deduplication)
 
-### `AccountingPeriod`
-Tracks the open/closed state of each calendar month.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `year` | int | Calendar year |
-| `month` | int | Calendar month (1–12) |
-| `status` | string | `OPEN` or `CLOSED` |
-
-### `ExpenseBankTransaction` (join table)
-Many-to-many link between expenses and bank transactions.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `expenseId` | uint | FK to `Expense` |
-| `bankTransactionId` | uint | FK to `BankTransaction` |
-| `status` | string | `confirmed` (user-approved or auto-linked) or `suggested` (AI candidate) |
+### `PeriodAuditLog` & `ItemAuditLog`
+Audit trails for period locks and item lifecycle events.
+- `PeriodAuditLog`: Tracks closing date shifts (`id`, `changedAt`, `action`, `previousDate`, `newDate`, `reason`, `userIp`, `userAgent`)
+- `ItemAuditLog`: Tracks lifecycle events (`id`, `itemType`, `itemId`, `action`, `previousStatus`, `newStatus`, `details`, `timestamp`)
 
 ---
 
 ## API Reference
 
-All endpoints are served from `http://localhost:8080`.
+All backend endpoints are served under `/api` (proxied via Nginx on port 5173 or direct on port 8080).
 
-### Upload
+### Core & Files
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/upload` | Upload a receipt or bank statement. Accepts `multipart/form-data` with field `document`. |
+| `GET` | `/health` | Service health status and timestamp. |
+| `POST` | `/api/upload` | Upload receipt or bank statement (`multipart/form-data`). |
+| `GET` | `/api/events` | Server-Sent Events (SSE) live sync stream. |
+| `GET` | `/images/:filename` | Serve receipt image or PDF file. |
 
-### Transactions
+### Chart of Accounts
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/transactions` | List all bank transactions. Supports `?year=&month=&status=` filters. |
-| `GET` | `/transactions/:id` | Get a single transaction with its linked expenses and reconciliation detail. |
-| `POST` | `/transactions` | Manually create a bank transaction. |
-| `PUT` | `/transactions/:id` | Update a transaction's description or amount. |
-| `DELETE` | `/transactions/:id` | Delete a transaction. Blocked if the accounting period is closed. |
+| `GET` | `/api/accounts` | List all accounts in the Chart of Accounts. |
+| `POST` | `/api/accounts` | Create an account (`code`, `name`, `type`, `parentId`, `scheduleCLine`). |
+| `PATCH` | `/api/accounts/:id` | Update account details (name, ofxAccountId, scheduleCLine, active). |
+| `DELETE` | `/api/accounts/:id` | Delete account. Blocked if default or referenced by transactions. |
 
-### Expenses
+### Bank Rules
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/expenses` | List all expenses. Supports `?year=&month=&status=` filters. |
-| `GET` | `/expenses/:id` | Get a single expense with its receipts and linked transactions. |
-| `POST` | `/expenses` | Manually create an expense. |
-| `PUT` | `/expenses/:id` | Update vendor, description, amount, or tender. |
-| `DELETE` | `/expenses/:id` | Delete an expense and its associated receipts. |
+| `GET` | `/api/rules` | List all automated categorization rules in priority order. |
+| `POST` | `/api/rules` | Create rule (validates regex patterns before saving). |
+| `PATCH` | `/api/rules/:id` | Update rule conditions or target category. |
+| `DELETE` | `/api/rules/:id` | Delete rule. |
+| `POST` | `/api/rules/reorder` | Update rule priority ordering. |
+| `POST` | `/api/rules/apply-all` | Batch-execute all active rules against historical bank transactions. |
+| `POST` | `/api/rules/preview` | Dry-run a rule against existing transactions without mutating data. |
+
+### Invoicing & Accounts Receivable
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/invoices` | List invoices and receivables summary metrics. |
+| `POST` | `/api/invoices` | Create invoice (validates `dueDate >= issueDate`). |
+| `GET` | `/api/invoices/:id` | Get single invoice with itemized line items. |
+| `PATCH` | `/api/invoices/:id` | Update invoice details or status. |
+| `DELETE` | `/api/invoices/:id` | Void or delete invoice (blocked if in closed period). |
+| `POST` | `/api/invoices/:id/match-payment` | Match bank deposit; supports partial payments (`PARTIALLY_PAID`) or full settlement (`PAID`). |
+| `POST` | `/api/invoices/:id/unmatch-payment` | Unlink matched bank deposit and revert status to `SENT`. |
+| `GET` | `/api/invoices/:id/candidates` | Rank candidate deposits by exact total, remaining balance, and client name. |
+
+### Bank Transactions & Expenses
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/transactions` | List bank transactions (`?year=&month=&status=&accountId=`). |
+| `POST` | `/api/transactions` | Create manual bank transaction. |
+| `GET` | `/api/transactions/:id` | Get single transaction with linked expenses and suggestions. |
+| `PATCH` | `/api/transactions/:id` | Update transaction description, category, or note. |
+| `DELETE` | `/api/transactions/:id` | Soft-delete transaction (blocked if period is closed). |
+| `GET` | `/api/transactions/export` | Export transactions as CSV (OWASP formula injection sanitized). |
+| `GET` | `/api/expenses` | List expenses (`?year=&month=&status=&accountId=`). |
+| `POST` | `/api/expenses` | Create manual expense. |
+| `GET` | `/api/expenses/:id` | Get single expense with receipt attachments and links. |
+| `PATCH` | `/api/expenses/:id` | Update vendor, description, amount, tender, or category. |
+| `DELETE` | `/api/expenses/:id` | Soft-delete expense (blocked if period is closed). |
+| `POST` | `/api/expenses/:id/split` | Split one expense across multiple categories. |
+| `POST` | `/api/expenses/:id/receipt` | Attach additional receipt file to an expense. |
+| `PATCH` | `/api/expenses/:id/cash` | Mark expense as cash (bypasses bank reconciliation). |
+| `GET` | `/api/expenses/export` | Export expenses as CSV (OWASP formula injection sanitized). |
 
 ### Reconciliation
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/flagged` | Return all unlinked transactions and orphaned expenses. Supports `?year=&month=` filters. |
-| `GET` | `/unlinked` | Return all unlinked transactions and unlinked expenses (used by the manual link picker). |
-| `POST` | `/link` | Manually link an expense to a bank transaction. Body: `{ expenseId, transactionId }`. |
-| `POST` | `/unlink` | Remove a confirmed link. Body: `{ expenseId, transactionId }`. |
-| `POST` | `/expenses/:id/mark-cash` | Mark an expense as cash, removing it from the reconciliation queue. |
+| `GET` | `/api/reconciliation/flagged` | Unlinked transactions and non-cash expenses. |
+| `GET` | `/api/reconciliation/unlinked` | Unlinked items for manual reconciliation modal. |
+| `POST` | `/api/reconciliation/link` | Link expense(s) to transaction (blocks over-allocation by default). |
+| `POST` | `/api/reconciliation/create-and-link` | Create missing counter-record and link in one step. |
+| `POST` | `/api/reconciliation/unlink` | Detach linked expense from transaction. |
 
-### Accounting Periods
+### Financial Reports
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/accounting-periods` | List all accounting periods and their statuses. |
-| `POST` | `/accounting-periods` | Create or update a period. Closing validates all items are resolved first. |
+| `GET` | `/api/reports/pl` | Profit & Loss statement grouped by Chart of Accounts. |
+| `GET` | `/api/reports/schedule-c` | Form 1040 Schedule C / T2125 tax mapping report. |
+| `GET` | `/api/reports/cash-flow` | Cash Flow summary tracking Cash & Cash Equivalents without credit card double-counting. |
+| `GET` | `/api/reports/vendor-spend` | Aggregated vendor expenditure metrics and Pareto 80/20 spend. |
+| `GET` | `/api/reports/ar-aging` | Accounts Receivable aging buckets (Current, 1-30, 31-60, 61-90, 90+) reflecting remaining balance due and excluding unapproved draft quotes. |
+| `GET` | `/api/reports/tax-pack` | Download CPA Tax Pack ZIP bundle (CSV ledgers + all receipt images/PDFs). |
 
-### Static Files
+### Global Settings & Period Controls
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/images/:filename` | Serve a receipt image or PDF from the `processed/` directory. |
+| `GET` | `/api/settings` | Read current app settings (e.g. `BooksClosedDate`). |
+| `POST` | `/api/settings` | Update settings (updates `BooksClosedDate` with preflight verification). |
+| `GET` | `/api/settings/close-preflight` | Preflight check validating 0 unlinked items exist prior to closing. |
+| `GET` | `/api/settings/audit-logs` | Retrieve chronological period lock audit history. |
+| `GET` | `/api/settings/directories` | Sandboxed host directory browser confined to host home directory. |
+
+### Review Queue & Lifecycle
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/review-queue` | Pending review items with AI suggestions. |
+| `GET` | `/api/review-queue/counts` | Aggregated count badges for review queue tabs. |
+| `POST` | `/api/review-queue/resolve` | Bulk approve or ignore AI-suggested links. |
+| `POST` | `/api/review-queue/batch-categorize` | Bulk categorize items to a selected ChartAccount. |
+| `POST` | `/api/items/exclude` | Exclude transaction or expense with reason (DUPLICATE, PERSONAL). |
+| `POST` | `/api/items/restore` | Restore excluded item back to active ledger. |
+| `POST` | `/api/items/delete-bulk` | Move items to Trash. |
+| `POST` | `/api/items/delete-permanent` | Permanently purge items from database. |
 
 ---
 

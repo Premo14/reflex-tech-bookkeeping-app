@@ -68,6 +68,21 @@ export default function CreateExpenseForm({ form, setForm, accounts }: CreateExp
         ))}
       </Select>
       <Input type="text" label="Notes (Optional)" placeholder="Additional details..." value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} />
+      <div>
+        <label className="block text-xs font-medium text-zinc-400 mb-1">Receipt Attachment (Optional)</label>
+        <input
+          type="file"
+          accept=".png,.jpg,.jpeg,.heic,.pdf"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            setForm({ ...form, receiptFile: file || null });
+          }}
+          className="w-full text-xs text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-zinc-800 file:text-zinc-200 hover:file:bg-zinc-700 cursor-pointer"
+        />
+        {form.receiptFile && (
+          <p className="text-[11px] text-emerald-400 mt-1">✓ {form.receiptFile.name} attached</p>
+        )}
+      </div>
     </div>
   );
 }

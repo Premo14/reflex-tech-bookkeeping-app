@@ -100,7 +100,7 @@ export default function FileUploader({ onUploadSuccess }: FileUploaderProps) {
         multiple
         className="hidden" 
         onChange={handleFileChange}
-        accept=".png,.jpg,.jpeg,.heic,.pdf,.ofx,.qfx,.qbo"
+        accept=".png,.jpg,.jpeg,.heic,.pdf,.ofx,.qfx,.qbo,.csv"
       />
 
       <div className="mx-auto w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center mb-4 group-hover:bg-zinc-700 border border-transparent group-hover:border-zinc-600 transition-all">
@@ -113,7 +113,7 @@ export default function FileUploader({ onUploadSuccess }: FileUploaderProps) {
       
       <h3 className="text-lg font-semibold text-white mb-1">Upload Files</h3>
       <p className="text-sm text-zinc-400">Drag & drop or click to browse</p>
-      <p className="text-xs text-zinc-400 mt-4 font-mono">Accepts: .png, .jpg, .heic, .pdf, .ofx, .qfx</p>
+      <p className="text-xs text-zinc-400 mt-4 font-mono">Accepts: .png, .jpg, .heic, .pdf, .ofx, .qfx, .csv</p>
 
       {error && (
         <p className="text-red-400 text-sm mt-4">{error}</p>

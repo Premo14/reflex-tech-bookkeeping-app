@@ -1,5 +1,7 @@
 package constants
 
+import "strings"
+
 // Dropbox location for raw files to be processed
 const InboxPath = "/app/documents/inbox"
 
@@ -23,7 +25,7 @@ var allowedReceiptExt = map[string]struct{}{
 
 // Checks if extension is allowed by receipts
 func IsAllowedReceiptExt(ext string) bool {
-	_, ok := allowedReceiptExt[ext]
+	_, ok := allowedReceiptExt[strings.ToLower(ext)]
 	return ok
 }
 
@@ -38,10 +40,11 @@ var allowedBankStatementExt = map[string]struct{}{
 	".ofx": {},
 	".qfx": {},
 	".qbo": {},
+	".csv": {},
 }
 
 // Checks if extension is allowed by bank statements
 func IsAllowedBankStatementExt(ext string) bool {
-	_, ok := allowedBankStatementExt[ext]
+	_, ok := allowedBankStatementExt[strings.ToLower(ext)]
 	return ok
 }

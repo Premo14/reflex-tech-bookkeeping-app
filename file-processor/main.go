@@ -24,49 +24,49 @@ type OllamaRequest struct {
 }
 
 const defaultTextPrompt = `You are a receipt data extractor. The following is raw OCR text extracted from a receipt.
-Extract the expense details and return ONLY a valid JSON object with no explanation or markdown, matching this exact structure:
+Extract the expense details and return ONLY a valid JSON object with no explanation or markdown, matching this exact schema:
 {
-  "timestamp": "2023-08-16T18:51:49Z",
-  "vendor": "Walmart",
-  "description": "Groceries",
-  "amount": 181.13,
-  "taxAmount": 10.50,
+  "timestamp": "",
+  "vendor": "",
+  "description": "",
+  "amount": 0.00,
+  "taxAmount": 0.00,
   "currencyCode": "USD",
   "tender": "CARD",
   "chartAccountId": null
 }
 Rules:
-- timestamp must be RFC3339 format (e.g. 2023-08-16T18:51:49Z). Use midnight UTC if no time is visible.
+- timestamp must be RFC3339 format (e.g. 2026-07-15T14:30:00Z). Use midnight UTC if no time is visible. Leave as "" if no date is found. NEVER invent a date.
 - amount must be the TOTAL paid as a positive number with no currency symbol.
 - taxAmount must be the total tax paid, as a number. Leave as 0 if not found.
 - currencyCode must be the 3-letter currency code (e.g. USD, CAD, EUR). Default to USD if none is found.
 - tender is the payment method: CARD, CASH, CHECK, TRANSFER, PAYPAL, VENMO, ZELLE, OTHER.
 - chartAccountId should be null unless an active category ID is provided.
-- vendor should be the store/business name (e.g. Walmart, not the address).
+- vendor should be the store/business name (not the address).
 - Leave vendor, description, or tender as empty strings if they cannot be determined.
 - Leave amount as 0 if it cannot be determined.
 `
 
 const defaultVisionPrompt = `You are a receipt data extractor. Look at this receipt image carefully and extract the expense details.
-Return ONLY a valid JSON object with no explanation or markdown, matching this exact structure:
+Return ONLY a valid JSON object with no explanation or markdown, matching this exact schema:
 {
-  "timestamp": "2023-08-16T18:51:49Z",
-  "vendor": "Walmart",
-  "description": "Groceries",
-  "amount": 181.13,
-  "taxAmount": 10.50,
+  "timestamp": "",
+  "vendor": "",
+  "description": "",
+  "amount": 0.00,
+  "taxAmount": 0.00,
   "currencyCode": "USD",
   "tender": "CARD",
   "chartAccountId": null
 }
 Rules:
-- timestamp must be RFC3339 format (e.g. 2023-08-16T18:51:49Z). Use midnight UTC if no time is visible.
+- timestamp must be RFC3339 format (e.g. 2026-07-15T14:30:00Z). Use midnight UTC if no time is visible. Leave as "" if no date is found. NEVER invent a date.
 - amount must be the final total paid as a positive number with no currency symbol.
 - taxAmount must be the total tax paid, as a number. Leave as 0 if not found.
 - currencyCode must be the 3-letter currency code (e.g. USD, CAD, EUR). Default to USD if none is found.
 - tender is the payment method: CARD, CASH, CHECK, TRANSFER, PAYPAL, VENMO, ZELLE, OTHER.
 - chartAccountId should be null unless an active category ID is provided.
-- vendor should be the store/business name (e.g. Walmart, not the address).
+- vendor should be the store/business name (not the address).
 - Leave vendor, description, or tender as empty strings if they cannot be determined.
 - Leave amount as 0 if it cannot be determined.`
 
@@ -123,7 +123,7 @@ func resizeImage(inputPath, outputPath string) error {
 
 // runOCR runs Tesseract OCR on the given image file and returns the extracted text.
 func runOCR(imagePath string) (string, error) {
-	cmd := exec.Command("tesseract", imagePath, "stdout")
+	cmd := exec.Command("tesseract", imagePath, "stdout", "--psm", "6")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("tesseract: %w", err)
@@ -131,11 +131,38 @@ func runOCR(imagePath string) (string, error) {
 	return string(out), nil
 }
 
+// compactOCRText collapses redundant whitespace and blank lines to minimize token count
+// and keep total prompt tokens within a single 512-token llama.cpp batch.
+func compactOCRText(raw string) string {
+	var lines []string
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			lines = append(lines, strings.Join(fields, " "))
+		}
+	}
+	res := strings.Join(lines, "\n")
+	if len(res) > 4000 {
+		res = res[:4000]
+	}
+	return res
+}
+
+// extractPDFText attempts lossless text extraction from a digital PDF via pdftotext.
+func extractPDFText(pdfPath string) string {
+	cmd := exec.Command("pdftotext", "-layout", pdfPath, "-")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return compactOCRText(string(out))
+}
+
 // convertPDFToImages uses pdftoppm to convert a PDF to PNG images,
 // returning the paths of all generated page files.
 func convertPDFToImages(pdfPath, baseFileName string) ([]string, error) {
-	// 150 DPI gives Tesseract good quality without excessive file sizes
-	cmd := exec.Command("pdftoppm", "-png", "-r", "150", pdfPath, baseFileName)
+	// 300 DPI gives Tesseract dramatically better accuracy on receipt numbers & dates
+	cmd := exec.Command("pdftoppm", "-png", "-r", "300", pdfPath, baseFileName)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("pdftoppm: %v — %s", err, string(out))
 	}
@@ -200,7 +227,7 @@ func process(ctx *fasthttp.RequestCtx) {
 	userPrompt := string(ctx.FormValue("prompt"))
 
 	if isPDF {
-		// ── PDF PATH: Tesseract OCR → text model ─────────────
+		// ── PDF PATH: Embedded text (pdftotext) or 300-DPI Tesseract OCR → text model ─────────────
 		pdfName := baseFileName + ".pdf"
 		if err := fasthttp.SaveMultipartFile(fileHeader, pdfName); err != nil {
 			ctx.Error("Failed to save PDF", fasthttp.StatusInternalServerError)
@@ -208,24 +235,27 @@ func process(ctx *fasthttp.RequestCtx) {
 		}
 		defer os.Remove(pdfName)
 
-		pages, err := convertPDFToImages(pdfName, baseFileName)
-		if err != nil {
-			log.Printf("⚠️ PDF conversion failed: %v", err)
-			ctx.Error(fmt.Sprintf("PDF conversion failed: %v", err), fasthttp.StatusInternalServerError)
-			return
-		}
-
-		var ocrText strings.Builder
-		for _, img := range pages {
-			text, err := runOCR(img)
-			os.Remove(img)
-			if err == nil {
-				ocrText.WriteString(text)
-				ocrText.WriteString("\n\n")
+		extracted := extractPDFText(pdfName)
+		if len(extracted) < 20 {
+			pages, err := convertPDFToImages(pdfName, baseFileName)
+			if err != nil {
+				log.Printf("⚠️ PDF conversion failed: %v", err)
+				ctx.Error(fmt.Sprintf("PDF conversion failed: %v", err), fasthttp.StatusInternalServerError)
+				return
 			}
+
+			var ocrText strings.Builder
+			for _, img := range pages {
+				text, err := runOCR(img)
+				os.Remove(img)
+				if err == nil {
+					ocrText.WriteString(text)
+					ocrText.WriteString("\n\n")
+				}
+			}
+			extracted = compactOCRText(ocrText.String())
 		}
 
-		extracted := strings.TrimSpace(ocrText.String())
 		if extracted == "" {
 			ctx.Error("Tesseract could not extract text from PDF", fasthttp.StatusInternalServerError)
 			return

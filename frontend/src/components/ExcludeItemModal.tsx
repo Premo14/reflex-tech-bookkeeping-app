@@ -4,6 +4,7 @@ import { Button } from "./ui/Button";
 import { Select } from "./ui/Select";
 import { excludeItem, previewExclusion, excludeItems, previewBulkExclusion } from "../services/api";
 import type { ExcludePreview, ExclusionReason } from "../types/models";
+import { formatDate } from "../utils/dateUtils";
 
 interface ExcludeItemModalProps {
   isOpen: boolean;
@@ -205,7 +206,7 @@ export default function ExcludeItemModal({ isOpen, onClose, itemType, itemId, ta
                   <div className="min-w-0">
                     <p className="text-white truncate">{i.label}</p>
                     <p className="text-xs text-zinc-400">
-                      {i.type === "transaction" ? "Bank transaction" : "Expense"} · {new Date(i.date).toLocaleDateString()}
+                      {i.type === "transaction" ? "Bank transaction" : "Expense"} · {formatDate(i.date)}
                     </p>
                   </div>
                   <span className="font-bold text-zinc-200 shrink-0">{formatMoney(Math.abs(i.amount))}</span>

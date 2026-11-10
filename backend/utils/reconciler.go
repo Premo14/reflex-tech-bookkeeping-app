@@ -49,17 +49,37 @@ func RunReconciliation() {
 			Find(&allTransactions[i].Expenses)
 	}
 
-	// Only consider transactions that are not already fully reconciled and are NOT deposits.
+	// Lookup active Balance Sheet accounts (ASSET, LIABILITY, EQUITY).
+	// Negative bank transactions categorized to these accounts (e.g. credit card payments,
+	// inter-account transfers, loan payments, owner draws) do not require expense receipts.
+	balanceSheetAccountIDs := getBalanceSheetAccountIDs()
+
+	// Only consider transactions that are not already fully reconciled and are NOT deposits or balance-sheet transfers.
 	var availableTransactions []*models.BankTransaction
 	for i := range allTransactions {
 		tx := &allTransactions[i]
-		if tx.Amount > 0 {
+		if tx.Amount >= 0 {
+			continue
+		}
+		if len(tx.Expenses) == 0 && tx.CategoryAccountID != nil && balanceSheetAccountIDs[*tx.CategoryAccountID] {
 			continue
 		}
 		sum := calculateExpenseSum(tx.Expenses)
 		if tx.AllocationStatus == "" || tx.AllocationStatus != "BALANCED" || math.Abs(sum-math.Abs(tx.Amount)) > 0.01 {
 			availableTransactions = append(availableTransactions, tx)
 		}
+	}
+
+	// Clear previous unconfirmed suggestions so Pass 1 and Pass 2 compute fresh matches
+	// (prevents stale suggestions from lingering after an item's amount, date, or category is edited).
+	db.DB.Where("status = ?", "suggested").Delete(&models.ExpenseBankTransaction{})
+
+	// Fetch all explicitly unlinked pairs so the reconciler never automatically re-links or re-suggests them.
+	var unlinkedPairs []models.ExpenseBankTransaction
+	db.DB.Where("status = ?", "unlinked").Find(&unlinkedPairs)
+	unlinkedMap := make(map[[2]uint]bool, len(unlinkedPairs))
+	for _, p := range unlinkedPairs {
+		unlinkedMap[[2]uint{p.ExpenseID, p.BankTransactionID}] = true
 	}
 
 	// Track expenses confirmed during this pass so we don't attempt to re-match them.
@@ -83,6 +103,11 @@ func RunReconciliation() {
 		var bestMatch *models.BankTransaction
 
 		for _, tx := range availableTransactions {
+			// Skip if this pair was explicitly unlinked by the user
+			if unlinkedMap[[2]uint{expense.ID, tx.ID}] {
+				continue
+			}
+
 			remaining := math.Abs(tx.Amount) - calculateExpenseSum(tx.Expenses)
 			if remaining < expense.Amount-0.01 {
 				continue
@@ -134,7 +159,7 @@ func RunReconciliation() {
 	var remainingExpenses []models.Expense
 	db.DB.Where("id NOT IN (?)",
 		db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed"),
-	).Where("review_status IS NULL OR review_status = '' OR review_status = ?", "APPROVED").Find(&remainingExpenses)
+	).Where("review_status IS NULL OR review_status = '' OR review_status IN (?, ?)", "APPROVED", "WARNINGS_IGNORED").Find(&remainingExpenses)
 
 	// Track expenses claimed in Pass 2 to prevent double-use across transactions.
 	claimedInPass2 := map[uint]bool{}
@@ -150,10 +175,10 @@ func RunReconciliation() {
 			continue // It's already balanced or over-allocated
 		}
 
-		// Find all remaining unclaimed expenses on the exact same day.
+		// Find all remaining unclaimed expenses on the exact same day (Priority A).
 		var sameDayExpenses []models.Expense
 		for _, e := range remainingExpenses {
-			if IsCashTender(e.Tender) {
+			if IsCashTender(e.Tender) || unlinkedMap[[2]uint{e.ID, tx.ID}] {
 				continue
 			}
 			if !claimedInPass2[e.ID] && daysDifference(e.Timestamp, tx.Date) == 0 {
@@ -166,8 +191,29 @@ func RunReconciliation() {
 			}
 		}
 
-		// Check if any combination of these same-day expenses adds up exactly to the remaining amount.
+		// Check if any combination of same-day expenses adds up exactly to the remaining amount.
 		matches := findSubsetSum(sameDayExpenses, remainingAmountNeeded)
+
+		// Priority B: If no exact same-day subset found, check 1-3 day settlement clearing window
+		// (handles weekend purchases that post on Monday/Tuesday).
+		if len(matches) == 0 {
+			var windowExpenses []models.Expense
+			for _, e := range remainingExpenses {
+				if IsCashTender(e.Tender) || unlinkedMap[[2]uint{e.ID, tx.ID}] {
+					continue
+				}
+				diff := daysDifference(e.Timestamp, tx.Date)
+				if !claimedInPass2[e.ID] && diff > 0 && diff <= 3 {
+					if e.ChartAccountID != nil && tx.CategoryAccountID != nil {
+						if *e.ChartAccountID != *tx.CategoryAccountID {
+							continue
+						}
+					}
+					windowExpenses = append(windowExpenses, e)
+				}
+			}
+			matches = findSubsetSum(windowExpenses, remainingAmountNeeded)
+		}
 		if len(matches) > 0 {
 			for _, m := range matches {
 				// Delete-then-create, same pattern as Pass 1.
@@ -213,16 +259,28 @@ func daysDifference(date1, date2 time.Time) int {
 	return int(math.Abs(d2.Sub(d1).Hours() / 24))
 }
 
+func getBalanceSheetAccountIDs() map[uint]bool {
+	ids := map[uint]bool{}
+	var accounts []models.ChartAccount
+	db.DB.Where("type IN (?, ?, ?) AND active = ?", "ASSET", "LIABILITY", "EQUITY", true).Find(&accounts)
+	for _, a := range accounts {
+		ids[a.ID] = true
+	}
+	return ids
+}
+
 // UpdateAllocationStatuses verifies tx amount equals sum of attached confirmed expenses.
-// Positive-amount transactions (deposits/income) are auto-balanced since they need no receipt.
+// Positive/zero-amount transactions (deposits/income/memos) and balance-sheet transfers auto-balance.
 func UpdateAllocationStatuses() {
+	balanceSheetAccountIDs := getBalanceSheetAccountIDs()
+
 	// First, prune any suggested links that touch balanced/confirmed items or cash expenses
 	db.DB.Exec(`
 		DELETE FROM expense_bank_transactions 
 		WHERE status = 'suggested' 
 		  AND (
 		    expense_id IN (SELECT id FROM expenses WHERE allocation_status = 'BALANCED' OR LOWER(tender) = 'cash' OR LOWER(tender) = 'cash / paper')
-		    OR bank_transaction_id IN (SELECT id FROM bank_transactions WHERE allocation_status = 'BALANCED' OR amount > 0)
+		    OR bank_transaction_id IN (SELECT id FROM bank_transactions WHERE allocation_status = 'BALANCED' OR amount >= 0)
 		  )
 	`)
 
@@ -241,8 +299,8 @@ func UpdateAllocationStatuses() {
 		var status string
 		var hasSuggestions bool
 
-		// Deposits (positive amounts) auto-balance — no expense receipt required
-		if tx.Amount > 0 {
+		// Deposits/zero-amount memos (amount >= 0) and unlinked Balance Sheet transfers/payments auto-balance
+		if tx.Amount >= 0 || (len(tx.Expenses) == 0 && tx.CategoryAccountID != nil && balanceSheetAccountIDs[*tx.CategoryAccountID]) {
 			status = "BALANCED"
 		} else {
 			txAmt := math.Abs(tx.Amount)
@@ -540,21 +598,32 @@ func calculateMatchScore(expense models.Expense, bankTx models.BankTransaction) 
 		}
 	}
 
-	score := 0
+	expCents := toCents(expense.Amount)
+	txCents := toCents(math.Abs(bankTx.Amount))
+	exactAmount := expCents == txCents
+	vendorMatch := vendorMatchesDescription(bankTx.Description, expense.Vendor)
 
-	// A. Exact Amount (+50)
-	// Normalized integer cents comparison
-	if toCents(expense.Amount) == toCents(math.Abs(bankTx.Amount)) {
-		score += 50
+	// Hardening: In single-entry bookkeeping, if NEITHER the amount nor the vendor matches,
+	// the pair has zero correlation and must NEVER produce a suggested match.
+	if !exactAmount && !vendorMatch {
+		return 0
 	}
 
-	// B. Date Window
-	// Same calendar day = +30
-	// 1 calendar day apart = +20
-	// 2-4 calendar days apart = +30
+	score := 0
 
+	// A. Amount Matching (+50 for exact, +30 for small tip/tax variance if vendor matches)
+	if exactAmount {
+		score += 50
+	} else if vendorMatch && expCents > 0 {
+		diffCents := math.Abs(float64(txCents - expCents))
+		// If vendor matches and amount variance is within 15% (e.g. restaurant tip or sales tax delta)
+		if (diffCents / float64(expCents)) <= 0.15 {
+			score += 30
+		}
+	}
+
+	// B. Date Proximity
 	daysDiff := daysDifference(expense.Timestamp, bankTx.Date)
-
 	switch {
 	case daysDiff == 0:
 		score += 30
@@ -564,8 +633,8 @@ func calculateMatchScore(expense models.Expense, bankTx models.BankTransaction) 
 		score += 10
 	}
 
-	// C. String Similarity (+20)
-	if vendorMatchesDescription(bankTx.Description, expense.Vendor) {
+	// C. Vendor Match (+20)
+	if vendorMatch {
 		score += 20
 	}
 
@@ -585,14 +654,141 @@ func normalizeString(s string) string {
 	)
 }
 
-func vendorMatchesDescription(description, vendor string) bool {
-	description = normalizeString(description)
-	vendor = normalizeString(vendor)
+// POS/Processor prefixes commonly found in bank descriptions
+var posPrefixes = []string{
+	"withdrawal instant issue ",
+	"withdrawal at atm ",
+	"withdrawal debit ",
+	"withdrawal pos ",
+	"withdrawal ",
+	"pos debit ",
+	"pos purchase ",
+	"debit purchase ",
+	"debit card ",
+	"checkcard ",
+	"sq *",
+	"square *",
+	"tst *",
+	"toast *",
+	"sp *",
+	"shopify *",
+	"paypal *",
+	"pypl *",
+	"venmo *",
+}
 
-	if description == "" || vendor == "" {
+// Legal entity suffixes to strip from vendor names for accurate matching
+var legalSuffixes = []string{
+	" incorporated",
+	" inc",
+	" llc",
+	" corporation",
+	" corp",
+	" company",
+	" co",
+	" limited",
+	" ltd",
+}
+
+// Common merchant alias mappings
+var merchantAliases = map[string]string{
+	"amzn":          "amazon",
+	"wmt":           "walmart",
+	"mcd":           "mcdonalds",
+	"sbux":          "starbucks",
+	"hd":            "home depot",
+	"tgt":           "target",
+	"dd":            "dunkin",
+}
+
+var commonStopWords = map[string]bool{
+	"and": true, "the": true, "for": true, "with": true, "new": true,
+	"york": true, "state": true, "highway": true, "route": true,
+	"store": true, "restaurant": true, "cafe": true,
+}
+
+// cleanForVendorMatch cleans and normalizes a string by stripping POS prefixes, legal suffixes, and expanding aliases.
+func cleanForVendorMatch(s string) string {
+	cleaned := normalizeString(s)
+
+	for _, prefix := range posPrefixes {
+		cleanedPrefix := normalizeString(prefix)
+		if strings.HasPrefix(cleaned, cleanedPrefix) {
+			cleaned = strings.TrimSpace(strings.TrimPrefix(cleaned, cleanedPrefix))
+			break
+		}
+	}
+
+	for _, suffix := range legalSuffixes {
+		cleanedSuffix := normalizeString(suffix)
+		if strings.HasSuffix(cleaned, cleanedSuffix) {
+			cleaned = strings.TrimSpace(strings.TrimSuffix(cleaned, cleanedSuffix))
+			break
+		}
+	}
+
+	cleaned = strings.ReplaceAll(cleaned, "wm supercenter", "walmart")
+	cleaned = strings.ReplaceAll(cleaned, "wal mart", "walmart")
+	cleaned = strings.ReplaceAll(cleaned, "dunkin donuts", "dunkin")
+
+	words := strings.Fields(cleaned)
+	for i, w := range words {
+		if canon, ok := merchantAliases[w]; ok {
+			words[i] = canon
+		}
+	}
+	cleaned = strings.Join(words, " ")
+
+	return cleaned
+}
+
+func vendorMatchesDescription(description, vendor string) bool {
+	cleanDesc := cleanForVendorMatch(description)
+	cleanVend := cleanForVendorMatch(vendor)
+
+	if cleanDesc == "" || cleanVend == "" {
 		return false
 	}
 
-	// Just check if the full normalized vendor name is inside the description
-	return strings.Contains(description, vendor)
+	// 1. Direct substring check in either direction
+	if strings.Contains(cleanDesc, cleanVend) || strings.Contains(cleanVend, cleanDesc) {
+		return true
+	}
+
+	// 2. Token overlap matching: test if meaningful vendor words appear in bank description
+	vendTokens := strings.Fields(cleanVend)
+	descTokens := strings.Fields(cleanDesc)
+	descTokenSet := make(map[string]bool, len(descTokens))
+	for _, dt := range descTokens {
+		descTokenSet[dt] = true
+	}
+
+	matchCount := 0
+	meaningfulCount := 0
+
+	for _, vt := range vendTokens {
+		if commonStopWords[vt] || len(vt) < 3 {
+			continue
+		}
+		meaningfulCount++
+
+		// Exact token match or token substring
+		if descTokenSet[vt] {
+			matchCount++
+			continue
+		}
+		for dt := range descTokenSet {
+			if len(dt) >= 4 && (strings.Contains(dt, vt) || strings.Contains(vt, dt)) {
+				matchCount++
+				break
+			}
+		}
+	}
+
+	// If at least one distinctive token (>= 5 chars) matches, or >= 50% of meaningful tokens match
+	if meaningfulCount > 0 && float64(matchCount)/float64(meaningfulCount) >= 0.5 {
+		return true
+	}
+
+	return false
 }

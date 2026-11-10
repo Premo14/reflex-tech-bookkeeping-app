@@ -36,6 +36,10 @@ type ChartAccount struct {
 	Description  string  `json:"description"` // free-text notes
 	OfxAccountID *string `gorm:"column:ofx_account_id;index" json:"ofxAccountId,omitempty"` // background OFX account number for statement matching
 
+	// Tax line mapping for Schedule C (Form 1040) / T2125
+	// e.g. "Line 8 - Advertising", "Line 18 - Office expense", "Line 24b - Deductible meals (50%)"
+	ScheduleCLine string `gorm:"column:schedule_c_line;default:''" json:"scheduleCLine"`
+
 	// Soft-disable: inactive accounts can no longer receive new transactions
 	// but their history is preserved.
 	Active bool `gorm:"default:true" json:"active"`

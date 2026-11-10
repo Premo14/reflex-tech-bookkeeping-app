@@ -52,10 +52,12 @@ func processFile(filePath string) error {
 		return err
 	}
 
-	// If it's a receipt, check if hash already exists
+	// If it's a receipt, check if hash already exists on an active (non-deleted) expense
 	if !constants.IsAllowedBankStatementExt(fileExt) {
 		var existing models.Receipt
-		if err := db.DB.Where("file_hash = ?", fileHash).First(&existing).Error; err == nil {
+		if err := db.DB.Joins("JOIN expenses ON expenses.id = receipts.expense_id").
+			Where("receipts.file_hash = ? AND COALESCE(expenses.review_status, '') != 'DELETED'", fileHash).
+			First(&existing).Error; err == nil {
 			// Found duplicate
 			os.Remove(filePath)
 			log.Printf("Duplicate file upload detected (hash: %s). Rejected.", fileHash)
@@ -69,14 +71,18 @@ func processFile(filePath string) error {
 		finalExt = ".png"
 	}
 
-	// If ext is ofx, then save as BankStatement
+	// If ext is bank statement, save to processed and route to parser (.csv or .ofx/.qfx/.qbo)
 	if constants.IsAllowedBankStatementExt(fileExt) {
 		tempPath := filepath.Join(constants.GetProcessedPath(), fmt.Sprintf("%d%s", time.Now().UnixNano(), finalExt))
 		if err := os.Rename(filePath, tempPath); err != nil {
 			return err
 		}
 		_ = os.Chmod(tempPath, 0666)
-		ParseOfx(tempPath)
+		if fileExt == ".csv" {
+			ParseCsvStatement(tempPath)
+		} else {
+			ParseOfx(tempPath)
+		}
 	} else { // otherwise it is a receipt
 		// Save to the Database first to get the auto-increment ID
 		receipt := models.Receipt{
@@ -126,7 +132,7 @@ func processFile(filePath string) error {
 				Amount:           0.00,
 				TaxAmount:        0.00,
 				CurrencyCode:     "USD",
-				Tender:           "CARD",
+				Tender:           "card",
 				ChartAccountID:   nil,
 				IsManual:         false,
 				AllocationStatus: "UNLINKED",
@@ -159,49 +165,24 @@ func FetchActiveExpenseAccounts() ([]models.ChartAccount, error) {
 func BuildReceiptPrompt(accounts []models.ChartAccount) string {
 	var catStrings []string
 	for _, acc := range accounts {
-		desc := strings.TrimSpace(acc.Description)
-		if desc != "" {
-			catStrings = append(catStrings, fmt.Sprintf("- ID %d: [%s] %s — %s", acc.ID, acc.Code, acc.Name, desc))
-		} else {
-			catStrings = append(catStrings, fmt.Sprintf("- ID %d: [%s] %s", acc.ID, acc.Code, acc.Name))
-		}
+		catStrings = append(catStrings, fmt.Sprintf("%d:%s", acc.ID, acc.Name))
 	}
 
-	categoriesList := strings.Join(catStrings, "\n")
+	categoriesList := strings.Join(catStrings, ", ")
 	if len(catStrings) == 0 {
-		categoriesList = "- (No active expense categories found)"
+		categoriesList = "none"
 	}
 
-	return fmt.Sprintf(`You are a receipt data extractor and bookkeeping assistant. Look at this receipt carefully and extract the expense details.
-Return ONLY a valid JSON object with no explanation, markdown formatting, or preamble, matching this exact structure:
-{
-  "timestamp": "2023-08-16T18:51:49Z",
-  "vendor": "Walmart",
-  "description": "Groceries",
-  "amount": 181.13,
-  "taxAmount": 10.50,
-  "currencyCode": "USD",
-  "tender": "CARD",
-  "chartAccountId": null
-}
-
+	return fmt.Sprintf(`Extract receipt details and return ONLY a single compact JSON object (no markdown, no explanation):
+{"timestamp":"YYYY-MM-DDTHH:MM:SSZ","vendor":"","description":"","amount":0.00,"taxAmount":0.00,"currencyCode":"USD","tender":"CARD","chartAccountId":null}
 Rules:
-- timestamp: RFC3339 format (e.g. "2023-08-16T18:51:49Z"). If time of day is not visible, use midnight UTC (e.g. "2023-08-16T00:00:00Z").
-- vendor: Store, merchant, or supplier business name (e.g. "Apple", "Home Depot"). Do NOT include store address or telephone number.
-- description: Concise summary of items or services purchased (e.g. "Office supplies and printer paper").
-- amount: Final total amount paid as a positive number with no currency symbol or commas (e.g. 181.13). Never return negative values.
-- taxAmount: Total sales tax paid as a number. Return 0 if not stated on the receipt.
-- currencyCode: 3-letter ISO currency code (e.g. "USD", "CAD", "EUR"). Default to "USD" if not stated.
-- tender: Primary payment method. Must be one of: "CARD", "CASH", "CHECK", "TRANSFER", "PAYPAL", "VENMO", "ZELLE", "OTHER". Default to "CARD" if paid by credit/debit card.
-- chartAccountId: Integer ID from the Available Expense Categories list below that most accurately categorizes the purchase, or null if no listed category applies or unsure.
-
-Available Expense Categories:
-%s
-- ID null: None of the above / Uncategorized
-
-Leave vendor or description as empty strings if they cannot be determined.
-Leave amount as 0 if it cannot be determined.
-`, categoriesList)
+- timestamp: Receipt date in RFC3339 (use T00:00:00Z if no time, "" if no date).
+- vendor: Merchant name only.
+- description: Short 3-6 word summary.
+- amount: Total paid (positive number).
+- taxAmount: Tax paid (0 if none).
+- tender: CARD, CASH, CHECK, TRANSFER, PAYPAL, VENMO, ZELLE, or OTHER.
+- chartAccountId: Best matching integer ID from [%s], or null.`, categoriesList)
 }
 
 // CleanAIJSON removes markdown fences and extra commentary, isolating the outer JSON object.
@@ -270,10 +251,17 @@ func ParseExtractedTimestamp(raw string) time.Time {
 		time.RFC3339,
 		"2006-01-02T15:04:05Z07:00",
 		"2006-01-02T15:04:05",
+		"2006-01-02T15:04Z",
+		"2006-01-02T15:04",
 		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
 		"2006-01-02",
+		"01/02/2006 15:04:05",
 		"01/02/2006",
 		"1/2/2006",
+		"01/02/06 15:04:05",
+		"01/02/06",
+		"1/2/06",
 		"2006/01/02",
 	}
 

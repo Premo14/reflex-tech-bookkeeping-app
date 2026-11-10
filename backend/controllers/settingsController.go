@@ -45,10 +45,11 @@ func GetSettings(c fiber.Ctx) error {
 		settingsMap["EarliestDate"] = earliest.Format("2006-01-02")
 	}
 
-	// Ensure DocumentDropboxPath is present
+	// Ensure DocumentDropboxPath and HostHomePath are present
 	if _, ok := settingsMap["DocumentDropboxPath"]; !ok || settingsMap["DocumentDropboxPath"] == "" {
 		settingsMap["DocumentDropboxPath"] = constants.GetCurrentHostPath()
 	}
+	settingsMap["HostHomePath"] = constants.DetectHostHomeDir()
 
 	return c.JSON(settingsMap)
 }
@@ -242,17 +243,19 @@ func computeClosePreflight(dateStr string) (ClosePreflight, error) {
 	db.DB.Model(&models.Expense{}).Where("timestamp < ? AND review_status = ?", before, "IGNORED").
 		Select("COUNT(*), COALESCE(SUM(amount), 0)").Row().Scan(&pf.ExcludedExpCount, &pf.ExcludedExpTotal)
 
-	// Uncategorized items: in books but missing category or assigned to an inactive/invalid category
+	// Uncategorized items: in books but missing category (excluding confirmed-linked split transactions and LIABILITY card payment credits)
 	db.DB.Model(&models.BankTransaction{}).
 		Where("date < ?", before).
 		Where(inBooksClause).
-		Where("category_account_id IS NULL OR category_account_id NOT IN (SELECT id FROM chart_accounts WHERE active = true)").
+		Where("category_account_id IS NULL").
+		Where("id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')").
+		Where("NOT (amount > 0 AND chart_account_id IN (SELECT id FROM chart_accounts WHERE type = 'LIABILITY'))").
 		Count(&pf.UncategorizedTxCount)
 
 	db.DB.Model(&models.Expense{}).
 		Where("timestamp < ?", before).
 		Where(inBooksClause).
-		Where("chart_account_id IS NULL OR chart_account_id NOT IN (SELECT id FROM chart_accounts WHERE active = true AND type = 'EXPENSE')").
+		Where("chart_account_id IS NULL").
 		Count(&pf.UncategorizedExpCount)
 
 	if !earliest.IsZero() {
@@ -277,30 +280,37 @@ func GetClosePreflight(c fiber.Ctx) error {
 
 // BrowseDirectories lists subdirectories at the requested host path.
 func BrowseDirectories(c fiber.Ctx) error {
+	defaultHome := constants.DetectHostHomeDir()
 	reqPath := strings.TrimSpace(c.Query("path"))
 	if reqPath == "" {
-		reqPath = "/home/premo"
+		reqPath = defaultHome
 	}
 
 	cleaned := filepath.Clean(reqPath)
 	if strings.HasPrefix(cleaned, "~") {
-		cleaned = filepath.Join("/home/premo", strings.TrimPrefix(cleaned, "~"))
+		cleaned = filepath.Join(defaultHome, strings.TrimPrefix(cleaned, "~"))
 	}
-	if strings.HasPrefix(cleaned, "home/") {
+	if strings.HasPrefix(cleaned, "home/") || strings.HasPrefix(cleaned, "Users/") {
 		cleaned = "/" + cleaned
+	}
+
+	// Sandboxing: confine browsing strictly to the host user's home directory
+	if defaultHome != "" && defaultHome != "/" {
+		if cleaned != defaultHome && !strings.HasPrefix(cleaned, defaultHome+"/") {
+			cleaned = defaultHome
+		}
 	}
 
 	containerPath := constants.ResolveHostToContainer(cleaned)
 
 	fi, err := os.Stat(containerPath)
 	if err != nil || !fi.IsDir() {
-		// Fallback to /home/premo if requested path is missing
-		cleaned = "/home/premo"
+		// Fallback to detected host home if requested path is missing
+		cleaned = defaultHome
 		containerPath = constants.ResolveHostToContainer(cleaned)
 		fi, err = os.Stat(containerPath)
 		if err != nil || !fi.IsDir() {
-			cleaned = "/"
-			containerPath = constants.ResolveHostToContainer(cleaned)
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot access user directory"})
 		}
 	}
 
@@ -319,7 +329,7 @@ func BrowseDirectories(c fiber.Ctx) error {
 	sort.Strings(dirs)
 
 	parent := filepath.Dir(cleaned)
-	if parent == cleaned {
+	if parent == cleaned || cleaned == defaultHome || len(parent) < len(defaultHome) || !strings.HasPrefix(parent, defaultHome) {
 		parent = ""
 	}
 

@@ -66,7 +66,14 @@ func Connect() {
 		&models.ExpenseBankTransaction{},
 		&models.PeriodAuditLog{},
 		&models.ItemAuditLog{},
+		&models.BankRule{},
+		&models.Invoice{},
 	)
+
+	// Drop legacy unique constraint on receipts.file_hash so shared receipts (allowDuplicate=true)
+	// and re-uploads of receipts from soft-deleted expenses do not fail with SQLSTATE 23505.
+	DB.Exec(`ALTER TABLE receipts DROP CONSTRAINT IF EXISTS uni_receipts_file_hash`)
+	DB.Exec(`DROP INDEX IF EXISTS uni_receipts_file_hash`)
 
 	// Migration: bank transactions used to store their category (REVENUE/EXPENSE account)
 	// in chart_account_id, which is meant to hold the bank account. Move those values into
@@ -119,9 +126,6 @@ func Connect() {
 
 	// Migration: clean up any expenses erroneously categorized to non-EXPENSE accounts (e.g. 1xxx Asset accounts)
 	DB.Exec(`UPDATE expenses SET chart_account_id = NULL WHERE chart_account_id IN (SELECT id FROM chart_accounts WHERE type != 'EXPENSE')`)
-
-	// Migration: clean up any bank transactions categorized to balance-sheet accounts
-	DB.Exec(`UPDATE bank_transactions SET category_account_id = NULL WHERE category_account_id IN (SELECT id FROM chart_accounts WHERE type NOT IN ('REVENUE', 'EXPENSE'))`)
 
 	// Seed the chart of accounts if the table is empty (first boot or fresh DB).
 	SeedChartOfAccounts()
@@ -233,4 +237,25 @@ func Connect() {
 	DB.Exec(`UPDATE chart_accounts
 		SET description = 'OFX ID: 50106954S:05'
 		WHERE code = '1010' AND (description = '50106954S:05' OR description = 'Business checking account')`)
+
+	// Migration: Backfill default Schedule C tax line mappings on standard accounts if empty
+	defaultScheduleCMapping := map[string]string{
+		"4010": "Line 1 - Gross receipts or sales",
+		"4110": "Line 1 - Gross receipts or sales",
+		"4210": "Line 6 - Other income",
+		"5010": "Line 20b - Rent or lease (other business property)",
+		"5020": "Line 26 - Wages",
+		"5030": "Line 25 - Utilities",
+		"5050": "Line 18 - Office expense",
+		"5080": "Line 15 - Insurance (other than health)",
+		"5090": "Line 24b - Deductible meals (50%)",
+		"5110": "Line 17 - Legal and professional services",
+		"5210": "Line 27a - Other expenses (Software & online services)",
+		"5310": "Line 8 - Advertising",
+		"5410": "Line 24a - Travel",
+		"5910": "Line 27a - Other expenses (Bank & merchant fees)",
+	}
+	for code, schedLine := range defaultScheduleCMapping {
+		DB.Exec(`UPDATE chart_accounts SET schedule_c_line = ? WHERE code = ? AND (schedule_c_line IS NULL OR schedule_c_line = '')`, schedLine, code)
+	}
 }

@@ -28,6 +28,26 @@ func SetupRoutes(app *fiber.App) {
 	api.Patch("/accounts/:id", controllers.UpdateChartAccount)
 	api.Delete("/accounts/:id", controllers.DeleteChartAccount)
 
+	// Automated Bank Rules
+	api.Get("/rules", controllers.GetRules)
+	api.Post("/rules", controllers.CreateRule)
+	api.Get("/rules/:id", controllers.GetRule)
+	api.Patch("/rules/:id", controllers.UpdateRule)
+	api.Delete("/rules/:id", controllers.DeleteRule)
+	api.Post("/rules/reorder", controllers.ReorderRules)
+	api.Post("/rules/apply-all", controllers.ApplyAllRules)
+	api.Post("/rules/preview", controllers.TestRulePreview)
+
+	// Invoicing & Receivable Matching
+	api.Get("/invoices", controllers.GetInvoices)
+	api.Post("/invoices", controllers.CreateInvoice)
+	api.Get("/invoices/:id", controllers.GetInvoice)
+	api.Patch("/invoices/:id", controllers.UpdateInvoice)
+	api.Delete("/invoices/:id", controllers.DeleteInvoice)
+	api.Post("/invoices/:id/match-payment", controllers.MatchInvoicePayment)
+	api.Post("/invoices/:id/unmatch-payment", controllers.UnmatchInvoicePayment)
+	api.Get("/invoices/:id/candidates", controllers.GetMatchingDeposits)
+
 	// Global Settings (Books Closed Date)
 	api.Get("/settings", controllers.GetSettings)
 	api.Post("/settings", controllers.UpdateSettings)
@@ -38,6 +58,7 @@ func SetupRoutes(app *fiber.App) {
 	api.Get("/review-queue", controllers.GetReviewQueue)
 	api.Get("/review-queue/counts", controllers.GetReviewQueueCounts)
 	api.Post("/review-queue/resolve", controllers.ResolveQueueItems)
+	api.Post("/review-queue/batch-categorize", controllers.BatchCategorizeItems)
 
 	// Real-Time Events (Server-Sent Events)
 	api.Get("/events", controllers.HandleSSEStream)
@@ -69,6 +90,7 @@ func SetupRoutes(app *fiber.App) {
 	api.Get("/expenses/:id", controllers.GetExpense)
 	api.Patch("/expenses/:id", controllers.UpdateExpense)
 	api.Delete("/expenses/:id", controllers.DeleteExpense)
+	api.Post("/expenses/:id/split", controllers.SplitExpense)
 	api.Post("/expenses/:id/receipt", controllers.UploadReceiptToExpense) // manual receipt upload
 	api.Delete("/receipts/:id", controllers.DeleteReceipt)
 
@@ -88,4 +110,9 @@ func SetupRoutes(app *fiber.App) {
 
 	// Reports
 	api.Get("/reports/pl", controllers.GetProfitLoss)
+	api.Get("/reports/schedule-c", controllers.GetScheduleCReport)
+	api.Get("/reports/tax-pack", controllers.ExportTaxPackZip)
+	api.Get("/reports/cash-flow", controllers.GetCashFlowSummary)
+	api.Get("/reports/vendor-spend", controllers.GetVendorSpendReport)
+	api.Get("/reports/ar-aging", controllers.GetARAgingReport)
 }

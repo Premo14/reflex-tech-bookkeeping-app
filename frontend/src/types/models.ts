@@ -8,6 +8,7 @@ export interface ChartAccount {
   parentId?: number;   // optional: nil = top-level, set = sub-account
   description: string;
   ofxAccountId?: string;
+  scheduleCLine?: string;
   active: boolean;
   isDefault?: boolean;
   createdAt: string;
@@ -193,6 +194,9 @@ export interface TransactionFilters {
   endDate?: string;
   accountId?: number;
   search?: string;
+  status?: string;
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
   page?: number;
   limit?: number;
 }
@@ -201,6 +205,10 @@ export interface ExpenseFilters {
   startDate?: string;
   endDate?: string;
   accountId?: number;
+  search?: string;
+  status?: string;
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
   page?: number;
   limit?: number;
 }
@@ -226,6 +234,7 @@ export interface CreateChartAccountInput {
   type: 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
   parentId?: number;
   description?: string;
+  scheduleCLine?: string;
 }
 
 // Input for updating a ChartAccount entry (all fields optional)
@@ -235,6 +244,7 @@ export interface UpdateChartAccountInput {
   type?: 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
   parentId?: number | null;
   description?: string;
+  scheduleCLine?: string;
   active?: boolean;
 }
 export interface PeriodAuditLog {
@@ -279,4 +289,235 @@ export interface ClosePreflight {
   excludedExpTotal: number;
   uncategorizedTxCount: number;
   uncategorizedExpCount: number;
+}
+
+export interface RuleCondition {
+  field: 'description' | 'amount' | 'transaction_type' | 'chart_account_id';
+  operator: 'contains' | 'not_contains' | 'equals' | 'not_equals' | 'starts_with' | 'ends_with' | 'regex' | 'greater_than' | 'less_than' | 'equals_amount';
+  value: string;
+}
+
+export interface BankRule {
+  id: number;
+  name: string;
+  priority: number;
+  active: boolean;
+  matchLogic: 'AND' | 'OR';
+  conditions: string; // JSON string
+  categoryAccountId?: number;
+  categoryAccount?: ChartAccount;
+  renamedVendor?: string;
+  autoConfirm: boolean;
+  autoExclude: boolean;
+  exclusionReason?: string;
+  notes?: string;
+  applyCount: number;
+  lastAppliedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RulePreviewResult {
+  matchCount: number;
+  sampleMatches: BankTransaction[];
+}
+
+export interface ScheduleCAccountDetail {
+  accountId: number;
+  accountCode: string;
+  accountName: string;
+  total: number;
+}
+
+export interface ScheduleCExpenseLine {
+  lineNumber: string;
+  lineName: string;
+  grossAmount: number;
+  deductiblePercent: number;
+  deductibleAmount: number;
+  accounts: ScheduleCAccountDetail[];
+}
+
+export interface ScheduleCIncomeLine {
+  lineNumber: string;
+  lineName: string;
+  amount: number;
+  accounts: ScheduleCAccountDetail[];
+}
+
+export interface ScheduleCReport {
+  startDate: string;
+  endDate: string;
+  year: number;
+  grossReceipts: number;
+  returnsAndAllowances: number;
+  netReceipts: number;
+  costOfGoodsSold: number;
+  grossProfit: number;
+  otherIncome: number;
+  grossIncome: number;
+  incomeLines: ScheduleCIncomeLine[];
+  expenseLines: ScheduleCExpenseLine[];
+  totalExpensesGross: number;
+  totalExpensesDeductible: number;
+  nondeductibleMeals: number;
+  netProfitOrLoss: number;
+  uncategorizedExpenseAmount: number;
+  uncategorizedIncomeAmount: number;
+  uncategorizedTxCount: number;
+  uncategorizedExpCount: number;
+}
+
+export interface InvoiceLineItem {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+}
+
+export interface Invoice {
+  id: number;
+  invoiceNumber: string;
+  clientName: string;
+  clientEmail: string;
+  clientAddress: string;
+  issueDate: string;
+  dueDate: string;
+  items: string; // JSON string
+  subtotal: number;
+  taxRate: number;
+  taxAmount: number;
+  totalAmount: number;
+  amountPaid?: number;
+  balanceDue?: number;
+  notes: string;
+  paymentTerms: string;
+  status: 'DRAFT' | 'SENT' | 'PAID' | 'PARTIALLY_PAID' | 'OVERDUE' | 'VOID';
+  paidDate?: string;
+  bankTransactionId?: number;
+  bankTransaction?: BankTransaction;
+  categoryAccountId?: number;
+  categoryAccount?: ChartAccount;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InvoiceSummary {
+  totalInvoiced: number;
+  totalPaid: number;
+  totalUnpaid: number;
+  overdueCount: number;
+  invoiceCount: number;
+}
+
+export interface InvoicesResponse {
+  status: string;
+  invoices: Invoice[];
+  summary: InvoiceSummary;
+}
+
+export interface CreateInvoiceInput {
+  invoiceNumber?: string;
+  clientName: string;
+  clientEmail?: string;
+  clientAddress?: string;
+  issueDate?: string;
+  dueDate?: string;
+  items: InvoiceLineItem[];
+  taxRate?: number;
+  notes?: string;
+  paymentTerms?: string;
+  status?: string;
+  categoryAccountId?: number;
+}
+
+export interface ScoredDepositCandidate {
+  transaction: BankTransaction;
+  score: number;
+  reason: string;
+}
+
+// -------------------------------------------------------------
+// Extended Reports Types
+// -------------------------------------------------------------
+
+export interface CashFlowPeriod {
+  period: string;
+  periodLabel: string;
+  cashIn: number;
+  cashOut: number;
+  netCashFlow: number;
+  runningCashTotal: number;
+  inflowCount: number;
+  outflowCount: number;
+}
+
+export interface CashFlowReport {
+  startDate: string;
+  endDate: string;
+  totalCashIn: number;
+  totalCashOut: number;
+  netCashFlow: number;
+  avgMonthlyInflow: number;
+  avgMonthlyOutflow: number;
+  savingsRatePercent: number;
+  periods: CashFlowPeriod[];
+}
+
+export interface VendorSpendItem {
+  vendorName: string;
+  totalSpend: number;
+  transactionCount: number;
+  averageSpend: number;
+  percentOfTotal: number;
+  primaryCategoryCode: string;
+  primaryCategoryName: string;
+  lastDate: string;
+}
+
+export interface VendorSpendReport {
+  startDate: string;
+  endDate: string;
+  totalSpend: number;
+  totalVendors: number;
+  top5Percent: number;
+  vendors: VendorSpendItem[];
+}
+
+export interface ARAgingInvoiceItem {
+  id: number;
+  invoiceNumber: string;
+  clientName: string;
+  clientEmail: string;
+  issueDate: string;
+  dueDate: string;
+  totalAmount: number;
+  daysOverdue: number;
+  status: string;
+}
+
+export interface ARAgingBucket {
+  bucketName: string;
+  totalAmount: number;
+  count: number;
+  invoices: ARAgingInvoiceItem[] | null;
+}
+
+export interface ARClientSummary {
+  clientName: string;
+  totalOutstanding: number;
+  currentAmount: number;
+  overdueAmount: number;
+  oldestDueDate: string;
+  invoiceCount: number;
+}
+
+export interface ARAgingReport {
+  asOfDate: string;
+  totalReceivables: number;
+  totalCurrent: number;
+  totalOverdue: number;
+  invoiceCount: number;
+  buckets: ARAgingBucket[];
+  clients: ARClientSummary[] | null;
 }

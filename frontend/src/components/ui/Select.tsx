@@ -73,13 +73,13 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
     let lastRenderedGroup: string | undefined = undefined;
 
     return (
-      <div className={`${isAuto ? 'w-auto' : 'w-full'} flex flex-col gap-1.5 text-left`} ref={dropdownRef}>
+      <div className={`${isAuto ? 'w-auto' : 'w-full'} flex flex-col gap-1.5 text-left ${isOpen ? 'relative z-50' : ''}`} ref={dropdownRef}>
         {label && (
           <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest pl-1">
             {label}
           </label>
         )}
-        <div className="relative">
+        <div className={`relative ${isOpen ? 'z-50' : ''}`}>
           {icon && (
             <div className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none z-10">
               {icon}
@@ -108,10 +108,12 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           </button>
 
           {isOpen && (
-            <div className={`absolute top-full ${dropdownAlign === 'right' ? 'right-0' : 'left-0'} mt-2 min-w-full ${dropdownWidth || 'w-max min-w-[200px]'} max-w-[calc(100vw-32px)] bg-zinc-900 border border-white/10 rounded-xl shadow-2xl z-50 py-1.5 animate-in fade-in zoom-in-95 duration-200 backdrop-blur-xl bg-zinc-900/95 max-h-[340px] flex flex-col`}>
+            <div className={`absolute top-full ${dropdownAlign === 'right' ? 'right-0' : 'left-0'} mt-2 min-w-full ${dropdownWidth || (isAuto ? 'w-max min-w-[200px]' : 'w-full')} max-w-[calc(100vw-32px)] bg-zinc-900 border border-white/10 rounded-xl shadow-2xl z-50 py-1.5 animate-in fade-in zoom-in-95 duration-200 backdrop-blur-xl bg-zinc-900/95 max-h-[340px] flex flex-col`}>
               {searchable && (
                 <div className="px-2 pb-1.5 border-b border-white/10 shrink-0">
                   <input
+                    id="select-search-input"
+                    name="selectSearch"
                     ref={searchInputRef}
                     type="text"
                     placeholder="Search..."

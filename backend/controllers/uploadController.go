@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"reflex-tech-bookkeeping-app-api/constants"
 	"reflex-tech-bookkeeping-app-api/db"
+	"reflex-tech-bookkeeping-app-api/events"
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/utils"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -21,7 +23,7 @@ func UploadFile(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No file uploaded"})
 	}
 
-	ext := filepath.Ext(file.Filename)
+	ext := strings.ToLower(filepath.Ext(file.Filename))
 
 	if !constants.IsAllowedReceiptExt(ext) && !constants.IsAllowedBankStatementExt(ext) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Unsupported file type"})
@@ -47,17 +49,30 @@ func UploadReceiptToExpense(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Missing expense ID"})
 	}
 
+	// Verify target expense exists and is not in a closed period before accepting file upload
+	var expense models.Expense
+	if err := db.DB.First(&expense, expenseId).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Expense not found"})
+	}
+
+	if utils.IsDateInClosedPeriod(expense.Timestamp) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Cannot attach a receipt to an expense in a closed accounting period.",
+		})
+	}
+
 	file, err := c.FormFile("file")
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No file uploaded"})
 	}
 
-	ext := filepath.Ext(file.Filename)
+	ext := strings.ToLower(filepath.Ext(file.Filename))
 	if !constants.IsAllowedReceiptExt(ext) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Unsupported file type"})
 	}
 
-	safeFileName := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
+	nano := time.Now().UnixNano()
+	safeFileName := fmt.Sprintf("%d%s", nano, ext)
 	savePath := filepath.Join(constants.GetProcessedPath(), safeFileName)
 
 	if err := c.SaveFile(file, savePath); err != nil {
@@ -65,23 +80,36 @@ func UploadReceiptToExpense(c fiber.Ctx) error {
 	}
 	_ = os.Chmod(savePath, 0666)
 
-	// Create Receipt DB record
-	var expense models.Expense
-	if err := db.DB.First(&expense, expenseId).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Expense not found"})
+	finalExt := ext
+	if ext == ".heic" {
+		finalExt = ".png"
+		pngFileName := fmt.Sprintf("%d.png", nano)
+		pngPath := filepath.Join(constants.GetProcessedPath(), pngFileName)
+		if err := utils.ConvertHeicToPng(savePath, pngPath); err != nil {
+			os.Remove(savePath)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to convert HEIC receipt to PNG: " + err.Error()})
+		}
+		os.Remove(savePath)
+		_ = os.Chmod(pngPath, 0666)
+		safeFileName = pngFileName
+		savePath = pngPath
 	}
 
 	// Generate hash of the actual file contents to prevent duplicates
 	hashStr, err := utils.HashFile(savePath)
 	if err != nil {
+		os.Remove(savePath)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash file"})
 	}
 	
 	var documentURI = filepath.Join(constants.GetProcessedPath(), safeFileName)
 
-	// Check if this file was already uploaded to ANY expense (global deduplication)
+	// Check if this file was already uploaded to ANY active expense (global deduplication)
 	var existingReceipt models.Receipt
-	if err := db.DB.Preload("Expense").Where("file_hash = ?", hashStr).First(&existingReceipt).Error; err == nil {
+	if err := db.DB.Preload("Expense").
+		Joins("JOIN expenses ON expenses.id = receipts.expense_id").
+		Where("receipts.file_hash = ? AND COALESCE(expenses.review_status, '') != 'DELETED'", hashStr).
+		First(&existingReceipt).Error; err == nil {
 		allowDuplicate := c.FormValue("allowDuplicate") == "true"
 		if !allowDuplicate {
 			// Duplicate found and bypass not requested
@@ -99,13 +127,15 @@ func UploadReceiptToExpense(c fiber.Ctx) error {
 	receipt := models.Receipt{
 		ExpenseID:   &expense.ID,
 		DocumentURI: documentURI,
-		FileExt:     ext,
+		FileExt:     finalExt,
 		FileHash:    hashStr,
 	}
 
 	if err := db.DB.Create(&receipt).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create receipt record"})
 	}
+
+	events.Broadcast("EXPENSES_UPDATED", nil)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":  "success",
@@ -126,6 +156,17 @@ func DeleteReceipt(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Receipt not found"})
 	}
 
+	if receipt.ExpenseID != nil {
+		var exp models.Expense
+		if err := db.DB.First(&exp, *receipt.ExpenseID).Error; err == nil {
+			if utils.IsDateInClosedPeriod(exp.Timestamp) {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+					"error": "Cannot delete a receipt attached to an expense in a closed accounting period.",
+				})
+			}
+		}
+	}
+
 	// Delete the DB record first
 	if err := db.DB.Delete(&receipt).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete receipt record"})
@@ -141,6 +182,8 @@ func DeleteReceipt(c fiber.Ctx) error {
 			fmt.Printf("Warning: failed to delete physical file %s: %v\n", receipt.DocumentURI, err)
 		}
 	}
+
+	events.Broadcast("EXPENSES_UPDATED", nil)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status": "success",

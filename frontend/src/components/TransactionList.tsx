@@ -3,6 +3,8 @@ import type { BankTransaction } from "../types/models";
 import { Card } from "./ui/Card";
 import { Badge } from "./ui/Badge";
 import { formatDate } from "../utils/dateUtils";
+import { extractCleanVendor } from "../utils/vendorUtils";
+import ReceiptThumbnailBadge from "./ReceiptThumbnailBadge";
 
 interface TransactionListProps {
   transactions: BankTransaction[];
@@ -16,7 +18,7 @@ interface TransactionListProps {
 export default function TransactionList({ transactions, filter, searchQuery, sortField, sortOrder, onSelect }: TransactionListProps) {
   
   const filteredTransactions = transactions.filter(tx => {
-    const s = tx.allocationStatus || tx.linkStatus || (tx.amount > 0 ? "BALANCED" : "UNLINKED");
+    const s = tx.allocationStatus || tx.linkStatus || (tx.amount >= 0 ? "BALANCED" : "UNLINKED");
     if (filter !== "ALL") {
       if (filter === "NEEDS_ATTENTION") {
         if (s === "BALANCED" || s === "LINKED" || tx.reviewStatus === "WARNINGS_IGNORED" || tx.reviewStatus === "IGNORED") return false;
@@ -44,7 +46,7 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
 
   const getProblemPriority = (tx: BankTransaction) => {
     if (tx.reviewStatus === 'WARNINGS_IGNORED' || tx.reviewStatus === 'IGNORED') return 5;
-    const s = tx.allocationStatus || tx.linkStatus || (tx.amount > 0 ? "BALANCED" : "UNLINKED");
+    const s = tx.allocationStatus || tx.linkStatus || (tx.amount >= 0 ? "BALANCED" : "UNLINKED");
     if (s === 'UNLINKED' && tx.hasSuggestions) return 0; // Highest urgency: suggestions waiting
     if (s === 'OVER_ALLOCATED') return 1;
     if (s === 'PARTIALLY_ALLOCATED') return 2;
@@ -85,15 +87,18 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
   return (
     <div className="space-y-3">
       {sortedTransactions.map((tx, index) => {
-        const s = tx.allocationStatus || tx.linkStatus || (tx.amount > 0 ? "BALANCED" : "UNLINKED");
+        const s = tx.allocationStatus || tx.linkStatus || (tx.amount >= 0 ? "BALANCED" : "UNLINKED");
         const detailItems = [];
         detailItems.push(<span>{formatDate(tx.date)}</span>);
         if (tx.transactionType) {
           detailItems.push(<span>{tx.transactionType}</span>);
         }
         if (tx.chartAccount && tx.chartAccount.id) {
-          const lastDigits = tx.chartAccount.ofxAccountId
-            ? ` (...${tx.chartAccount.ofxAccountId.slice(-4)})`
+          const suffix = tx.chartAccount.ofxAccountId
+            ? `(...${tx.chartAccount.ofxAccountId.slice(-4)})`
+            : '';
+          const lastDigits = suffix && !tx.chartAccount.name.includes(suffix)
+            ? ` ${suffix}`
             : '';
           detailItems.push(
             <span className="flex items-center gap-1.5" title={`Bank/Source Account: ${tx.chartAccount.code} — ${tx.chartAccount.name}${lastDigits}${!tx.chartAccount.active ? ' (Archived)' : ''}`}>
@@ -116,7 +121,13 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
           );
         }
 
-        if (tx.category && tx.category.id) {
+        if (tx.expenses && tx.expenses.length > 1) {
+          detailItems.push(
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-500/10 text-indigo-300 border border-indigo-500/20" title={`Split across ${tx.expenses.length} linked expenses`}>
+              Split ({tx.expenses.length} items)
+            </span>
+          );
+        } else if (tx.category && tx.category.id) {
           detailItems.push(
             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-500/10 text-purple-300 border border-purple-500/20" title={`Category: ${tx.category.code} — ${tx.category.name}${!tx.category.active ? ' (Archived)' : ''}`}>
               <span className="font-mono text-purple-400">{tx.category.code}</span>
@@ -143,11 +154,26 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
             className="animate-card-cascade flex-col items-stretch gap-2.5 p-3.5"
             style={{ animationDelay: `${index * 120}ms` }}
           >
-            {/* Row 1: Dedicated Title with Amount */}
+            {/* Row 1: Dedicated Title with Clean Merchant & Amount */}
             <div className="flex items-start justify-between gap-3 w-full min-w-0">
-              <span className="text-sm font-semibold text-zinc-100 leading-snug line-clamp-2 break-words flex-1 min-w-0">
-                {tx.description || "Unknown Transaction"}
-              </span>
+              <div className="flex-1 min-w-0">
+                {(() => {
+                  const clean = extractCleanVendor(tx.description);
+                  const isCleanDiff = clean && clean.toLowerCase() !== tx.description.toLowerCase().trim();
+                  return (
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-sm font-semibold text-zinc-100 leading-snug line-clamp-1 break-words">
+                        {clean || tx.description || "Unknown Transaction"}
+                      </span>
+                      {isCleanDiff && (
+                        <span className="text-[11px] text-zinc-500 font-mono truncate max-w-full" title={tx.description}>
+                          {tx.description}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
               <span className={`font-bold text-sm shrink-0 whitespace-nowrap pl-2 ${tx.amount < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
                 {formatMoney(tx.amount)}
               </span>
@@ -164,26 +190,38 @@ export default function TransactionList({ transactions, filter, searchQuery, sor
             </div>
 
             {/* Row 3: Metadata Badges on Left, Allocation Status on Right */}
-            <div className="flex items-center justify-between gap-2 pt-2 border-t border-white/5 w-full min-w-0">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/5 w-full min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap min-w-0">
                 {(tx.isManual || (tx.fitId && tx.fitId.startsWith("MANUAL-"))) && (
                   <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-orange-500/20 text-orange-400 border border-orange-500/30 tracking-wider">
                     Manual
                   </span>
                 )}
+                {(() => {
+                  const linkedReceipts = tx.expenses ? tx.expenses.flatMap(e => e.receipts || []) : [];
+                  if (linkedReceipts.length > 0) {
+                    return <ReceiptThumbnailBadge receipts={linkedReceipts} />;
+                  }
+                  return null;
+                })()}
               </div>
-              <div className="flex gap-1.5 items-center shrink-0">
+              <div className="flex gap-1.5 items-center shrink-0 ml-auto sm:ml-0">
                 {tx.reviewStatus === 'WARNINGS_IGNORED' ? (
                   <Badge variant="neutral" size="sm">WARNINGS SILENCED</Badge>
                 ) : (
                   <>
                     {s === 'UNLINKED' && tx.hasSuggestions && (
-                      <Badge variant="info" size="sm">SUGGESTION FOUND</Badge>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider bg-blue-500/20 text-blue-300 border border-blue-500/30 flex items-center gap-1 shadow-sm shadow-blue-500/10 animate-pulse">
+                        <svg className="w-3 h-3 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+                        </svg>
+                        MATCH READY
+                      </span>
                     )}
                     {(s === 'BALANCED' || s === 'LINKED') && <Badge variant="success">BALANCED</Badge>}
                     {s === 'PARTIALLY_ALLOCATED' && <Badge variant="warning">UNDER-ALLOCATED</Badge>}
                     {s === 'OVER_ALLOCATED' && <Badge variant="danger">OVER-ALLOCATED</Badge>}
-                    {s === 'UNLINKED' && <Badge variant="neutral">UNLINKED</Badge>}
+                    {s === 'UNLINKED' && !tx.hasSuggestions && <Badge variant="neutral">UNLINKED</Badge>}
                   </>
                 )}
               </div>
