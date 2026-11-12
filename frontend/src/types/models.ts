@@ -511,6 +511,8 @@ export interface ARAgingInvoiceItem {
   issueDate: string;
   dueDate: string;
   totalAmount: number;
+  amountPaid: number;
+  balanceDue: number;
   daysOverdue: number;
   status: string;
 }
@@ -537,6 +539,10 @@ export interface ARAgingReport {
   totalCurrent: number;
   totalOverdue: number;
   invoiceCount: number;
+  dsoDays: number;
+  delinquencyRate: number;
+  creditSales: number;
+  salesDays: number;
   buckets: ARAgingBucket[];
   clients: ARClientSummary[] | null;
 }

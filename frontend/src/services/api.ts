@@ -462,9 +462,10 @@ export async function getVendorSpendReport(params?: { startDate?: string; endDat
   return data.report;
 }
 
-export async function getARAgingReport(params?: { asOfDate?: string }): Promise<ARAgingReport> {
+export async function getARAgingReport(params?: { asOfDate?: string; salesDays?: number }): Promise<ARAgingReport> {
   const query = new URLSearchParams();
   if (params?.asOfDate) query.append("asOfDate", params.asOfDate);
+  if (params?.salesDays) query.append("salesDays", String(params.salesDays));
 
   const res = await fetch(`${API_BASE}/reports/ar-aging?${query.toString()}`);
   if (!res.ok) throw new Error(`Response status: ${res.status}`);

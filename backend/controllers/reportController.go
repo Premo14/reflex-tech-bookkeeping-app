@@ -1191,62 +1191,84 @@ func GetVendorSpendReport(c fiber.Ctx) error {
 
 // ARAgingInvoiceItem represents a single invoice in aging buckets
 type ARAgingInvoiceItem struct {
-	ID            uint    `json:"id"`
-	InvoiceNumber string  `json:"invoiceNumber"`
-	ClientName    string  `json:"clientName"`
-	ClientEmail   string  `json:"clientEmail"`
-	IssueDate     string  `json:"issueDate"`
-	DueDate       string  `json:"dueDate"`
-	TotalAmount   models.Money   `json:"totalAmount"`
-	AmountPaid    models.Money   `json:"amountPaid"`
-	BalanceDue    models.Money   `json:"balanceDue"`
-	DaysOverdue   int     `json:"daysOverdue"`
-	Status        string  `json:"status"`
+	ID            uint         `json:"id"`
+	InvoiceNumber string       `json:"invoiceNumber"`
+	ClientName    string       `json:"clientName"`
+	ClientEmail   string       `json:"clientEmail"`
+	IssueDate     string       `json:"issueDate"`
+	DueDate       string       `json:"dueDate"`
+	TotalAmount   models.Money `json:"totalAmount"`
+	AmountPaid    models.Money `json:"amountPaid"`
+	BalanceDue    models.Money `json:"balanceDue"`
+	DaysOverdue   int          `json:"daysOverdue"`
+	Status        string       `json:"status"`
 }
 
 type ARAgingBucket struct {
 	BucketName  string               `json:"bucketName"`
-	TotalAmount float64              `json:"totalAmount"`
+	TotalAmount models.Money         `json:"totalAmount"`
 	Count       int64                `json:"count"`
 	Invoices    []ARAgingInvoiceItem `json:"invoices"`
 }
 
 type ARClientSummary struct {
-	ClientName       string  `json:"clientName"`
-	TotalOutstanding float64 `json:"totalOutstanding"`
-	CurrentAmount    float64 `json:"currentAmount"`
-	OverdueAmount    float64 `json:"overdueAmount"`
-	OldestDueDate    string  `json:"oldestDueDate"`
-	InvoiceCount     int     `json:"invoiceCount"`
+	ClientName       string       `json:"clientName"`
+	TotalOutstanding models.Money `json:"totalOutstanding"`
+	CurrentAmount    models.Money `json:"currentAmount"`
+	OverdueAmount    models.Money `json:"overdueAmount"`
+	OldestDueDate    string       `json:"oldestDueDate"`
+	InvoiceCount     int          `json:"invoiceCount"`
 }
 
 type ARAgingReportData struct {
 	AsOfDate         string            `json:"asOfDate"`
-	TotalReceivables float64           `json:"totalReceivables"`
-	TotalCurrent     float64           `json:"totalCurrent"`
-	TotalOverdue     float64           `json:"totalOverdue"`
+	TotalReceivables models.Money      `json:"totalReceivables"`
+	TotalCurrent     models.Money      `json:"totalCurrent"`
+	TotalOverdue     models.Money      `json:"totalOverdue"`
 	InvoiceCount     int               `json:"invoiceCount"`
+	DSODays          float64           `json:"dsoDays"`
+	DelinquencyRate  float64           `json:"delinquencyRate"`
+	CreditSales      models.Money      `json:"creditSales"`
+	SalesDays        int               `json:"salesDays"`
 	Buckets          []ARAgingBucket   `json:"buckets"`
 	Clients          []ARClientSummary `json:"clients"`
 }
 
-// GetARAgingReport compiles Accounts Receivable aging metrics across 30/60/90+ day buckets.
-func GetARAgingReport(c fiber.Ctx) error {
-	asOfStr := c.Query("asOfDate")
-	asOf := time.Now()
-	if asOfStr != "" {
-		if t, err := parseDateFlexible(asOfStr); err == nil {
-			asOf = t
-		}
-	}
+// truncateToDay strips the time-of-day component so aging math operates on
+// whole calendar days regardless of how the timestamp was stored.
+func truncateToDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
 
-	var invoices []models.Invoice
-	if err := db.DB.Where("status IN ('SENT', 'OVERDUE', 'PARTIALLY_PAID')").
-		Order("due_date ASC, id ASC").
-		Find(&invoices).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch invoices for aging report"})
+// arDaysPastDue returns the whole calendar days between the invoice due date
+// and the as-of date. Returns 0 while the invoice is still within terms
+// (today <= due date), per the A/R aging standard: an invoice is not
+// delinquent until its payment terms have expired.
+func arDaysPastDue(dueDate, asOf time.Time) int {
+	d := int(truncateToDay(asOf).Sub(truncateToDay(dueDate)).Hours() / 24)
+	if d < 0 {
+		return 0
 	}
+	return d
+}
 
+// arReceivableFor computes the uncollected balance of an open invoice in exact
+// integer cents. It prefers the stored BalanceDue and falls back to
+// Total - Paid when the stored balance is stale or zero.
+func arReceivableFor(inv models.Invoice) models.Money {
+	if inv.BalanceDue.IsPositive() {
+		return inv.BalanceDue
+	}
+	if inv.TotalAmount.GreaterThan(inv.AmountPaid) {
+		return inv.TotalAmount.Sub(inv.AmountPaid)
+	}
+	return inv.TotalAmount
+}
+
+// BuildARAgingData compiles A/R aging metrics from open invoices using exact
+// integer-cent arithmetic. Aging is computed strictly from the invoice DUE
+// date (never the issue date) and the result is independent of input order.
+func BuildARAgingData(invoices []models.Invoice, asOf time.Time, creditSales models.Money, salesDays int) ARAgingReportData {
 	currentBucket := &ARAgingBucket{BucketName: "Current (Not Due)", Invoices: []ARAgingInvoiceItem{}}
 	b1_30 := &ARAgingBucket{BucketName: "1 - 30 Days Overdue", Invoices: []ARAgingInvoiceItem{}}
 	b31_60 := &ARAgingBucket{BucketName: "31 - 60 Days Overdue", Invoices: []ARAgingInvoiceItem{}}
@@ -1255,25 +1277,13 @@ func GetARAgingReport(c fiber.Ctx) error {
 
 	clientMap := make(map[string]*ARClientSummary)
 
-	var totalReceivables float64
-	var totalCurrent float64
-	var totalOverdue float64
+	var totalReceivables, totalCurrent, totalOverdue models.Money
 
 	for _, inv := range invoices {
-		receivableAmt := inv.BalanceDue.Dollars()
-		if receivableAmt <= 0 && inv.TotalAmount.Dollars() > inv.AmountPaid.Dollars() {
-			receivableAmt = roundCents(inv.TotalAmount.Dollars() - inv.AmountPaid.Dollars())
-		}
-		if receivableAmt <= 0 && inv.Status != "PAID" {
-			receivableAmt = inv.TotalAmount.Dollars()
-		}
+		receivable := arReceivableFor(inv)
+		totalReceivables = totalReceivables.Add(receivable)
 
-		totalReceivables += receivableAmt
-
-		daysOverdue := 0
-		if asOf.After(inv.DueDate) {
-			daysOverdue = int(math.Floor(asOf.Sub(inv.DueDate).Hours() / 24.0))
-		}
+		daysOverdue := arDaysPastDue(inv.DueDate, asOf)
 
 		item := ARAgingInvoiceItem{
 			ID:            inv.ID,
@@ -1282,37 +1292,34 @@ func GetARAgingReport(c fiber.Ctx) error {
 			ClientEmail:   inv.ClientEmail,
 			IssueDate:     inv.IssueDate.Format("2006-01-02"),
 			DueDate:       inv.DueDate.Format("2006-01-02"),
-			TotalAmount:   models.NewMoney(roundCents(inv.TotalAmount.Dollars())),
-			AmountPaid:    models.NewMoney(roundCents(inv.AmountPaid.Dollars())),
-			BalanceDue:    models.NewMoney(roundCents(receivableAmt)),
+			TotalAmount:   inv.TotalAmount,
+			AmountPaid:    inv.AmountPaid,
+			BalanceDue:    receivable,
 			DaysOverdue:   daysOverdue,
 			Status:        inv.Status,
 		}
 
+		var bucket *ARAgingBucket
+		switch {
+		case daysOverdue <= 0:
+			bucket = currentBucket
+		case daysOverdue <= 30:
+			bucket = b1_30
+		case daysOverdue <= 60:
+			bucket = b31_60
+		case daysOverdue <= 90:
+			bucket = b61_90
+		default:
+			bucket = b90plus
+		}
+		bucket.TotalAmount = bucket.TotalAmount.Add(receivable)
+		bucket.Count++
+		bucket.Invoices = append(bucket.Invoices, item)
+
 		if daysOverdue <= 0 {
-			currentBucket.TotalAmount += receivableAmt
-			currentBucket.Count++
-			currentBucket.Invoices = append(currentBucket.Invoices, item)
-			totalCurrent += receivableAmt
+			totalCurrent = totalCurrent.Add(receivable)
 		} else {
-			totalOverdue += receivableAmt
-			if daysOverdue <= 30 {
-				b1_30.TotalAmount += receivableAmt
-				b1_30.Count++
-				b1_30.Invoices = append(b1_30.Invoices, item)
-			} else if daysOverdue <= 60 {
-				b31_60.TotalAmount += receivableAmt
-				b31_60.Count++
-				b31_60.Invoices = append(b31_60.Invoices, item)
-			} else if daysOverdue <= 90 {
-				b61_90.TotalAmount += receivableAmt
-				b61_90.Count++
-				b61_90.Invoices = append(b61_90.Invoices, item)
-			} else {
-				b90plus.TotalAmount += receivableAmt
-				b90plus.Count++
-				b90plus.Invoices = append(b90plus.Invoices, item)
-			}
+			totalOverdue = totalOverdue.Add(receivable)
 		}
 
 		cKey := strings.ToUpper(strings.TrimSpace(inv.ClientName))
@@ -1324,49 +1331,110 @@ func GetARAgingReport(c fiber.Ctx) error {
 			}
 			clientMap[cKey] = cs
 		}
-		cs.TotalOutstanding += receivableAmt
+		cs.TotalOutstanding = cs.TotalOutstanding.Add(receivable)
 		cs.InvoiceCount++
 		if daysOverdue <= 0 {
-			cs.CurrentAmount += receivableAmt
+			cs.CurrentAmount = cs.CurrentAmount.Add(receivable)
 		} else {
-			cs.OverdueAmount += receivableAmt
+			cs.OverdueAmount = cs.OverdueAmount.Add(receivable)
 		}
-		if inv.DueDate.Before(asOf) && inv.DueDate.Format("2006-01-02") < cs.OldestDueDate {
-			cs.OldestDueDate = inv.DueDate.Format("2006-01-02")
+		// Oldest due date is the minimum across ALL of the client's open
+		// invoices (current or overdue), independent of slice order.
+		if dueStr := inv.DueDate.Format("2006-01-02"); dueStr < cs.OldestDueDate {
+			cs.OldestDueDate = dueStr
 		}
 	}
-
-	currentBucket.TotalAmount = roundCents(currentBucket.TotalAmount)
-	b1_30.TotalAmount = roundCents(b1_30.TotalAmount)
-	b31_60.TotalAmount = roundCents(b31_60.TotalAmount)
-	b61_90.TotalAmount = roundCents(b61_90.TotalAmount)
-	b90plus.TotalAmount = roundCents(b90plus.TotalAmount)
 
 	buckets := []ARAgingBucket{*currentBucket, *b1_30, *b31_60, *b61_90, *b90plus}
 
 	var clients []ARClientSummary
 	for _, cs := range clientMap {
-		cs.TotalOutstanding = roundCents(cs.TotalOutstanding)
-		cs.CurrentAmount = roundCents(cs.CurrentAmount)
-		cs.OverdueAmount = roundCents(cs.OverdueAmount)
 		clients = append(clients, *cs)
 	}
-
 	sort.Slice(clients, func(i, j int) bool {
-		return clients[i].TotalOutstanding > clients[j].TotalOutstanding
+		return clients[i].TotalOutstanding.GreaterThan(clients[j].TotalOutstanding)
 	})
+
+	// DSO = (Total Receivables / Credit Sales in trailing window) x window days.
+	dsoDays := 0.0
+	if creditSales.IsPositive() && totalReceivables.IsPositive() {
+		dsoDays = math.Round(float64(totalReceivables.Cents)/float64(creditSales.Cents)*float64(salesDays)*10) / 10
+	}
+
+	// Delinquency rate = Total Overdue / Total Receivables x 100.
+	delinquencyRate := 0.0
+	if totalReceivables.IsPositive() {
+		delinquencyRate = math.Round(float64(totalOverdue.Cents)/float64(totalReceivables.Cents)*1000) / 10
+	}
+
+	return ARAgingReportData{
+		AsOfDate:         asOf.Format("2006-01-02"),
+		TotalReceivables: totalReceivables,
+		TotalCurrent:     totalCurrent,
+		TotalOverdue:     totalOverdue,
+		InvoiceCount:     len(invoices),
+		DSODays:          dsoDays,
+		DelinquencyRate:  delinquencyRate,
+		CreditSales:      creditSales,
+		SalesDays:        salesDays,
+		Buckets:          buckets,
+		Clients:          clients,
+	}
+}
+
+// GetARAgingReport compiles Accounts Receivable aging metrics across
+// Current/30/60/90+ day buckets, computed strictly from invoice DUE dates.
+// Optional query parameters:
+//   - asOfDate:  reference date (YYYY-MM-DD), defaults to today
+//   - salesDays: trailing credit-sales window in days for DSO (1-3650, default 90)
+func GetARAgingReport(c fiber.Ctx) error {
+	asOfStr := c.Query("asOfDate")
+	asOf := time.Now()
+	if asOfStr != "" {
+		if t, err := parseDateFlexible(asOfStr); err == nil {
+			asOf = t
+		}
+	}
+
+	salesDays := 90
+	if sd := c.Query("salesDays"); sd != "" {
+		if n, err := strconv.Atoi(sd); err == nil && n >= 1 && n <= 3650 {
+			salesDays = n
+		}
+	}
+
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not available"})
+	}
+
+	var invoices []models.Invoice
+	if err := db.DB.Where("status IN ('SENT', 'OVERDUE', 'PARTIALLY_PAID')").
+		Order("due_date ASC, id ASC").
+		Find(&invoices).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch invoices for aging report"})
+	}
+
+	// Credit sales in the trailing window (DSO denominator): face value of all
+	// non-VOID invoices issued between asOf-salesDays+1 and asOf (inclusive).
+	windowStart := truncateToDay(asOf).AddDate(0, 0, -(salesDays - 1))
+	creditQ := db.DB.Model(&models.Invoice{}).
+		Where("status != ?", "VOID")
+	creditQ = ApplyDateRange(creditQ, "issue_date", windowStart.Format("2006-01-02"), truncateToDay(asOf).Format("2006-01-02"))
+	var creditInvoices []models.Invoice
+	if err := creditQ.Find(&creditInvoices).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch credit sales for aging report"})
+	}
+	creditCents := int64(0)
+	for i := range creditInvoices {
+		creditCents += creditInvoices[i].TotalAmount.Cents
+	}
+	creditSales := models.Money{Cents: creditCents}
+
+	report := BuildARAgingData(invoices, asOf, creditSales, salesDays)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status": "success",
-		"report": ARAgingReportData{
-			AsOfDate:         asOf.Format("2006-01-02"),
-			TotalReceivables: roundCents(totalReceivables),
-			TotalCurrent:     roundCents(totalCurrent),
-			TotalOverdue:     roundCents(totalOverdue),
-			InvoiceCount:     len(invoices),
-			Buckets:          buckets,
-			Clients:          clients,
-		},
+		"report": report,
 	})
 }
 

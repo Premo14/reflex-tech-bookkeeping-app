@@ -20,6 +20,7 @@ interface HeaderProps {
   isAccountsLoading?: boolean;
   startDate?: string;
   endDate?: string;
+  onOpenInvoiceDetail?: (invoiceId: number) => void;
 }
 
 export default function Header({
@@ -34,7 +35,8 @@ export default function Header({
   onOpenInvoices,
   isAccountsLoading = false,
   startDate,
-  endDate
+  endDate,
+  onOpenInvoiceDetail
 }: HeaderProps) {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showAccountManager, setShowAccountManager] = useState(false);
@@ -330,6 +332,7 @@ export default function Header({
           initialStartDate={startDate}
           initialEndDate={endDate}
           onViewUncategorized={onViewUncategorized}
+          onOpenInvoiceDetail={onOpenInvoiceDetail}
         />
       )}
     </>

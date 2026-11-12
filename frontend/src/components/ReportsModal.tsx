@@ -31,6 +31,7 @@ interface ReportsModalProps {
   initialStartDate?: string;
   initialEndDate?: string;
   onViewUncategorized?: () => void;
+  onOpenInvoiceDetail?: (invoiceId: number) => void;
   initialTab?: ReportTab;
 }
 
@@ -40,12 +41,14 @@ export default function ReportsModal({
   initialStartDate,
   initialEndDate,
   onViewUncategorized,
+  onOpenInvoiceDetail,
   initialTab = "pl",
 }: ReportsModalProps) {
   const [activeTab, setActiveTab] = useState<ReportTab>(initialTab);
   const [startDate, setStartDate] = useState(initialStartDate || "");
   const [endDate, setEndDate] = useState(initialEndDate || "");
   const [asOfDate, setAsOfDate] = useState<string>(toLocalISODate(new Date()));
+  const [dsoWindow, setDsoWindow] = useState<number>(90);
   const [taxYear, setTaxYear] = useState<number>(new Date().getFullYear());
   const [activePreset, setActivePreset] = useState<string>(
     initialStartDate || initialEndDate ? "custom" : "full_year"
@@ -106,7 +109,7 @@ export default function ReportsModal({
         loadVendorSpend(start, end);
         break;
       case "ar_aging":
-        loadARAging(targetAsOf);
+        loadARAging(targetAsOf, dsoWindow);
         break;
       case "schedule_c":
         loadScheduleC(taxYear, start, end);
@@ -136,8 +139,8 @@ export default function ReportsModal({
         }
         break;
       case "ar_aging":
-        if (!arAgingReport || arAgingReport.asOfDate !== asOfDate) {
-          loadARAging(asOfDate);
+        if (!arAgingReport || arAgingReport.asOfDate !== asOfDate || arAgingReport.salesDays !== dsoWindow) {
+          loadARAging(asOfDate, dsoWindow);
         }
         break;
       case "schedule_c":
@@ -189,10 +192,10 @@ export default function ReportsModal({
     }
   };
 
-  const loadARAging = async (targetDate: string = asOfDate) => {
+  const loadARAging = async (targetDate: string = asOfDate, targetWindow: number = dsoWindow) => {
     setIsARLoading(true);
     try {
-      const data = await getARAgingReport({ asOfDate: targetDate });
+      const data = await getARAgingReport({ asOfDate: targetDate, salesDays: targetWindow });
       setARAgingReport(data);
     } catch (err) {
       console.error("Failed to load A/R Aging report:", err);
@@ -509,6 +512,12 @@ export default function ReportsModal({
       [sanitizeCSV("Current (Not Due Yet)"), sanitizeCSV(arAgingReport.totalCurrent.toFixed(2))],
       [sanitizeCSV("Total Overdue"), sanitizeCSV(arAgingReport.totalOverdue.toFixed(2))],
       [sanitizeCSV("Total Open Invoices"), sanitizeCSV(arAgingReport.invoiceCount.toString())],
+      [
+        sanitizeCSV(`Days Sales Outstanding (DSO, ${arAgingReport.salesDays}-day window)`),
+        sanitizeCSV(arAgingReport.dsoDays.toFixed(1)),
+      ],
+      [sanitizeCSV("Delinquency Rate (Overdue / Total Receivables)"), sanitizeCSV(`${arAgingReport.delinquencyRate.toFixed(1)}%`)],
+      [sanitizeCSV(`Credit Sales (Trailing ${arAgingReport.salesDays} Days, DSO Denominator)`), sanitizeCSV(arAgingReport.creditSales.toFixed(2))],
       [],
       [sanitizeCSV("AGING BUCKETS SUMMARY"), sanitizeCSV("AMOUNT"), sanitizeCSV("INVOICES COUNT"), sanitizeCSV("% OF TOTAL")],
     ];
@@ -530,9 +539,12 @@ export default function ReportsModal({
       sanitizeCSV("CUSTOMER / CLIENT"),
       sanitizeCSV("ISSUE DATE"),
       sanitizeCSV("DUE DATE"),
+      sanitizeCSV("STATUS"),
       sanitizeCSV("DAYS OVERDUE"),
       sanitizeCSV("AGING BUCKET"),
-      sanitizeCSV("AMOUNT OUTSTANDING"),
+      sanitizeCSV("INVOICED (FACE)"),
+      sanitizeCSV("PAID TO DATE"),
+      sanitizeCSV("BALANCE DUE"),
     ]);
 
     const allInvoices = arAgingReport.buckets.flatMap((b) =>
@@ -545,9 +557,12 @@ export default function ReportsModal({
         sanitizeCSV(inv.clientName),
         sanitizeCSV(formatReportDate(inv.issueDate)),
         sanitizeCSV(formatReportDate(inv.dueDate)),
+        sanitizeCSV(inv.status),
         sanitizeCSV(inv.daysOverdue > 0 ? `${inv.daysOverdue} days` : "Current (0)"),
         sanitizeCSV(inv.bucketName),
         sanitizeCSV(inv.totalAmount.toFixed(2)),
+        sanitizeCSV(inv.amountPaid.toFixed(2)),
+        sanitizeCSV(inv.balanceDue.toFixed(2)),
       ]);
     });
 
@@ -1663,7 +1678,7 @@ export default function ReportsModal({
 
             {/* AS OF DATE FILTER TOOLBAR */}
             <div className="flex flex-wrap items-end justify-between gap-3 bg-black/20 p-3 sm:p-3.5 rounded-xl border border-white/5 print:hidden">
-              <div className="flex items-end gap-2.5 flex-1 min-w-[220px]">
+              <div className="flex flex-wrap items-end gap-2.5 flex-1 min-w-[220px]">
                 <div className="w-44">
                   <Input
                     id="ar-as-of-date"
@@ -1674,7 +1689,24 @@ export default function ReportsModal({
                     onChange={(e) => setAsOfDate(e.target.value)}
                   />
                 </div>
-                <Button variant="secondary" size="sm" onClick={() => loadARAging(asOfDate)} isLoading={isARLoading}>
+                <div>
+                  <label htmlFor="ar-dso-window" className="block text-[11px] font-medium text-zinc-400 uppercase tracking-wider mb-1">
+                    DSO Window (Days)
+                  </label>
+                  <select
+                    id="ar-dso-window"
+                    value={dsoWindow}
+                    onChange={(e) => setDsoWindow(Number(e.target.value))}
+                    className="bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-2 text-xs font-bold text-white focus:outline-none focus:border-rose-500 cursor-pointer"
+                    title="Trailing credit-sales window used as the DSO denominator"
+                  >
+                    <option value={30}>30</option>
+                    <option value={90}>90</option>
+                    <option value={180}>180</option>
+                    <option value={365}>365</option>
+                  </select>
+                </div>
+                <Button variant="secondary" size="sm" onClick={() => loadARAging(asOfDate, dsoWindow)} isLoading={isARLoading}>
                   Recalculate Aging
                 </Button>
               </div>
@@ -1704,8 +1736,8 @@ export default function ReportsModal({
               </div>
             ) : arAgingReport ? (
               <div className="space-y-4">
-                {/* 4 SUMMARY METRIC CARDS */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                {/* 6 SUMMARY METRIC CARDS */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
                   <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                       Total Receivables
@@ -1753,6 +1785,41 @@ export default function ReportsModal({
                     <span className="text-[10px] text-zinc-500">
                       Across {(arAgingReport.clients || []).length} clients
                     </span>
+                  </div>
+
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                        DSO (Days Sales Outstanding)
+                      </span>
+                      <span className="text-[10px] bg-white/10 text-zinc-300 px-1.5 py-0.2 rounded font-mono">
+                        {arAgingReport.salesDays}d window
+                      </span>
+                    </div>
+                    <p
+                      className={`text-xl sm:text-2xl font-black mt-1 font-mono ${
+                        arAgingReport.dsoDays > 60 ? "text-rose-300" : "text-cyan-300"
+                      }`}
+                    >
+                      {arAgingReport.dsoDays.toFixed(1)} days
+                    </p>
+                    <span className="text-[10px] text-zinc-500">
+                      vs {formatMoney(arAgingReport.creditSales)} credit sales
+                    </span>
+                  </div>
+
+                  <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-rose-300">
+                      Delinquency Rate
+                    </span>
+                    <p
+                      className={`text-xl sm:text-2xl font-black mt-1 font-mono ${
+                        arAgingReport.delinquencyRate > 20 ? "text-rose-300" : "text-emerald-400"
+                      }`}
+                    >
+                      {arAgingReport.delinquencyRate.toFixed(1)}%
+                    </p>
+                    <span className="text-[10px] text-rose-400/80">Share of receivables past due</span>
                   </div>
                 </div>
 
@@ -1831,19 +1898,30 @@ export default function ReportsModal({
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs text-left">
                         <thead>
-                          <tr className="border-b border-white/10 text-zinc-400 uppercase tracking-wider text-[10px]">
+                          <tr className="border-b border-white/10 text-zinc-400 uppercase tracking-wider text-[10px] whitespace-nowrap">
                             <th className="py-2 px-2.5 font-bold">Invoice #</th>
                             <th className="py-2 px-2.5 font-bold">Customer / Client</th>
-                            <th className="py-2 px-2.5 font-bold">Issue Date</th>
-                            <th className="py-2 px-2.5 font-bold">Due Date</th>
-                            <th className="py-2 px-2.5 font-bold text-center">Overdue Status</th>
+                            <th className="py-2 px-2.5 font-bold">Issue / Due</th>
+                            <th className="py-2 px-2.5 font-bold">Status</th>
+                            <th className="py-2 px-2.5 font-bold text-center">Overdue</th>
                             <th className="py-2 px-2.5 font-bold">Aging Bucket</th>
-                            <th className="py-2 px-2.5 font-bold text-right">Amount</th>
+                            <th className="py-2 px-2.5 font-bold text-right">Invoiced</th>
+                            <th className="py-2 px-2.5 font-bold text-right">Paid</th>
+                            <th className="py-2 px-2.5 font-bold text-right">Balance Due</th>
+                            <th className="py-2 px-2.5 font-bold text-right">
+                              <span className="sr-only">Actions</span>
+                            </th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-white/5">
+                        <tbody className="divide-y divide-white/5 whitespace-nowrap">
                           {allARInvoices.map((inv) => {
                             const isOverdue = inv.daysOverdue > 0;
+                            const statusClasses =
+                              inv.status === "OVERDUE"
+                                ? "bg-red-500/20 text-red-300 border-red-500/40"
+                                : inv.status === "PARTIALLY_PAID"
+                                ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+                                : "bg-blue-500/20 text-blue-300 border-blue-500/40";
                             return (
                               <tr key={inv.id} className="hover:bg-white/5 transition-colors">
                                 <td className="py-1.5 px-2.5 font-mono font-bold text-white">
@@ -1853,15 +1931,20 @@ export default function ReportsModal({
                                   {inv.clientName}
                                 </td>
                                 <td className="py-1.5 px-2.5 text-zinc-400">
-                                  {formatReportDate(inv.issueDate)}
+                                  <span>{formatReportDate(inv.issueDate)}</span>
+                                  <span className="text-[10px] text-zinc-500 block">
+                                    Due: {formatReportDate(inv.dueDate)}
+                                  </span>
                                 </td>
-                                <td className="py-1.5 px-2.5 text-zinc-400">
-                                  {formatReportDate(inv.dueDate)}
+                                <td className="py-1.5 px-2.5">
+                                  <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full border ${statusClasses}`}>
+                                    {inv.status === "PARTIALLY_PAID" ? "PARTIAL" : inv.status}
+                                  </span>
                                 </td>
                                 <td className="py-1.5 px-2.5 text-center">
                                   {isOverdue ? (
                                     <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                                      ⚠️ {inv.daysOverdue}d overdue
+                                      ⚠️ {inv.daysOverdue}d
                                     </span>
                                   ) : (
                                     <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
@@ -1874,8 +1957,26 @@ export default function ReportsModal({
                                     {inv.bucketName}
                                   </span>
                                 </td>
-                                <td className="py-1.5 px-2.5 text-right font-mono font-bold text-white">
+                                <td className="py-1.5 px-2.5 text-right font-mono text-zinc-300">
                                   {formatMoney(inv.totalAmount)}
+                                </td>
+                                <td className="py-1.5 px-2.5 text-right font-mono text-zinc-400">
+                                  {inv.amountPaid > 0 ? formatMoney(inv.amountPaid) : "—"}
+                                </td>
+                                <td className="py-1.5 px-2.5 text-right font-mono font-bold text-white">
+                                  {formatMoney(inv.balanceDue)}
+                                </td>
+                                <td className="py-1.5 px-2.5 text-right">
+                                  {onOpenInvoiceDetail && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onOpenInvoiceDetail(inv.id)}
+                                      className="px-2 py-1 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white border border-white/10 rounded text-[11px] cursor-pointer transition-colors"
+                                      title="Open invoice in the Invoices panel"
+                                    >
+                                      View
+                                    </button>
+                                  )}
                                 </td>
                               </tr>
                             );
@@ -1884,11 +1985,18 @@ export default function ReportsModal({
                         <tfoot>
                           <tr className="border-t-2 border-white/20 font-bold text-zinc-100">
                             <td colSpan={6} className="py-2 px-2.5 uppercase tracking-wider text-right pr-4 text-[11px]">
-                              Total Outstanding:
+                              Total Balance Due:
+                            </td>
+                            <td className="py-2 px-2.5 text-right font-mono text-zinc-300">
+                              {formatMoney(allARInvoices.reduce((s, i) => s + i.totalAmount, 0))}
+                            </td>
+                            <td className="py-2 px-2.5 text-right font-mono text-zinc-300">
+                              {formatMoney(allARInvoices.reduce((s, i) => s + i.amountPaid, 0))}
                             </td>
                             <td className="py-2 px-2.5 text-right font-mono text-white text-xs font-bold">
                               {formatMoney(arAgingReport.totalReceivables)}
                             </td>
+                            <td />
                           </tr>
                         </tfoot>
                       </table>

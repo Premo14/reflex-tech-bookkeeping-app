@@ -26,6 +26,7 @@ export default function LedgerPage() {
   const [appSettingsModalOpen, setAppSettingsModalOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'storage' | 'rules'>('storage');
   const [invoicingModalOpen, setInvoicingModalOpen] = useState(false);
+  const [arDeepLinkInvoiceId, setArDeepLinkInvoiceId] = useState<number | null>(null);
   const [initialRuleData, setInitialRuleData] = useState<{
     name?: string;
     descriptionKeyword?: string;
@@ -174,6 +175,10 @@ export default function LedgerPage() {
           isAccountsLoading={isAccountsLoading}
           startDate={startDate}
           endDate={endDate}
+          onOpenInvoiceDetail={(id) => {
+            setArDeepLinkInvoiceId(id);
+            setInvoicingModalOpen(true);
+          }}
         />
         <LedgerGrid 
           startDate={startDate}
@@ -204,7 +209,11 @@ export default function LedgerPage() {
       />
       <InvoicingModal
         isOpen={invoicingModalOpen}
-        onClose={() => setInvoicingModalOpen(false)}
+        onClose={() => {
+          setInvoicingModalOpen(false);
+          setArDeepLinkInvoiceId(null);
+        }}
+        initialInvoiceId={arDeepLinkInvoiceId ?? undefined}
         onInvoicesUpdated={fetchData}
       />
     </div>

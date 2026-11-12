@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Modal } from "./ui/Modal";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -29,12 +29,15 @@ interface InvoicingModalProps {
   isOpen: boolean;
   onClose: () => void;
   onInvoicesUpdated?: () => void;
+  /** When set, opens the invoice detail preview for this invoice once loaded (deep link from A/R Aging). */
+  initialInvoiceId?: number;
 }
 
 export default function InvoicingModal({
   isOpen,
   onClose,
   onInvoicesUpdated,
+  initialInvoiceId,
 }: InvoicingModalProps) {
   const { confirm, alert } = useConfirm();
 
@@ -73,10 +76,17 @@ export default function InvoicingModal({
   // Print Preview State
   const [previewInvoice, setPreviewInvoice] = useState<Invoice | null>(null);
 
+  // Deep-link state: set whenever the modal opens with initialInvoiceId,
+  // consumed by loadInvoices once the requested invoice has been fetched.
+  const deepLinkPendingRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (isOpen) {
+      deepLinkPendingRef.current = initialInvoiceId ?? null;
       loadInvoices();
       loadAccounts();
+    } else {
+      deepLinkPendingRef.current = null;
     }
   }, [isOpen, statusFilter, searchQuery]);
 
@@ -98,6 +108,14 @@ export default function InvoicingModal({
       });
       setInvoices(res.invoices);
       setSummary(res.summary);
+      // Deep link from A/R Aging: surface the requested invoice's detail preview.
+      if (deepLinkPendingRef.current != null) {
+        const found = res.invoices.find((i) => i.id === deepLinkPendingRef.current);
+        if (found) {
+          setPreviewInvoice(found);
+          deepLinkPendingRef.current = null;
+        }
+      }
     } catch (err) {
       console.error("Failed to load invoices:", err);
     } finally {

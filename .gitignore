@@ -47,3 +47,5 @@ file-processor/app
 file-processor/file-processor
 # AI Workspace Documentation
 AGENTS.md
+autonomous_audit_and_hardening_prompt.md
+architecture_preview.md
