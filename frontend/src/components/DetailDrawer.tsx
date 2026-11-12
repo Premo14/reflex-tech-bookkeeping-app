@@ -15,9 +15,10 @@ import {
   getUnlinkedItems,
   linkExpenseToTransaction, unlinkExpenseFromTransaction,
   createAndLink, uploadReceiptToExpense, deleteReceipt,
-  getSettings, getChartAccounts, resolveReviewItems, restoreItem
+  getSettings, getChartAccounts, resolveReviewItems, restoreItem,
+  getInvoice, matchInvoicePayment, unmatchInvoicePayment, getInvoiceCandidates, getInvoices
 } from "../services/api";
-import type { BankTransaction, Expense, ChartAccount } from "../types/models";
+import type { BankTransaction, Expense, ChartAccount, Invoice, ScoredDepositCandidate, InvoiceLineItem } from "../types/models";
 import CreateExpenseForm from "./CreateExpenseForm";
 import CreateTransactionForm from "./CreateTransactionForm";
 import { getGroupedAccounts } from "../utils/accountHierarchy";
@@ -38,19 +39,29 @@ import { MoneyInput } from "./ui/MoneyInput";
 import { useConfirm } from "./ui/ConfirmDialog";
 
 interface DetailDrawerProps {
-  type: "transaction" | "receipt" | null;
+  type: "transaction" | "receipt" | "invoice" | null;
   id: number | null;
   onClose: () => void;
   onCreateRule?: (data: { name: string; descriptionKeyword: string; categoryAccountId?: number | null }) => void;
+  onOpenInvoices?: () => void;
 }
 
-export default function DetailDrawer({ type, id, onClose, onCreateRule }: DetailDrawerProps) {
+export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenInvoices }: DetailDrawerProps) {
   const { confirm, alert } = useConfirm();
   const activeRequestId = useRef(0);
   const [hasBackgroundUpdate, setHasBackgroundUpdate] = useState(false);
   const [tx, setTx] = useState<BankTransaction | null>(null);
   const [expense, setExpense] = useState<Expense | null>(null);
   const [accounts, setAccounts] = useState<ChartAccount[]>([]);
+
+  // Invoice & Deposit Relationship State
+  const [invoice, setInvoice] = useState<Invoice | null>(null);
+  const [invoiceCandidates, setInvoiceCandidates] = useState<ScoredDepositCandidate[]>([]);
+  const [linkedInvoice, setLinkedInvoice] = useState<Invoice | null>(null);
+  const [suggestedInvoices, setSuggestedInvoices] = useState<Invoice[]>([]);
+  const [allOpenInvoices, setAllOpenInvoices] = useState<Invoice[]>([]);
+  const [selectedInvoiceToMatch, setSelectedInvoiceToMatch] = useState<number | null>(null);
+  const [isMatchingInvoice, setIsMatchingInvoice] = useState(false);
 
   const [confirmedExpenses, setConfirmedExpenses] = useState<Expense[]>([]);
   const [suggestedExpenses, setSuggestedExpenses] = useState<Expense[]>([]);
@@ -91,6 +102,8 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
   const [isAllowing, setIsAllowing] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoreError, setRestoreError] = useState("");
+  const [receiptZoom, setReceiptZoom] = useState(1);
+  const [receiptRotation, setReceiptRotation] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [linkSearch, setLinkSearch] = useState("");
@@ -279,6 +292,12 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
     if (resetIdx) {
       setActiveExpenseIdx(0);
       setActiveTxIdx(0);
+      setInvoice(null);
+      setInvoiceCandidates([]);
+      setLinkedInvoice(null);
+      setSuggestedInvoices([]);
+      setAllOpenInvoices([]);
+      setSelectedInvoiceToMatch(null);
     }
     setIsEditingExpense(false);
     setIsEditingTx(false);
@@ -301,6 +320,22 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
         setTx(data.transaction);
         setConfirmedExpenses(data.confirmedExpenses);
         setSuggestedExpenses(data.suggestedExpenses);
+        setLinkedInvoice(data.linkedInvoice || null);
+        setSuggestedInvoices(data.suggestedInvoices || []);
+
+        if (data.transaction.amount > 0 && !data.linkedInvoice) {
+          try {
+            const invList = await getInvoices();
+            if (reqId === activeRequestId.current) {
+              const openInvs = (invList.invoices || []).filter(i => i.status !== "PAID" && i.status !== "VOID" && !i.bankTransactionId);
+              setAllOpenInvoices(openInvs);
+            }
+          } catch (invErr) {
+            console.error("Failed to load open invoices for deposit matching:", invErr);
+          }
+        } else {
+          setAllOpenInvoices([]);
+        }
         
         // Find which transaction in the active expense's bank transactions matches the loaded transaction
         const activeExp = data.confirmedExpenses[0];
@@ -336,6 +371,28 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
           const maxIdx = Math.max(0, data.confirmedTransactions.length - 1);
           return Math.min(prev, maxIdx);
         });
+      } else if (type === "invoice") {
+        const data = await getInvoice(Number(id));
+        if (reqId !== activeRequestId.current) return;
+        const inv = data.invoice;
+        loadedDate = inv.issueDate || inv.createdAt;
+        loadedReview = "";
+        setInvoice(inv);
+        if (inv.bankTransaction) {
+          setTx(inv.bankTransaction);
+          setConfirmedTransactions([inv.bankTransaction]);
+        } else {
+          setTx(null);
+          setConfirmedTransactions([]);
+          try {
+            const candData = await getInvoiceCandidates(inv.id);
+            if (reqId === activeRequestId.current) {
+              setInvoiceCandidates(candData.candidates || []);
+            }
+          } catch (candErr) {
+            console.error("Failed to load invoice candidates:", candErr);
+          }
+        }
       }
 
       const settings = await getSettings();
@@ -396,9 +453,27 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
         if (receipts.length > 1) {
           if (e.key === "ArrowLeft") {
             setActiveReceiptIdx(prev => Math.max(0, prev - 1));
+            setReceiptZoom(1);
+            setReceiptRotation(0);
           } else if (e.key === "ArrowRight") {
             setActiveReceiptIdx(prev => Math.min(receipts.length - 1, prev + 1));
+            setReceiptZoom(1);
+            setReceiptRotation(0);
           }
+        }
+        if (e.key === "+" || e.key === "=") {
+          e.preventDefault();
+          setReceiptZoom(prev => Math.min(3, prev + 0.25));
+        } else if (e.key === "-" || e.key === "_") {
+          e.preventDefault();
+          setReceiptZoom(prev => Math.max(0.5, prev - 0.25));
+        } else if (e.key === "0") {
+          e.preventDefault();
+          setReceiptZoom(1);
+          setReceiptRotation(0);
+        } else if (e.key === "r" || e.key === "R") {
+          e.preventDefault();
+          setReceiptRotation(prev => (prev + 90) % 360);
         }
       } else {
         if ((e.key === "a" || e.key === "A") && !isClosed) {
@@ -667,6 +742,39 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
     }
   };
 
+  const handleMatchInvoicePayment = async (invId: number, txId: number) => {
+    setIsMatchingInvoice(true);
+    try {
+      await matchInvoicePayment(invId, txId);
+      await loadData();
+      await alert({ title: "Invoice Paid & Linked", message: "Successfully matched bank deposit to invoice. Invoice status set to PAID." });
+    } catch (err: any) {
+      await alert({ title: "Match Failed", message: err.message || "Failed to match payment", variant: "danger" });
+    } finally {
+      setIsMatchingInvoice(false);
+    }
+  };
+
+  const handleUnmatchInvoicePayment = async (invId: number) => {
+    const ok = await confirm({
+      title: "Unlink Payment",
+      message: "Are you sure you want to unlink this invoice from the bank transaction? The invoice will return to unpaid status.",
+      confirmText: "Unlink Payment",
+      variant: "danger"
+    });
+    if (!ok) return;
+
+    setIsMatchingInvoice(true);
+    try {
+      await unmatchInvoicePayment(invId);
+      await loadData();
+    } catch (err: any) {
+      await alert({ title: "Unlink Failed", message: err.message || "Failed to unlink payment", variant: "danger" });
+    } finally {
+      setIsMatchingInvoice(false);
+    }
+  };
+
   const handleLink = async () => {
     if (selectedLinkId === null) return;
     const isAlreadyLinked = type === "transaction" ? expensesList.length > 0 : transactionsList.length > 0;
@@ -864,8 +972,8 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
     );
   };
 
-  const inputCls = "w-full bg-zinc-900 border border-zinc-700 rounded p-2 text-sm text-white focus:outline-none focus:border-zinc-500 transition-colors";
-  const labelCls = "block text-xs font-medium text-zinc-400 mb-1";
+  const inputCls = "w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors";
+  const labelCls = "block text-[11px] font-medium text-zinc-400 mb-0.5 uppercase tracking-wider";
   const btnSmGray = "text-xs text-zinc-400 hover:text-zinc-200 transition";
   const btnSmBlue = "text-xs text-blue-400 hover:text-blue-300 transition";
   const btnSmGreen = "text-xs text-emerald-400 hover:text-emerald-300 transition";
@@ -876,7 +984,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
   const renderLinkPicker = () => {
     if (!showLinkPanel) return null;
     return (
-      <div className="border border-white/10 bg-zinc-900/90 rounded-2xl p-5 backdrop-blur-md mt-4 shadow-xl">
+      <div className="border border-white/10 bg-zinc-900/90 rounded-xl p-3.5 sm:p-4 backdrop-blur-md mt-4 shadow-xl">
         <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-4 border-b border-zinc-800 pb-3 gap-3">
           <div>
             <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -959,26 +1067,264 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
     );
   };
 
+  const renderInvoiceView = () => {
+    if (!invoice) return null;
+
+    let items: InvoiceLineItem[] = [];
+    try {
+      if (typeof invoice.items === 'string') {
+        items = JSON.parse(invoice.items);
+      } else if (Array.isArray(invoice.items)) {
+        items = invoice.items;
+      }
+    } catch {
+      items = [];
+    }
+
+    const isPaid = invoice.status === 'PAID';
+    const hasTx = !!(invoice.bankTransactionId || invoice.bankTransaction);
+    const linkedTx = invoice.bankTransaction;
+
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5 items-stretch relative">
+        {/* LEFT COLUMN: INVOICE DETAILS */}
+        <div className="bg-white/2 border border-white/5 rounded-xl p-4 sm:p-5 backdrop-blur-md shadow-lg flex flex-col space-y-4">
+          <div className="flex justify-between items-start border-b border-zinc-800 pb-3">
+            <div>
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                <span className="font-mono text-xs font-bold text-indigo-400">
+                  {invoice.invoiceNumber || `INV-${invoice.id}`}
+                </span>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                  isPaid ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                  invoice.status === 'OVERDUE' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                  invoice.status === 'SENT' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+                  'bg-zinc-700/50 text-zinc-300'
+                }`}>
+                  {invoice.status}
+                </span>
+              </div>
+              <h2 className="text-base font-bold text-white">{invoice.clientName}</h2>
+              {invoice.clientEmail && <p className="text-xs text-zinc-400 mt-0.5">{invoice.clientEmail}</p>}
+              {invoice.clientAddress && <p className="text-xs text-zinc-500 mt-0.5 whitespace-pre-line">{invoice.clientAddress}</p>}
+            </div>
+            <div className="text-right">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-zinc-400 block">Total Due</span>
+              <span className="text-xl font-black text-white font-mono">{formatMoney(invoice.totalAmount)}</span>
+              {invoice.balanceDue !== undefined && invoice.balanceDue > 0 && !isPaid && (
+                <span className="text-xs text-amber-400 font-semibold block mt-0.5 font-mono">
+                  Remaining: {formatMoney(invoice.balanceDue)}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 text-xs p-3 bg-zinc-900/60 rounded-xl border border-white/5">
+            <div>
+              <span className="text-zinc-500 block text-[10px] uppercase font-bold">Issue Date</span>
+              <span className="text-zinc-200 font-medium">{formatDate(invoice.issueDate)}</span>
+            </div>
+            <div>
+              <span className="text-zinc-500 block text-[10px] uppercase font-bold">Due Date</span>
+              <span className="text-zinc-200 font-medium">{formatDate(invoice.dueDate)}</span>
+            </div>
+            <div>
+              <span className="text-zinc-500 block text-[10px] uppercase font-bold">Terms</span>
+              <span className="text-zinc-200 font-medium">{invoice.paymentTerms || "Net 30"}</span>
+            </div>
+          </div>
+
+          {/* LINE ITEMS TABLE */}
+          <div>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2">Line Items</h4>
+            <div className="border border-white/5 rounded-xl overflow-hidden bg-zinc-900/40">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-white/5 bg-white/[0.02] text-zinc-400 text-[10px] uppercase tracking-wider font-semibold">
+                    <th className="py-2 px-3">Description</th>
+                    <th className="py-2 px-2 text-right">Qty</th>
+                    <th className="py-2 px-2 text-right">Rate</th>
+                    <th className="py-2 px-3 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {items.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="py-3 px-3 text-zinc-500 italic text-center">No line items specified</td>
+                    </tr>
+                  ) : (
+                    items.map((it, i) => (
+                      <tr key={i} className="hover:bg-white/[0.02]">
+                        <td className="py-2 px-3 font-medium text-white">{it.description || "Item"}</td>
+                        <td className="py-2 px-2 text-right text-zinc-400">{it.quantity}</td>
+                        <td className="py-2 px-2 text-right text-zinc-400">{formatMoney(it.unitPrice)}</td>
+                        <td className="py-2 px-3 text-right font-semibold text-white">{formatMoney(it.amount || (it.quantity * it.unitPrice))}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* FINANCIAL SUMMARY TOTALS */}
+          <div className="pt-2 border-t border-white/5 space-y-1.5 text-xs">
+            <div className="flex justify-between text-zinc-400">
+              <span>Subtotal:</span>
+              <span className="font-mono text-zinc-200">{formatMoney(invoice.subtotal || invoice.totalAmount)}</span>
+            </div>
+            {invoice.taxAmount !== undefined && invoice.taxAmount > 0 && (
+              <div className="flex justify-between text-zinc-400">
+                <span>Tax ({((invoice.taxRate || 0) * 100).toFixed(1)}%):</span>
+                <span className="font-mono text-zinc-200">{formatMoney(invoice.taxAmount)}</span>
+              </div>
+            )}
+            <div className="flex justify-between text-sm font-bold text-white pt-1 border-t border-white/5">
+              <span>Total Invoice Amount:</span>
+              <span className="font-mono text-emerald-400">{formatMoney(invoice.totalAmount)}</span>
+            </div>
+          </div>
+
+          {invoice.notes && (
+            <div className="p-3 bg-zinc-900/40 border border-white/5 rounded-xl text-xs">
+              <span className="text-zinc-500 font-bold block mb-0.5">Notes:</span>
+              <p className="text-zinc-300 italic">{invoice.notes}</p>
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT COLUMN: BANK DEPOSIT MATCHING */}
+        <div className="bg-white/2 border border-white/5 rounded-xl p-4 sm:p-5 backdrop-blur-md shadow-lg flex flex-col space-y-4">
+          <div className="flex justify-between items-center border-b border-zinc-800 pb-2.5">
+            <h3 className="text-xs font-bold text-white tracking-tight flex items-center gap-1.5 uppercase">
+              <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path></svg>
+              <span>Bank Payment Reconciliation</span>
+            </h3>
+            {hasTx && (
+              <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                BALANCED
+              </span>
+            )}
+          </div>
+
+          {hasTx && linkedTx ? (
+            <div className="p-4 bg-zinc-900/80 border border-emerald-500/30 rounded-xl space-y-3">
+              <div className="flex justify-between items-start">
+                <div>
+                  <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-400 block mb-1">
+                    ✓ Paid via Bank Deposit
+                  </span>
+                  <div className="text-base font-bold text-white">{linkedTx.description}</div>
+                  <div className="text-xs text-zinc-400 mt-0.5">Deposited: {formatDate(linkedTx.date)}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xs text-zinc-400">Deposit Amount</div>
+                  <div className="text-base font-bold text-emerald-400">{formatMoney(linkedTx.amount)}</div>
+                </div>
+              </div>
+
+              {linkedTx.chartAccount && (
+                <div className="text-xs pt-2 border-t border-white/5 flex items-center gap-2 text-zinc-400">
+                  <span className="text-zinc-500">Bank Account:</span>
+                  <span className="text-zinc-200 font-medium">{linkedTx.chartAccount.name} ({linkedTx.chartAccount.code})</span>
+                </div>
+              )}
+
+              <div className="pt-2 flex justify-end">
+                <Button
+                  variant="danger"
+                  size="sm"
+                  isLoading={isMatchingInvoice}
+                  onClick={() => handleUnmatchInvoicePayment(invoice.id)}
+                  className="text-xs"
+                >
+                  Unlink Payment
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4 flex-1 flex flex-col">
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Match an incoming deposit from your bank register to mark this invoice as paid and balance your accounts receivable.
+              </p>
+
+              {invoiceCandidates.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="text-xs font-bold text-zinc-300 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+                    Suggested Bank Deposit Matches ({invoiceCandidates.length})
+                  </div>
+                  {invoiceCandidates.map((cand) => (
+                    <div key={cand.transaction.id} className="p-3 bg-zinc-900/90 border border-blue-500/30 rounded-xl hover:border-blue-500/60 transition-colors">
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.2 rounded">
+                              {cand.score}% Match
+                            </span>
+                            <span className="text-[10px] text-zinc-400">{cand.reason}</span>
+                          </div>
+                          <div className="text-sm font-semibold text-white truncate">{cand.transaction.description}</div>
+                          <div className="text-[11px] text-zinc-400">
+                            {formatDate(cand.transaction.date)} • {cand.transaction.chartAccount?.name || "Checking"}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-sm font-bold text-emerald-400">{formatMoney(cand.transaction.amount)}</div>
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            isLoading={isMatchingInvoice}
+                            onClick={() => handleMatchInvoicePayment(invoice.id, cand.transaction.id)}
+                            className="text-xs mt-1"
+                          >
+                            Match & Pay
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-6 border border-dashed border-white/10 rounded-xl text-center text-zinc-400 text-xs">
+                  <svg className="w-8 h-8 text-zinc-600 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  <p className="font-medium text-zinc-300">No candidate bank deposits found</p>
+                  <p className="text-zinc-500 mt-1">When a matching customer deposit arrives on your bank statement, it will appear here for 1-click matching.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   if (!type || !id) return null;
 
   return ReactDOM.createPortal(
     <>
       <div className={`fixed inset-0 z-60 bg-black/60 transition-opacity duration-300 ${isVisible ? 'opacity-100' : 'opacity-0'}`} onClick={handleClose} />
       <div className={`fixed inset-y-0 right-0 z-70 w-full lg:w-[85vw] lg:max-w-5xl bg-zinc-950/90 backdrop-blur-3xl border-l border-white/10 flex flex-col shadow-2xl transform transition-transform duration-300 ease-out ${isVisible ? 'translate-x-0' : 'translate-x-full'}`}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 shrink-0">
-          <div className="flex items-center gap-3">
-            <h2 className="text-lg font-bold text-white">{type === "transaction" ? "Transaction Details" : "Expense Details"}</h2>
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-zinc-800 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <h2 className="text-base font-bold text-white">
+              {type === "invoice"
+                ? `Invoice #${invoice?.invoiceNumber || id} — ${invoice?.clientName || 'Client'}`
+                : type === "transaction"
+                ? (isDeposit ? "Deposit & Revenue Details" : "Transaction Details")
+                : "Expense Details"}
+            </h2>
             {isLoading && (
               <LoadingSpinner size="sm" color="text-emerald-400" />
             )}
           </div>
-          <Button variant="ghost" onClick={handleClose} className="p-0! w-8 h-8 flex items-center justify-center rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+          <Button variant="ghost" onClick={handleClose} className="p-0! w-7 h-7 flex items-center justify-center rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
           </Button>
         </div>
 
         {hasBackgroundUpdate && (
-          <div className="mx-6 mt-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between gap-3 text-xs text-amber-300">
+          <div className="mx-4 sm:mx-5 mt-3 p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between gap-3 text-xs text-amber-300">
             <div className="flex items-center gap-2">
               <svg className="w-4 h-4 text-amber-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
               <span>A background process updated this record. Your unsaved edits are preserved.</span>
@@ -987,14 +1333,14 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
               <button 
                 type="button" 
                 onClick={() => { setHasBackgroundUpdate(false); loadData(false); }} 
-                className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-lg font-semibold transition cursor-pointer"
+                className="px-2 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded font-semibold transition cursor-pointer text-xs"
               >
                 Reload Record
               </button>
               <button 
                 type="button" 
                 onClick={() => setHasBackgroundUpdate(false)} 
-                className="px-2.5 py-1 text-zinc-400 hover:text-white transition cursor-pointer"
+                className="px-2 py-0.5 text-zinc-400 hover:text-white transition cursor-pointer text-xs"
               >
                 Keep My Changes
               </button>
@@ -1002,7 +1348,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 sm:space-y-5">
           {isLoading ? (
             <div className="py-24 flex flex-col items-center justify-center space-y-3">
               <LoadingSpinner size="lg" color="text-emerald-500" />
@@ -1066,7 +1412,10 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                 </div>
               )}
               
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-stretch relative">
+              {type === "invoice" && invoice ? (
+                renderInvoiceView()
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5 items-stretch relative">
                 
                 {/* DIVIDER LINE */}
                 <div className="hidden lg:block absolute left-1/2 top-4 bottom-4 w-px bg-zinc-800 -translate-x-1/2 z-0" />
@@ -1077,34 +1426,163 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                     <Button 
                        onClick={handleUnlink} 
                        variant="secondary" 
-                       className="rounded-full shadow-2xl border border-red-500/30 bg-black text-zinc-400 hover:text-red-400 hover:bg-red-500/10 p-3 flex flex-col items-center justify-center w-14 h-14 transition-colors cursor-pointer" 
+                       className="rounded-full shadow-2xl border border-red-500/30 bg-black text-zinc-400 hover:text-red-400 hover:bg-red-500/10 p-2.5 flex flex-col items-center justify-center w-12 h-12 transition-colors cursor-pointer" 
                        title="Unlink Pair"
                     >
-                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.73 21a2 2 0 01-3.46 0m9.73-8v-3a2 2 0 00-2-2h-3m-6 0H5a2 2 0 00-2 2v3m12 0l-4 4m0 0l-4-4m4 4V10" /></svg>
-                      <span className="text-[9px] font-bold mt-0.5 uppercase tracking-wider">Unlink</span>
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.73 21a2 2 0 01-3.46 0m9.73-8v-3a2 2 0 00-2-2h-3m-6 0H5a2 2 0 00-2 2v3m12 0l-4 4m0 0l-4-4m4 4V10" /></svg>
+                      <span className="text-[8px] font-bold mt-0.5 uppercase tracking-wider">Unlink</span>
                     </Button>
                   </div>
                 )}
 
                 {/* EXPENSE COLUMN */}
-                <div className={`bg-white/2 border border-white/5 rounded-2xl p-6 backdrop-blur-md shadow-lg flex flex-col relative z-10 transition-colors duration-200 ${
+                <div className={`bg-white/2 border border-white/5 rounded-xl p-4 sm:p-5 backdrop-blur-md shadow-lg flex flex-col relative z-10 transition-colors duration-200 ${
                   isEditingExpense ? 'ring-1 ring-emerald-500/20' : ''
                 }`}>
                   {isDeposit ? (
-                    <div className="flex flex-col items-center justify-center py-12 text-zinc-400 text-center h-full">
-                      <svg className="w-12 h-12 mb-3 opacity-20 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                      <h3 className="text-lg font-bold text-emerald-400/50 mb-2">Income Categorization</h3>
-                      <p className="max-w-xs text-sm">Deposits don't require expense receipts. Edit the transaction details to assign a Revenue Account.</p>
-                      {!isEditingTx && !activeTx?.categoryAccountId && (
-                        <Button variant="primary" onClick={() => setIsEditingTx(true)} className="mt-4">Categorize Deposit</Button>
+                    <div className="flex flex-col h-full space-y-4">
+                      <div className="flex items-center justify-between pb-3 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <svg className="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                          <h3 className="text-sm font-bold text-white tracking-tight">Client Invoice Relationship</h3>
+                        </div>
+                        {linkedInvoice && (
+                          <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
+                            PAID & MATCHED
+                          </span>
+                        )}
+                      </div>
+
+                      {linkedInvoice ? (
+                        <div className="bg-zinc-900/80 border border-emerald-500/30 rounded-xl p-4 space-y-3">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <div className="text-xs font-mono font-bold text-emerald-400">{linkedInvoice.invoiceNumber || `INV-${linkedInvoice.id}`}</div>
+                              <div className="text-base font-bold text-white mt-0.5">{linkedInvoice.clientName}</div>
+                              {linkedInvoice.clientEmail && <div className="text-xs text-zinc-400">{linkedInvoice.clientEmail}</div>}
+                            </div>
+                            <div className="text-right">
+                              <div className="text-xs text-zinc-400">Total Billed</div>
+                              <div className="text-base font-bold text-white">{formatMoney(linkedInvoice.totalAmount)}</div>
+                              <div className="text-[10px] text-emerald-400 font-semibold mt-0.5">Paid in Full</div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-white/5">
+                            <div>
+                              <span className="text-zinc-500 block text-[11px]">Issue Date</span>
+                              <span className="text-zinc-300 font-medium">{formatDate(linkedInvoice.issueDate)}</span>
+                            </div>
+                            <div>
+                              <span className="text-zinc-500 block text-[11px]">Due Date</span>
+                              <span className="text-zinc-300 font-medium">{formatDate(linkedInvoice.dueDate)}</span>
+                            </div>
+                          </div>
+
+                          {!isClosed && (
+                            <div className="pt-2 flex justify-end">
+                              <Button
+                                variant="danger"
+                                size="sm"
+                                isLoading={isMatchingInvoice}
+                                onClick={() => handleUnmatchInvoicePayment(linkedInvoice.id)}
+                                className="text-xs"
+                              >
+                                Unlink Payment
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-4 flex-1 flex flex-col">
+                          <p className="text-xs text-zinc-400 leading-relaxed">
+                            This deposit can be matched to an outstanding client invoice, or categorized directly to a Revenue account in the right panel.
+                          </p>
+
+                          {suggestedInvoices.length > 0 && (
+                            <div className="space-y-2">
+                              <div className="text-xs font-bold text-zinc-300 flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400"></span>
+                                Suggested Invoice Matches ({suggestedInvoices.length})
+                              </div>
+                              {suggestedInvoices.map((sug) => (
+                                <div key={sug.id} className="p-3 bg-zinc-900/90 border border-indigo-500/30 rounded-xl hover:border-indigo-500/60 transition-colors">
+                                  <div className="flex justify-between items-start gap-2">
+                                    <div>
+                                      <div className="font-mono text-xs text-indigo-400 font-bold">{sug.invoiceNumber || `INV-${sug.id}`}</div>
+                                      <div className="text-sm font-semibold text-white">{sug.clientName}</div>
+                                      <div className="text-[11px] text-zinc-400">Due: {formatDate(sug.dueDate)} • {formatMoney(sug.totalAmount)}</div>
+                                    </div>
+                                    <Button
+                                      variant="primary"
+                                      size="sm"
+                                      isLoading={isMatchingInvoice}
+                                      onClick={() => tx && handleMatchInvoicePayment(sug.id, tx.id)}
+                                      className="text-xs shrink-0"
+                                    >
+                                      Match & Mark Paid
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {allOpenInvoices.length > 0 && (
+                            <div className="p-3.5 bg-zinc-900/40 border border-white/5 rounded-xl space-y-2">
+                              <label className="text-xs font-semibold text-zinc-300 block">Select Open Invoice to Match:</label>
+                              <div className="flex gap-2 items-center">
+                                <Select
+                                  value={selectedInvoiceToMatch ? String(selectedInvoiceToMatch) : ""}
+                                  onChange={(e) => setSelectedInvoiceToMatch(Number(e.target.value) || null)}
+                                  className="text-xs py-1.5! flex-1"
+                                >
+                                  <option value="">Choose open invoice...</option>
+                                  {allOpenInvoices.map((inv) => (
+                                    <option key={inv.id} value={inv.id}>
+                                      {inv.invoiceNumber || `INV-${inv.id}`} — {inv.clientName} ({formatMoney(inv.totalAmount)})
+                                    </option>
+                                  ))}
+                                </Select>
+                                <Button
+                                  variant="info"
+                                  size="sm"
+                                  disabled={!selectedInvoiceToMatch}
+                                  isLoading={isMatchingInvoice}
+                                  onClick={() => {
+                                    if (selectedInvoiceToMatch && tx) {
+                                      handleMatchInvoicePayment(selectedInvoiceToMatch, tx.id);
+                                    }
+                                  }}
+                                  className="text-xs shrink-0"
+                                >
+                                  Match
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+
+                          {onOpenInvoices && (
+                            <div className="pt-2 mt-auto">
+                              <button
+                                type="button"
+                                onClick={onOpenInvoices}
+                                className="w-full py-2 px-3 border border-dashed border-white/10 hover:border-indigo-500/40 hover:bg-indigo-500/5 text-zinc-400 hover:text-indigo-300 rounded-xl text-xs font-medium transition-colors flex items-center justify-center gap-1.5"
+                              >
+                                <span>+</span> Create New Invoice for this Deposit
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   ) : (
                     <>
-                      <div className="flex flex-wrap items-center justify-between gap-3 mb-4 border-b border-zinc-800 pb-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2.5 mb-3 border-b border-zinc-800 pb-2.5">
                         <div className="flex flex-wrap items-center gap-2">
-                          <svg className="w-5 h-5 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                          <h2 className="text-xl font-bold">Expense Details</h2>
+                          <svg className="w-4 h-4 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                          <h2 className="text-base font-bold text-white">Expense Details</h2>
                           {activeExpense && (
                             <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${activeExpense.isManual ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'}`}>{activeExpense.isManual ? "Manual" : "AI Extracted"}</span>
                           )}
@@ -1114,17 +1592,17 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                           isEditingExpense ? (
                             <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={() => setIsEditingExpense(false)} className={btnSmGray}>Cancel</Button><Button variant="primary" size="sm" onClick={handleSaveExpense} >Save</Button></div>
                           ) : !isClosed ? (
-                            <div className="flex flex-wrap gap-2">
+                            <div className="flex flex-wrap gap-1.5">
                               <Button
                                 variant="secondary"
                                 size="sm"
                                 onClick={() => setIsSplitModalOpen(true)}
-                                className="text-amber-300 border-amber-500/30 hover:bg-amber-500/10 font-medium"
+                                className="text-amber-300 border-amber-500/30 hover:bg-amber-500/10 font-medium text-xs"
                                 title="Split receipt into multiple items (e.g. personal vs business)"
                               >
                                 ✂ Split Receipt
                               </Button>
-                              <Button variant="ghost" onClick={() => setIsEditingExpense(true)} className={btnSmGreen}>Edit</Button>
+                              <Button variant="ghost" size="sm" onClick={() => setIsEditingExpense(true)} className={btnSmGreen}>Edit</Button>
                               <Button variant="danger" size="sm" onClick={handleDeleteExpense} >Delete</Button>
                             </div>
                           ) : null
@@ -1138,7 +1616,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                         const form = expenseForm;
                         const setForm = setExpenseForm;
                         const editing = isEditingExpense;
-                        if (!item) return <div className="py-6 text-zinc-400 text-center">No Expense Linked</div>;
+                        if (!item) return <div className="py-6 text-zinc-400 text-center text-xs">No Expense Linked</div>;
 
                         const e = item as Expense;
                         
@@ -1153,17 +1631,17 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                         if (!isDeposit && (!e.receipts || e.receipts.length === 0)) warnings.push("This expense does not have a physical receipt file attached to it.");
                         
                         return (
-                          <div className="space-y-4 flex-1">
+                          <div className="space-y-3.5 flex-1">
                             {e.reviewStatus === "WARNINGS_IGNORED" ? (
-                              <div className="mb-2 bg-blue-500/10 border border-blue-500/20 text-blue-300 p-3 rounded-xl text-sm flex items-center justify-between italic">
+                              <div className="mb-2 bg-blue-500/10 border border-blue-500/20 text-blue-300 p-2.5 rounded-xl text-xs flex items-center justify-between italic">
                                 <span>Warnings have been ignored for this item.</span>
                                 <Button variant="ghost" size="sm" onClick={async () => {
                                   await resolveReviewItems("restore_warnings", [], [e.id]);
                                   await loadData();
-                                }} className="text-blue-200 hover:text-white px-3 py-1 h-auto text-xs not-italic bg-blue-500/20 hover:bg-blue-500/40 rounded">Undo</Button>
+                                }} className="text-blue-200 hover:text-white px-2.5 py-0.5 h-auto text-xs not-italic bg-blue-500/20 hover:bg-blue-500/40 rounded">Undo</Button>
                               </div>
                             ) : warnings.length > 0 && !isEditingExpense && (
-                                <div className="mb-2 bg-orange-500/10 border border-orange-500/20 text-orange-400 p-3 rounded-xl text-sm">
+                                <div className="mb-2 bg-orange-500/10 border border-orange-500/20 text-orange-400 p-2.5 rounded-xl text-xs">
                                     <ul className="list-disc pl-4 space-y-1">
                                         {warnings.map((w, i) => <li key={i}>{w}</li>)}
                                     </ul>
@@ -1174,15 +1652,15 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                               {editing ? (
                                 <div className="flex gap-2">
                                   <div className="flex-1">
-                                    <label className="text-xs text-zinc-400 block mb-1">Total</label>
+                                    <label className="text-[11px] text-zinc-400 block mb-0.5">Total</label>
                                     <MoneyInput value={form.amount} onChange={val => setForm({ ...form, amount: val })} />
                                   </div>
                                   <div className="w-24">
-                                    <label className="text-xs text-zinc-400 block mb-1">Tax</label>
+                                    <label className="text-[11px] text-zinc-400 block mb-0.5">Tax</label>
                                     <MoneyInput value={form.taxAmount || 0} onChange={val => setForm({ ...form, taxAmount: val })} />
                                   </div>
                                   <div className="w-24">
-                                    <label className="text-xs text-zinc-400 block mb-1">Currency</label>
+                                    <label className="text-[11px] text-zinc-400 block mb-0.5">Currency</label>
                                     <Select 
                                       searchable 
                                       dropdownAlign="right"
@@ -1195,9 +1673,9 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                                 </div>
                               ) : (
                                 <div className="flex items-baseline gap-2">
-                                  <p className="text-xl font-semibold">{formatMoney(e.amount)}</p>
+                                  <p className="text-lg font-bold font-mono text-white">{formatMoney(e.amount)}</p>
                                   {(e.taxAmount > 0 || (e.currencyCode && e.currencyCode !== 'USD')) && (
-                                    <p className="text-sm text-zinc-400">
+                                    <p className="text-xs text-zinc-400 font-mono">
                                       {e.currencyCode && e.currencyCode !== 'USD' ? e.currencyCode : ''}
                                       {e.taxAmount > 0 ? ` (Includes ${formatMoney(e.taxAmount)} tax)` : ''}
                                     </p>
@@ -1438,13 +1916,13 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                 )}
 
                 {/* BANK TRANSACTION COLUMN */}
-                <div className={`bg-white/2 border border-white/5 rounded-2xl p-6 backdrop-blur-md shadow-lg flex flex-col relative z-10 transition-colors duration-200 ${
+                <div className={`bg-white/2 border border-white/5 rounded-xl p-4 sm:p-5 backdrop-blur-md shadow-lg flex flex-col relative z-10 transition-colors duration-200 ${
                   isEditingTx ? 'ring-1 ring-blue-500/20' : ''
                 }`}>
-                  <div className="flex flex-wrap items-center justify-between gap-3 mb-4 border-b border-zinc-800 pb-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 mb-3 border-b border-zinc-800 pb-2.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <svg className="w-5 h-5 text-blue-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
-                      <h2 className="text-xl font-bold">Bank Transaction</h2>
+                      <svg className="w-4 h-4 text-blue-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
+                      <h2 className="text-base font-bold text-white">Bank Transaction</h2>
                       {activeTx && (() => {
                         const isManual = activeTx.isManual || (activeTx.fitId && activeTx.fitId.startsWith("MANUAL-"));
                         return <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${isManual ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'}`}>{isManual ? "Manual" : "Bank Import"}</span>;
@@ -1455,7 +1933,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                       isEditingTx ? (
                         <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={() => setIsEditingTx(false)} className={btnSmGray}>Cancel</Button><Button variant="primary" size="sm" onClick={handleSaveTx} >Save</Button></div>
                       ) : !isClosed ? (
-                        <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={() => setIsEditingTx(true)} className={btnSmBlue}>Edit</Button><Button variant="danger" size="sm" onClick={handleDeleteTx} >Delete</Button></div>
+                        <div className="flex flex-wrap gap-1.5"><Button variant="ghost" size="sm" onClick={() => setIsEditingTx(true)} className={btnSmBlue}>Edit</Button><Button variant="danger" size="sm" onClick={handleDeleteTx} >Delete</Button></div>
                       ) : null
                     )}
                   </div>
@@ -1518,7 +1996,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                             </div>
                           ) : (
                             <div className="flex items-baseline gap-2">
-                              <p className="text-xl font-semibold">{formatMoney(t.amount)}</p>
+                              <p className="text-lg font-bold font-mono text-white">{formatMoney(t.amount)}</p>
                             </div>
                           )}
                         </div>
@@ -1851,6 +2329,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                 </div>
 
               </div>
+              )}
 
               {/* SUGGESTED MATCHES */}
               {type === "transaction" && suggestedExpenses.length > 0 && (
@@ -2008,10 +2487,10 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                     <div className="w-full flex flex-col items-center py-4 relative">
                       {receipts.length > 1 && (
                         <div className="flex w-full justify-between px-4 absolute top-1/2 -translate-y-1/2 z-10">
-                          <Button variant="ghost" className="bg-black/50 text-white rounded-full p-2 hover:bg-black/70" onClick={() => setActiveReceiptIdx(Math.max(0, activeReceiptIdx - 1))} disabled={activeReceiptIdx === 0}>
+                          <Button variant="ghost" className="bg-black/50 text-white rounded-full p-2 hover:bg-black/70 cursor-pointer" onClick={() => { setActiveReceiptIdx(Math.max(0, activeReceiptIdx - 1)); setReceiptZoom(1); setReceiptRotation(0); }} disabled={activeReceiptIdx === 0}>
                             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
                           </Button>
-                          <Button variant="ghost" className="bg-black/50 text-white rounded-full p-2 hover:bg-black/70" onClick={() => setActiveReceiptIdx(Math.min(receipts.length - 1, activeReceiptIdx + 1))} disabled={activeReceiptIdx === receipts.length - 1}>
+                          <Button variant="ghost" className="bg-black/50 text-white rounded-full p-2 hover:bg-black/70 cursor-pointer" onClick={() => { setActiveReceiptIdx(Math.min(receipts.length - 1, activeReceiptIdx + 1)); setReceiptZoom(1); setReceiptRotation(0); }} disabled={activeReceiptIdx === receipts.length - 1}>
                             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
                           </Button>
                         </div>
@@ -2028,10 +2507,61 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule }: Detail
                         const isPdf = receipt.fileExt.toLowerCase() === '.pdf';
                         return (
                           <div key={receipt.id} className="w-full flex flex-col items-center">
+                            {!isPdf && (
+                              <div className="flex items-center gap-1.5 mb-2.5 bg-zinc-900/90 px-3 py-1 rounded-lg border border-white/10 shadow-md">
+                                <button
+                                  type="button"
+                                  onClick={() => setReceiptZoom(prev => Math.max(0.5, prev - 0.25))}
+                                  className="text-zinc-300 hover:text-white px-1.5 py-0.5 rounded text-xs font-bold hover:bg-white/10 transition-colors cursor-pointer"
+                                  title="Zoom Out (−)"
+                                >
+                                  −
+                                </button>
+                                <span className="text-[11px] font-mono text-zinc-300 w-12 text-center select-none font-semibold">
+                                  {Math.round(receiptZoom * 100)}%
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setReceiptZoom(prev => Math.min(3, prev + 0.25))}
+                                  className="text-zinc-300 hover:text-white px-1.5 py-0.5 rounded text-xs font-bold hover:bg-white/10 transition-colors cursor-pointer"
+                                  title="Zoom In (+)"
+                                >
+                                  +
+                                </button>
+                                <div className="h-3 w-px bg-white/20 mx-1" />
+                                <button
+                                  type="button"
+                                  onClick={() => setReceiptRotation(prev => (prev + 90) % 360)}
+                                  className="text-zinc-300 hover:text-white px-1.5 py-0.5 rounded text-xs font-bold hover:bg-white/10 transition-colors cursor-pointer"
+                                  title="Rotate 90° (R)"
+                                >
+                                  ↻
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => { setReceiptZoom(1); setReceiptRotation(0); }}
+                                  className="text-zinc-400 hover:text-white px-1.5 py-0.5 rounded text-[10px] font-medium hover:bg-white/10 transition-colors ml-1 cursor-pointer"
+                                  title="Reset Zoom & Rotation (0)"
+                                >
+                                  Reset
+                                </button>
+                              </div>
+                            )}
                             {isPdf ? (
                               <iframe src={fileUrl} className="w-full h-[75vh] rounded-md bg-white border border-zinc-700" title={`Receipt ${receipt.id}`} />
                             ) : (
-                              <img src={fileUrl} alt={`Receipt ${receipt.id}`} className="max-w-full max-h-[75vh] object-contain rounded-md border border-zinc-700" />
+                              <div className="w-full max-h-[75vh] overflow-auto flex items-center justify-center p-2 rounded-md bg-zinc-950/60 border border-zinc-800">
+                                <img
+                                  src={fileUrl}
+                                  alt={`Receipt ${receipt.id}`}
+                                  style={{
+                                    transform: `scale(${receiptZoom}) rotate(${receiptRotation}deg)`,
+                                    transformOrigin: 'center center',
+                                    transition: 'transform 0.15s ease-out',
+                                  }}
+                                  className="max-w-full max-h-[70vh] object-contain rounded select-none"
+                                />
+                              </div>
                             )}
                             <p className="text-zinc-400 text-xs mt-4 mb-2">{filename}</p>
                             {receipts.length > 1 && (

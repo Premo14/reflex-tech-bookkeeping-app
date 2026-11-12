@@ -58,14 +58,14 @@ func RunReconciliation() {
 	var availableTransactions []*models.BankTransaction
 	for i := range allTransactions {
 		tx := &allTransactions[i]
-		if tx.Amount >= 0 {
+		if tx.Amount.Dollars() >= 0 {
 			continue
 		}
 		if len(tx.Expenses) == 0 && tx.CategoryAccountID != nil && balanceSheetAccountIDs[*tx.CategoryAccountID] {
 			continue
 		}
 		sum := calculateExpenseSum(tx.Expenses)
-		if tx.AllocationStatus == "" || tx.AllocationStatus != "BALANCED" || math.Abs(sum-math.Abs(tx.Amount)) > 0.01 {
+		if tx.AllocationStatus == "" || tx.AllocationStatus != "BALANCED" || math.Abs(sum-math.Abs(tx.Amount.Dollars())) > 0.01 {
 			availableTransactions = append(availableTransactions, tx)
 		}
 	}
@@ -108,8 +108,8 @@ func RunReconciliation() {
 				continue
 			}
 
-			remaining := math.Abs(tx.Amount) - calculateExpenseSum(tx.Expenses)
-			if remaining < expense.Amount-0.01 {
+			remaining := math.Abs(tx.Amount.Dollars()) - calculateExpenseSum(tx.Expenses)
+			if remaining < expense.Amount.Dollars()-0.01 {
 				continue
 			}
 			score := calculateMatchScore(*expense, *tx)
@@ -168,7 +168,7 @@ func RunReconciliation() {
 	// find combinations of same-day expenses that equal the tx amount
 	for _, tx := range availableTransactions {
 		sum := calculateExpenseSum(tx.Expenses)
-		targetAmount := math.Abs(tx.Amount)
+		targetAmount := math.Abs(tx.Amount.Dollars())
 		remainingAmountNeeded := targetAmount - sum
 
 		if remainingAmountNeeded <= 0.01 {
@@ -243,7 +243,7 @@ func RunReconciliation() {
 func calculateExpenseSum(expenses []models.Expense) float64 {
 	sum := 0.0
 	for _, e := range expenses {
-		sum += e.Amount
+		sum += e.Amount.Dollars()
 	}
 	return sum
 }
@@ -300,10 +300,10 @@ func UpdateAllocationStatuses() {
 		var hasSuggestions bool
 
 		// Deposits/zero-amount memos (amount >= 0) and unlinked Balance Sheet transfers/payments auto-balance
-		if tx.Amount >= 0 || (len(tx.Expenses) == 0 && tx.CategoryAccountID != nil && balanceSheetAccountIDs[*tx.CategoryAccountID]) {
+		if tx.Amount.Dollars() >= 0 || (len(tx.Expenses) == 0 && tx.CategoryAccountID != nil && balanceSheetAccountIDs[*tx.CategoryAccountID]) {
 			status = "BALANCED"
 		} else {
-			txAmt := math.Abs(tx.Amount)
+			txAmt := math.Abs(tx.Amount.Dollars())
 			expCount := len(tx.Expenses)
 
 			if expCount == 0 {
@@ -344,14 +344,14 @@ func UpdateAllocationStatuses() {
 						Where("ebt.expense_id = ? AND ebt.status = 'confirmed' AND COALESCE(bank_transactions.review_status, '') NOT IN ('IGNORED', 'DELETED')", singleExp.ID).
 						Select("COALESCE(SUM(ABS(bank_transactions.amount)), 0)").Scan(&sumOtherTx)
 
-					if toCents(sumOtherTx) > toCents(singleExp.Amount) {
+					if toCents(sumOtherTx) > toCents(singleExp.Amount.Dollars()) {
 						status = "OVER_ALLOCATED"
 					} else {
 						status = "BALANCED"
 					}
 				} else {
 					// 1:1 match or partial
-					diffCents := toCents(txAmt) - toCents(singleExp.Amount)
+					diffCents := toCents(txAmt) - toCents(singleExp.Amount.Dollars())
 					if diffCents == 0 {
 						status = "BALANCED"
 					} else if diffCents > 0 {
@@ -409,7 +409,7 @@ func UpdateAllocationStatuses() {
 				Where("ebt.expense_id = ? AND ebt.status = 'confirmed' AND COALESCE(bank_transactions.review_status, '') NOT IN ('IGNORED', 'DELETED')", exp.ID).
 				Select("COALESCE(SUM(ABS(bank_transactions.amount)), 0)").Scan(&sumTx)
 
-			diffCents := toCents(exp.Amount) - toCents(sumTx)
+			diffCents := toCents(exp.Amount.Dollars()) - toCents(sumTx)
 			if diffCents == 0 {
 				status = "BALANCED"
 			} else if diffCents > 0 {
@@ -424,7 +424,7 @@ func UpdateAllocationStatuses() {
 
 			var tx models.BankTransaction
 			if err := db.DB.First(&tx, link.BankTransactionID).Error; err == nil {
-				txAmt := math.Abs(tx.Amount)
+				txAmt := math.Abs(tx.Amount.Dollars())
 
 				// Total confirmed expenses linked to this bank transaction
 				var sumExp float64
@@ -433,7 +433,7 @@ func UpdateAllocationStatuses() {
 					Where("ebt.bank_transaction_id = ? AND ebt.status = 'confirmed' AND COALESCE(expenses.review_status, '') NOT IN ('IGNORED', 'DELETED')", tx.ID).
 					Select("COALESCE(SUM(expenses.amount), 0)").Scan(&sumExp)
 
-				if toCents(exp.Amount) > toCents(txAmt) {
+				if toCents(exp.Amount.Dollars()) > toCents(txAmt) {
 					// Expense is larger than the single bank transaction linked to it
 					status = "PARTIALLY_ALLOCATED"
 				} else if toCents(sumExp) > toCents(txAmt) {
@@ -494,7 +494,7 @@ func findSubsetSum(expenses []models.Expense, target float64) []models.Expense {
 	dp[0] = -2
 
 	for expIdx, exp := range expenses {
-		expInt := int(math.Round(exp.Amount * 100))
+		expInt := int(math.Round(exp.Amount.Dollars() * 100))
 		if expInt <= 0 {
 			continue
 		}
@@ -522,7 +522,7 @@ func findSubsetSum(expenses []models.Expense, target float64) []models.Expense {
 	for curr > 0 {
 		idx := dp[curr]
 		result = append(result, expenses[idx])
-		curr -= int(math.Round(expenses[idx].Amount * 100))
+		curr -= int(math.Round(expenses[idx].Amount.Dollars() * 100))
 	}
 	return result
 }
@@ -537,7 +537,7 @@ func findSubsetSumDFS(expenses []models.Expense, target float64) []models.Expens
 	suffixSum := make([]float64, len(expenses))
 	sum := 0.0
 	for i := len(expenses) - 1; i >= 0; i-- {
-		sum += expenses[i].Amount
+		sum += expenses[i].Amount.Dollars()
 		suffixSum[i] = sum
 	}
 
@@ -565,7 +565,7 @@ func findSubsetSumDFS(expenses []models.Expense, target float64) []models.Expens
 		}
 
 		// 3. Try WITH the current expense
-		if search(index+1, currentSum+expenses[index].Amount, currentMask|(1<<index)) {
+		if search(index+1, currentSum+expenses[index].Amount.Dollars(), currentMask|(1<<index)) {
 			return true
 		}
 
@@ -598,8 +598,8 @@ func calculateMatchScore(expense models.Expense, bankTx models.BankTransaction) 
 		}
 	}
 
-	expCents := toCents(expense.Amount)
-	txCents := toCents(math.Abs(bankTx.Amount))
+	expCents := expense.Amount.Abs().Cents
+	txCents := bankTx.Amount.Abs().Cents
 	exactAmount := expCents == txCents
 	vendorMatch := vendorMatchesDescription(bankTx.Description, expense.Vendor)
 
@@ -641,15 +641,15 @@ func calculateMatchScore(expense models.Expense, bankTx models.BankTransaction) 
 	return score
 }
 
+var nonAlphaNumRegex = regexp.MustCompile(`[^a-zA-Z0-9]+`)
+
 // Strips special characters while removing apostrophes without inserting spaces (e.g. McDonald's -> mcdonalds)
 func normalizeString(s string) string {
-	var nonAlphaNum = regexp.MustCompile(`[^a-zA-Z0-9]+`)
-
 	cleaned := strings.ReplaceAll(s, "'", "")
 	cleaned = strings.ReplaceAll(cleaned, "’", "")
 	return strings.ToLower(
 		strings.TrimSpace(
-			nonAlphaNum.ReplaceAllString(cleaned, " "),
+			nonAlphaNumRegex.ReplaceAllString(cleaned, " "),
 		),
 	)
 }

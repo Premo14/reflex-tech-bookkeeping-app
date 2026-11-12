@@ -992,7 +992,7 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
         onClose={onClose}
         title={modalTitle}
         maxWidth="4xl"
-        bodyClassName="p-6 overflow-hidden flex-1 flex flex-col min-h-0"
+        bodyClassName="p-4 sm:p-5 overflow-hidden flex-1 flex flex-col min-h-0"
       >
         <div className="flex flex-col flex-1 min-h-0 h-[72vh] max-h-[72vh]">
           {/* QUEUE NAVIGATION TABS */}
@@ -1508,7 +1508,7 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
                         setDrawerConfig({ type: r.type, id: r.id });
                       }
                     }}
-                    className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50 ${
+                    className={`flex items-center gap-2.5 p-2.5 rounded-xl border cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50 ${
                       isSelected ? "bg-emerald-500/5 border-emerald-500/30" : "bg-white/[0.02] border-white/5 hover:bg-white/[0.04]"
                     }`}
                   >
@@ -1517,12 +1517,12 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
                       checked={isSelected}
                       onClick={(e) => e.stopPropagation()}
                       onChange={(e) => toggle(r.key, e as any)}
-                      className="w-4 h-4 shrink-0 rounded border-zinc-700 bg-zinc-900 accent-emerald-500 cursor-pointer"
+                      className="w-3.5 h-3.5 shrink-0 rounded border-zinc-700 bg-zinc-900 accent-emerald-500 cursor-pointer"
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
                         <span
-                          className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                          className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded ${
                             r.type === "transaction" ? "bg-blue-500/10 text-blue-400" : "bg-emerald-500/10 text-emerald-400"
                           }`}
                         >
@@ -1547,12 +1547,12 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
                           </Badge>
                         )}
                       </div>
-                      <p className="font-semibold text-white truncate text-sm leading-snug">{r.title}</p>
-                      <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-zinc-400">
+                      <p className="font-semibold text-white truncate text-xs leading-snug">{r.title}</p>
+                      <div className="flex flex-wrap items-center gap-2 mt-0.5 text-[11px] text-zinc-400">
                         <span>{formatDate(r.date)} · {r.subtitle}</span>
                         {isDeleted && r.deletedAt && <span>· Deleted {formatDate(r.deletedAt)}</span>}
                         {r.bankAccount && r.bankAccount.id > 0 && (
-                          <span className="text-[10px] bg-zinc-800 text-zinc-300 px-1.5 py-0.5 rounded font-mono border border-white/5 inline-flex items-center">
+                          <span className="text-[10px] bg-zinc-800 text-zinc-300 px-1.5 py-0.2 rounded font-mono border border-white/5 inline-flex items-center">
                             {r.bankAccount.code} {r.bankAccount.name}
                             {!r.bankAccount.active && (
                               <span className="text-red-400 ml-1 font-sans font-semibold">(Archived)</span>
@@ -1560,22 +1560,22 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
                           </span>
                         )}
                         {r.categoryAccount && r.categoryAccount.id > 0 ? (
-                          <span className="text-[10px] bg-emerald-500/10 text-emerald-300 px-1.5 py-0.5 rounded font-medium border border-emerald-500/20 inline-flex items-center">
+                          <span className="text-[10px] bg-emerald-500/10 text-emerald-300 px-1.5 py-0.2 rounded font-medium border border-emerald-500/20 inline-flex items-center">
                             {r.categoryAccount.code} {r.categoryAccount.name}
                             {!r.categoryAccount.active && (
                               <span className="text-red-400 ml-1 font-sans font-semibold">(Archived)</span>
                             )}
                           </span>
                         ) : (
-                          <span className="text-[10px] bg-amber-500/10 text-amber-400 px-1.5 py-0.5 rounded font-medium border border-amber-500/20 inline-flex items-center">
+                          <span className="text-[10px] bg-amber-500/10 text-amber-400 px-1.5 py-0.2 rounded font-medium border border-amber-500/20 inline-flex items-center">
                             Uncategorized
                           </span>
                         )}
                       </div>
-                      {isIgnored && r.note && <p className="text-xs text-zinc-400 mt-0.5 italic truncate">“{r.note}”</p>}
+                      {isIgnored && r.note && <p className="text-[11px] text-zinc-400 mt-0.5 italic truncate">“{r.note}”</p>}
                     </div>
                     <div className="flex flex-col items-end gap-1 shrink-0 ml-2">
-                      <p className={`font-bold font-mono text-sm ${isCredit ? "text-emerald-400" : "text-white"}`}>
+                      <p className={`font-bold font-mono text-xs ${isCredit ? "text-emerald-400" : "text-white"}`}>
                         {isCredit ? `+${formatMoney(Math.abs(r.amount))}` : `-${formatMoney(Math.abs(r.amount))}`}
                       </p>
                       <button

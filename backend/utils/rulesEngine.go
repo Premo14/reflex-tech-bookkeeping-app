@@ -26,7 +26,7 @@ func EvaluateCondition(cond models.RuleCondition, tx models.BankTransaction) boo
 		return evaluateStringOperator(val, op, targetVal)
 
 	case "amount":
-		txAmt := math.Abs(tx.Amount)
+		txAmt := math.Abs(tx.Amount.Dollars())
 		targetAmt, err := strconv.ParseFloat(strings.ReplaceAll(targetVal, "$", ""), 64)
 		if err != nil {
 			return false

@@ -188,13 +188,15 @@ func UpdateChartAccount(c fiber.Ctx) error {
 			})
 		}
 
-		var txCount, expCount, stmtCount int64
+		var txCount, expCount, stmtCount, invCount, ruleCount int64
 		db.DB.Model(&models.BankTransaction{}).Where("chart_account_id = ? OR category_account_id = ?", account.ID, account.ID).Count(&txCount)
 		db.DB.Model(&models.Expense{}).Where("chart_account_id = ?", account.ID).Count(&expCount)
 		db.DB.Model(&models.BankStatement{}).Where("chart_account_id = ?", account.ID).Count(&stmtCount)
-		if txCount > 0 || expCount > 0 || stmtCount > 0 {
+		db.DB.Model(&models.Invoice{}).Where("category_account_id = ?", account.ID).Count(&invCount)
+		db.DB.Model(&models.BankRule{}).Where("category_account_id = ?", account.ID).Count(&ruleCount)
+		if txCount > 0 || expCount > 0 || stmtCount > 0 || invCount > 0 || ruleCount > 0 {
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
-				"error": "cannot change type — this account has existing transactions, expenses, or statements linked to it",
+				"error": "cannot change type — this account has existing transactions, expenses, invoices, rules, or statements linked to it",
 			})
 		}
 		account.Type = *input.Type
@@ -291,6 +293,26 @@ func UpdateChartAccount(c fiber.Ctx) error {
 					"activeSubAccounts": activeChildren,
 				})
 			}
+
+			// Check for unpaid invoices using this category account
+			var unpaidInvoices int64
+			db.DB.Model(&models.Invoice{}).Where("category_account_id = ? AND status NOT IN ('PAID', 'VOID')", account.ID).Count(&unpaidInvoices)
+			if unpaidInvoices > 0 {
+				return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+					"error": fmt.Sprintf("cannot deactivate account — it is assigned to %d active/unpaid invoice(s). Please reassign them first.", unpaidInvoices),
+					"unpaidInvoices": unpaidInvoices,
+				})
+			}
+
+			// Check for active bank rules targeting this account
+			var activeRules int64
+			db.DB.Model(&models.BankRule{}).Where("category_account_id = ? AND active = ?", account.ID, true).Count(&activeRules)
+			if activeRules > 0 {
+				return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+					"error": fmt.Sprintf("cannot deactivate account — it is used by %d active bank categorization rule(s). Please update or disable those rules first.", activeRules),
+					"activeRules": activeRules,
+				})
+			}
 		}
 		account.Active = *input.Active
 	}
@@ -377,16 +399,26 @@ func DeleteChartAccount(c fiber.Ctx) error {
 	var stmtCount int64
 	db.DB.Model(&models.BankStatement{}).Where("chart_account_id = ?", account.ID).Count(&stmtCount)
 
+	// Check for linked invoices
+	var invCount int64
+	db.DB.Model(&models.Invoice{}).Where("category_account_id = ?", account.ID).Count(&invCount)
+
+	// Check for linked bank rules
+	var ruleCount int64
+	db.DB.Model(&models.BankRule{}).Where("category_account_id = ?", account.ID).Count(&ruleCount)
+
 	// Check for sub-accounts
 	var childCount int64
 	db.DB.Model(&models.ChartAccount{}).Where("parent_id = ?", account.ID).Count(&childCount)
 
-	if txCount > 0 || expCount > 0 || stmtCount > 0 || childCount > 0 {
+	if txCount > 0 || expCount > 0 || stmtCount > 0 || invCount > 0 || ruleCount > 0 || childCount > 0 {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
-			"error": "cannot delete account — it has linked records or sub-accounts. Deactivate it instead (set active=false).",
+			"error": "cannot delete account — it has linked records, invoices, rules, or sub-accounts. Deactivate it instead (set active=false).",
 			"linkedTransactions": txCount,
 			"linkedExpenses":     expCount,
 			"linkedStatements":   stmtCount,
+			"linkedInvoices":     invCount,
+			"linkedRules":        ruleCount,
 			"childAccounts":      childCount,
 		})
 	}

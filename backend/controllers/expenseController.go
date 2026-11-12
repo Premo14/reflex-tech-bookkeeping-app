@@ -73,8 +73,8 @@ func CreateExpense(c fiber.Ctx) error {
 		Timestamp      *string `json:"timestamp"`
 		Vendor         string  `json:"vendor"`
 		Description    string  `json:"description"`
-		Amount         float64 `json:"amount"`
-		TaxAmount      float64 `json:"taxAmount"`
+		Amount         models.Money   `json:"amount"`
+		TaxAmount      models.Money   `json:"taxAmount"`
 		Tender         string  `json:"tender"`
 		ChartAccountID *uint   `json:"chartAccountId"`
 		Notes          string  `json:"notes"`
@@ -132,8 +132,8 @@ func CreateExpense(c fiber.Ctx) error {
 		Timestamp:        expenseTime,
 		Vendor:           input.Vendor,
 		Description:      input.Description,
-		Amount:           math.Abs(input.Amount), // always store positive amounts for expenses
-		TaxAmount:        math.Abs(input.TaxAmount),
+		Amount:           models.NewMoney(math.Abs(input.Amount.Dollars())),
+		TaxAmount:        models.NewMoney(math.Abs(input.TaxAmount.Dollars())),
 		Tender:           normTender,
 		ChartAccountID:   input.ChartAccountID,
 		Notes:            input.Notes,
@@ -182,9 +182,9 @@ func GetExpenses(c fiber.Ctx) error {
 	search := strings.TrimSpace(c.Query("search"))
 	if search != "" {
 		if val, err := strconv.ParseFloat(strings.TrimPrefix(search, "$"), 64); err == nil {
-			query = query.Where("vendor ILIKE ? OR description ILIKE ? OR amount = ?", "%"+search+"%", "%"+search+"%", math.Abs(val))
+			query = query.Where("vendor ILIKE ? OR description ILIKE ? OR notes ILIKE ? OR amount = ?", "%"+search+"%", "%"+search+"%", "%"+search+"%", math.Abs(val))
 		} else {
-			query = query.Where("vendor ILIKE ? OR description ILIKE ?", "%"+search+"%", "%"+search+"%")
+			query = query.Where("vendor ILIKE ? OR description ILIKE ? OR notes ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
 		}
 	}
 
@@ -274,8 +274,8 @@ func UpdateExpense(c fiber.Ctx) error {
 	type updateInput struct {
 		Vendor         *string  `json:"vendor"`
 		Description    *string  `json:"description"`
-		Amount         *float64 `json:"amount"`
-		TaxAmount      *float64 `json:"taxAmount"`
+		Amount         *models.Money   `json:"amount"`
+		TaxAmount      *models.Money   `json:"taxAmount"`
 		CurrencyCode   *string  `json:"currencyCode"`
 		Tender         *string  `json:"tender"`
 		Timestamp      *string  `json:"timestamp"`
@@ -299,10 +299,10 @@ func UpdateExpense(c fiber.Ctx) error {
 		updates["description"] = *input.Description
 	}
 	if input.Amount != nil {
-		updates["amount"] = math.Abs(*input.Amount)
+		updates["amount"] = models.NewMoney(math.Abs(input.Amount.Dollars()))
 	}
 	if input.TaxAmount != nil {
-		updates["tax_amount"] = math.Abs(*input.TaxAmount)
+		updates["tax_amount"] = models.NewMoney(math.Abs(input.TaxAmount.Dollars()))
 	}
 	if input.CurrencyCode != nil {
 		updates["currency_code"] = *input.CurrencyCode
@@ -432,7 +432,7 @@ func DeleteExpense(c fiber.Ctx) error {
 }
 
 type SplitLineInput struct {
-	Amount          float64 `json:"amount"`
+	Amount          models.Money `json:"amount"`
 	ChartAccountID  *uint   `json:"chartAccountId"`
 	Description     string  `json:"description"`
 	Vendor          string  `json:"vendor"`
@@ -470,19 +470,33 @@ func SplitExpense(c fiber.Ctx) error {
 		})
 	}
 
-	var totalSplit float64
+	var totalSplitCents int64
 	for i, s := range input.Splits {
-		if s.Amount <= 0 {
+		if s.Amount.Cents <= 0 {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error": fmt.Sprintf("Split line %d must have an amount greater than 0", i+1),
 			})
 		}
-		totalSplit += s.Amount
+		// Validate chart account if provided
+		if s.ChartAccountID != nil && *s.ChartAccountID > 0 {
+			var acc models.ChartAccount
+			if err := db.DB.Select("id, active, type").First(&acc, *s.ChartAccountID).Error; err != nil {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"error": fmt.Sprintf("Split line %d chart account not found", i+1),
+				})
+			}
+			if !acc.Active {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"error": fmt.Sprintf("Split line %d uses inactive chart account", i+1),
+				})
+			}
+		}
+		totalSplitCents += s.Amount.Cents
 	}
 
-	if math.Abs(totalSplit-expense.Amount) > 0.015 {
+	if totalSplitCents != expense.Amount.Cents {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": fmt.Sprintf("Total of split lines ($%.2f) does not match receipt total ($%.2f)", totalSplit, expense.Amount),
+			"error": fmt.Sprintf("Total of split lines ($%.2f) does not match receipt total ($%.2f)", float64(totalSplitCents)/100, expense.Amount.Dollars()),
 		})
 	}
 
@@ -498,20 +512,20 @@ func SplitExpense(c fiber.Ctx) error {
 	var existingLinks []models.ExpenseBankTransaction
 	tx.Where("expense_id = ?", expense.ID).Find(&existingLinks)
 
-	originalTotal := expense.Amount
-	originalTax := expense.TaxAmount
+	origCents := expense.Amount.Cents
+	origTaxCents := expense.TaxAmount.Cents
 
-	// Pre-calculate tax distribution across splits so the sum matches originalTax to the exact cent
-	splitTaxes := make([]float64, len(input.Splits))
-	if originalTotal > 0 && originalTax != 0 {
-		var allocatedTaxSum float64
+	// Pre-calculate tax distribution across splits in exact integer cents
+	splitTaxCents := make([]int64, len(input.Splits))
+	if origCents > 0 && origTaxCents != 0 {
+		var allocatedTaxSum int64
 		for i := 0; i < len(input.Splits)-1; i++ {
-			t := roundCents((input.Splits[i].Amount / originalTotal) * originalTax)
-			splitTaxes[i] = t
+			t := (input.Splits[i].Amount.Cents * origTaxCents) / origCents
+			splitTaxCents[i] = t
 			allocatedTaxSum += t
 		}
-		// Remainder allocated to the final line to avoid penny drift
-		splitTaxes[len(input.Splits)-1] = roundCents(originalTax - allocatedTaxSum)
+		// Remainder allocated to the final line to avoid any penny drift
+		splitTaxCents[len(input.Splits)-1] = origTaxCents - allocatedTaxSum
 	}
 
 	// 1. Update the original expense to become Split Line 1
@@ -524,7 +538,7 @@ func SplitExpense(c fiber.Ctx) error {
 		expense.Vendor = strings.TrimSpace(first.Vendor)
 	}
 	expense.ChartAccountID = first.ChartAccountID
-	expense.TaxAmount = splitTaxes[0]
+	expense.TaxAmount = models.Money{Cents: splitTaxCents[0]}
 
 	if first.IsPersonal {
 		expense.ReviewStatus = "IGNORED"
@@ -557,7 +571,7 @@ func SplitExpense(c fiber.Ctx) error {
 			Vendor:           vendor,
 			Description:      desc,
 			Amount:           split.Amount,
-			TaxAmount:        splitTaxes[i],
+			TaxAmount:        models.Money{Cents: splitTaxCents[i]},
 			CurrencyCode:     expense.CurrencyCode,
 			Tender:           expense.Tender,
 			ChartAccountID:   split.ChartAccountID,
@@ -613,6 +627,9 @@ func SplitExpense(c fiber.Ctx) error {
 
 	BroadcastEvent("EXPENSES_UPDATED", nil)
 	BroadcastEvent("SUMMARY_UPDATED", nil)
+	BroadcastEvent("TRANSACTIONS_UPDATED", nil)
+	BroadcastEvent("RECONCILIATION_UPDATED", nil)
+	BroadcastEvent("QUEUE_UPDATED", nil)
 	utils.RunReconciliation()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{

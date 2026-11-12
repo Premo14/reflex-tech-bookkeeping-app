@@ -157,6 +157,7 @@ export default function LedgerPage() {
         onOpenSettings={() => { setSettingsTab('storage'); setAppSettingsModalOpen(true); setIsSidebarOpen(false); }}
         isQueueLoading={isQueueLoading}
         isSettingsLoading={isSettingsLoading}
+        companyName={settings["CompanyName"] || "Reflex Technologies LLC"}
       />
       
       <main className="flex-1 flex flex-col h-screen overflow-hidden min-w-0 bg-[#0a0a0a]">
@@ -183,6 +184,7 @@ export default function LedgerPage() {
           viewUncategorizedTrigger={viewUncategorizedTrigger}
           onItemsChanged={fetchData}
           onCreateRule={(data) => handleOpenRules(data)}
+          onOpenInvoices={() => setInvoicingModalOpen(true)}
         />
       </main>
       <ReviewModal 

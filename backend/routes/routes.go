@@ -100,6 +100,7 @@ func SetupRoutes(app *fiber.App) {
 
 	// Reconciliation
 	api.Get("/reconciliation/flagged", controllers.GetFlaggedItems)
+	api.Post("/reconciliation/run", controllers.TriggerReconciliation)
 	api.Post("/reconciliation/link", controllers.LinkExpenseToTransaction)
 	api.Post("/reconciliation/create-and-link", controllers.CreateAndLink)
 	api.Post("/reconciliation/unlink", controllers.UnlinkExpense)
@@ -115,4 +116,10 @@ func SetupRoutes(app *fiber.App) {
 	api.Get("/reports/cash-flow", controllers.GetCashFlowSummary)
 	api.Get("/reports/vendor-spend", controllers.GetVendorSpendReport)
 	api.Get("/reports/ar-aging", controllers.GetARAgingReport)
+	api.Get("/reports/trial-balance", controllers.GetTrialBalance)
+	api.Get("/reports/trial-balance/export", controllers.ExportTrialBalanceCSV)
+
+	// System Snapshot & Full JSON Backup
+	api.Get("/system/backup", controllers.ExportSystemBackupJSON)
+	api.Get("/system/backup/export", controllers.ExportSystemBackupJSON)
 }

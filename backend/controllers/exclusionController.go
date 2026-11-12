@@ -124,14 +124,14 @@ func loadGroupItems(tx *gorm.DB, txIDs, expIDs []uint) []GroupItem {
 		var txs []models.BankTransaction
 		tx.Where("id IN ?", txIDs).Order("date ASC").Find(&txs)
 		for _, t := range txs {
-			items = append(items, GroupItem{"transaction", t.ID, t.Description, t.Date, t.Amount, t.ReviewStatus})
+			items = append(items, GroupItem{"transaction", t.ID, t.Description, t.Date, t.Amount.Dollars(), t.ReviewStatus})
 		}
 	}
 	if len(expIDs) > 0 {
 		var exps []models.Expense
 		tx.Where("id IN ?", expIDs).Order("timestamp ASC").Find(&exps)
 		for _, e := range exps {
-			items = append(items, GroupItem{"expense", e.ID, strings.TrimSpace(e.Vendor + " " + e.Description), e.Timestamp, e.Amount, e.ReviewStatus})
+			items = append(items, GroupItem{"expense", e.ID, strings.TrimSpace(e.Vendor + " " + e.Description), e.Timestamp, e.Amount.Dollars(), e.ReviewStatus})
 		}
 	}
 	return items

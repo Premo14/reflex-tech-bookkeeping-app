@@ -22,7 +22,7 @@ type BankStatement struct {
 	EndDate   time.Time `json:"endDate"`
 
 	// Authoritative statement ending balance and timestamp extracted from OFX LedgerBal
-	EndingBalance *float64   `json:"endingBalance"`
+	EndingBalance *Money   `json:"endingBalance"`
 	BalanceAsOf   *time.Time `json:"balanceAsOf"`
 
 	// The Chart of Accounts entry this statement belongs to.
@@ -65,7 +65,7 @@ type BankTransaction struct {
 	// The actual transaction data
 	Date            time.Time `gorm:"not null;index" json:"date"`
 	Description     string    `json:"description"`
-	Amount          float64   `json:"amount"`
+	Amount          Money     `json:"amount"`
 	TransactionType string    `json:"transactionType"` // e.g. "DEBIT" or "DEP"
 
 	// Bank's unique ID for the transaction.

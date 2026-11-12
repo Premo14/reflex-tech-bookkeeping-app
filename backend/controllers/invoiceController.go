@@ -108,15 +108,15 @@ func GetInvoices(c fiber.Ctx) error {
 	db.DB.Find(&allInvoices)
 	for _, inv := range allInvoices {
 		if inv.Status != "VOID" {
-			totalInvoiced += inv.TotalAmount
+			totalInvoiced += inv.TotalAmount.Dollars()
 		}
 		if inv.Status == "PAID" {
-			totalPaid += inv.TotalAmount
+			totalPaid += inv.TotalAmount.Dollars()
 		} else {
-			totalPaid += inv.AmountPaid
-			unpaidBal := inv.BalanceDue
-			if unpaidBal <= 0 && inv.TotalAmount > inv.AmountPaid {
-				unpaidBal = roundCents(inv.TotalAmount - inv.AmountPaid)
+			totalPaid += inv.AmountPaid.Dollars()
+			unpaidBal := inv.BalanceDue.Dollars()
+			if unpaidBal <= 0 && inv.TotalAmount.Dollars() > inv.AmountPaid.Dollars() {
+				unpaidBal = roundCents(inv.TotalAmount.Dollars() - inv.AmountPaid.Dollars())
 			}
 			if inv.Status != "VOID" {
 				totalUnpaid += unpaidBal
@@ -217,8 +217,8 @@ func CreateInvoice(c fiber.Ctx) error {
 	var subtotal float64
 	for _, it := range input.Items {
 		lineAmt := it.Quantity * it.UnitPrice
-		if it.Amount > 0 {
-			lineAmt = it.Amount
+		if it.Amount.Dollars() > 0 {
+			lineAmt = it.Amount.Dollars()
 		}
 		subtotal += lineAmt
 	}
@@ -258,20 +258,20 @@ func CreateInvoice(c fiber.Ctx) error {
 		IssueDate:         issueDate,
 		DueDate:           dueDate,
 		Items:             string(itemsJSON),
-		Subtotal:          roundCents(subtotal),
+		Subtotal:          models.NewMoney(roundCents(subtotal)),
 		TaxRate:           input.TaxRate,
-		TaxAmount:         taxAmount,
-		TotalAmount:       totalAmount,
-		AmountPaid:        0,
-		BalanceDue:        totalAmount,
+		TaxAmount:         models.NewMoney(roundCents(taxAmount)),
+		TotalAmount:       models.NewMoney(roundCents(totalAmount)),
+		AmountPaid:        models.NewMoney(0),
+		BalanceDue:        models.NewMoney(roundCents(totalAmount)),
 		Notes:             strings.TrimSpace(input.Notes),
 		PaymentTerms:      paymentTerms,
 		Status:            status,
 		CategoryAccountID: catID,
 	}
 	if status == "PAID" {
-		invoice.AmountPaid = totalAmount
-		invoice.BalanceDue = 0
+	invoice.AmountPaid = invoice.TotalAmount
+	invoice.BalanceDue = models.NewMoney(roundCents(0))
 	}
 
 	if err := db.DB.Create(&invoice).Error; err != nil {
@@ -341,30 +341,30 @@ func UpdateInvoice(c fiber.Ctx) error {
 		var subtotal float64
 		for _, it := range input.Items {
 			lineAmt := it.Quantity * it.UnitPrice
-			if it.Amount > 0 {
-				lineAmt = it.Amount
+			if it.Amount.Dollars() > 0 {
+				lineAmt = it.Amount.Dollars()
 			}
 			subtotal += lineAmt
 		}
-		invoice.Subtotal = roundCents(subtotal)
+		invoice.Subtotal = models.NewMoney(roundCents(subtotal))
 		invoice.TaxRate = input.TaxRate
-		invoice.TaxAmount = roundCents(subtotal * (input.TaxRate / 100.0))
-		invoice.TotalAmount = roundCents(invoice.Subtotal + invoice.TaxAmount)
+		invoice.TaxAmount = models.NewMoney(roundCents(subtotal * (input.TaxRate / 100.0)))
+		invoice.TotalAmount = models.NewMoney(roundCents(invoice.Subtotal.Dollars() + invoice.TaxAmount.Dollars()))
 		itemsJSON, _ := json.Marshal(input.Items)
 		invoice.Items = string(itemsJSON)
 	}
 
 	if invoice.Status == "PAID" {
 		invoice.AmountPaid = invoice.TotalAmount
-		invoice.BalanceDue = 0
-	} else if invoice.AmountPaid > 0 {
-		invoice.BalanceDue = roundCents(invoice.TotalAmount - invoice.AmountPaid)
-		if invoice.BalanceDue <= 0 {
+		invoice.BalanceDue = models.NewMoney(roundCents(0))
+	} else if invoice.AmountPaid.Dollars() > 0 {
+		invoice.BalanceDue = models.NewMoney(roundCents(invoice.TotalAmount.Dollars() - invoice.AmountPaid.Dollars()))
+		if invoice.BalanceDue.Dollars() <= 0 {
 			invoice.Status = "PAID"
-			invoice.BalanceDue = 0
+			invoice.BalanceDue = models.NewMoney(roundCents(0))
 		}
 	} else {
-		invoice.AmountPaid = 0
+		invoice.AmountPaid = models.NewMoney(roundCents(0))
 		invoice.BalanceDue = invoice.TotalAmount
 	}
 
@@ -405,8 +405,12 @@ func DeleteInvoice(c fiber.Ctx) error {
 			var expCount int64
 			db.DB.Table("expense_bank_transactions").Where("bank_transaction_id = ?", tx.ID).Count(&expCount)
 			if expCount == 0 {
-				tx.AllocationStatus = "UNALLOCATED"
-				tx.ReviewStatus = "PENDING"
+				if tx.Amount.Dollars() >= 0 {
+					tx.AllocationStatus = "BALANCED"
+				} else {
+					tx.AllocationStatus = "UNLINKED"
+				}
+				tx.ReviewStatus = "APPROVED"
 			}
 			db.DB.Save(&tx)
 			BroadcastEvent("TRANSACTIONS_UPDATED", nil)
@@ -446,7 +450,7 @@ func MatchInvoicePayment(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Bank transaction not found"})
 	}
 
-	if tx.Amount <= 0 {
+	if tx.Amount.Dollars() <= 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot match invoice payment to a debit/withdrawal. Incoming deposits only."})
 	}
 
@@ -465,15 +469,15 @@ func MatchInvoicePayment(c fiber.Ctx) error {
 	}()
 
 	// 1. Update Invoice
-	paymentAmt := tx.Amount
-	newPaid := roundCents(invoice.AmountPaid + paymentAmt)
-	if newPaid >= invoice.TotalAmount {
+	paymentAmt := tx.Amount.Dollars()
+	newPaid := roundCents(invoice.AmountPaid.Dollars() + paymentAmt)
+	if newPaid >= invoice.TotalAmount.Dollars() {
 		invoice.AmountPaid = invoice.TotalAmount
-		invoice.BalanceDue = 0.0
+		invoice.BalanceDue = models.NewMoney(0)
 		invoice.Status = "PAID"
 	} else {
-		invoice.AmountPaid = newPaid
-		invoice.BalanceDue = roundCents(invoice.TotalAmount - newPaid)
+		invoice.AmountPaid = models.NewMoney(newPaid)
+		invoice.BalanceDue = models.NewMoney(roundCents(invoice.TotalAmount.Dollars() - newPaid))
 		invoice.Status = "PARTIALLY_PAID"
 	}
 	invoice.BankTransactionID = &tx.ID
@@ -506,9 +510,9 @@ func MatchInvoicePayment(c fiber.Ctx) error {
 
 	var msg string
 	if invoice.Status == "PAID" {
-		msg = fmt.Sprintf("Invoice %s marked as PAID and linked to bank deposit $%.2f", invoice.InvoiceNumber, tx.Amount)
+		msg = fmt.Sprintf("Invoice %s marked as PAID and linked to bank deposit $%.2f", invoice.InvoiceNumber, tx.Amount.Dollars())
 	} else {
-		msg = fmt.Sprintf("Payment of $%.2f applied to Invoice %s. Remaining balance: $%.2f", tx.Amount, invoice.InvoiceNumber, invoice.BalanceDue)
+		msg = fmt.Sprintf("Payment of $%.2f applied to Invoice %s. Remaining balance: $%.2f", tx.Amount.Dollars(), invoice.InvoiceNumber, invoice.BalanceDue.Dollars())
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
@@ -541,8 +545,12 @@ func UnmatchInvoicePayment(c fiber.Ctx) error {
 			var expCount int64
 			db.DB.Table("expense_bank_transactions").Where("bank_transaction_id = ?", tx.ID).Count(&expCount)
 			if expCount == 0 {
-				tx.AllocationStatus = "UNALLOCATED"
-				tx.ReviewStatus = "PENDING"
+				if tx.Amount.Dollars() >= 0 {
+					tx.AllocationStatus = "BALANCED"
+				} else {
+					tx.AllocationStatus = "UNLINKED"
+				}
+				tx.ReviewStatus = "APPROVED"
 			}
 			db.DB.Save(&tx)
 			BroadcastEvent("TRANSACTIONS_UPDATED", nil)
@@ -552,7 +560,7 @@ func UnmatchInvoicePayment(c fiber.Ctx) error {
 	invoice.BankTransactionID = nil
 	invoice.Status = "SENT"
 	invoice.PaidDate = nil
-	invoice.AmountPaid = 0
+	invoice.AmountPaid = models.NewMoney(0)
 	invoice.BalanceDue = invoice.TotalAmount
 
 	if err := db.DB.Save(&invoice).Error; err != nil {
@@ -610,12 +618,12 @@ func GetMatchingDeposits(c fiber.Ctx) error {
 		var reasons []string
 
 		// Amount match checks
-		amtDiffTotal := math.Abs(cand.Amount - invoice.TotalAmount)
-		targetAmt := invoice.TotalAmount
-		if invoice.BalanceDue > 0 && invoice.BalanceDue < invoice.TotalAmount {
-			targetAmt = invoice.BalanceDue
+		amtDiffTotal := math.Abs(cand.Amount.Dollars() - invoice.TotalAmount.Dollars())
+		targetAmt := invoice.TotalAmount.Dollars()
+		if invoice.BalanceDue.Dollars() > 0 && invoice.BalanceDue.Dollars() < invoice.TotalAmount.Dollars() {
+			targetAmt = invoice.BalanceDue.Dollars()
 		}
-		amtDiff := math.Min(amtDiffTotal, math.Abs(cand.Amount-targetAmt))
+		amtDiff := math.Min(amtDiffTotal, math.Abs(cand.Amount.Dollars()-targetAmt))
 		if amtDiff < 0.01 {
 			score += 45
 			if amtDiffTotal < 0.01 {
@@ -626,7 +634,7 @@ func GetMatchingDeposits(c fiber.Ctx) error {
 		} else if amtDiff < 2.0 {
 			score += 25
 			reasons = append(reasons, "Close amount match (within $2)")
-		} else if invoice.TotalAmount > 0 && amtDiff/invoice.TotalAmount < 0.10 {
+		} else if invoice.TotalAmount.Dollars() > 0 && amtDiff/invoice.TotalAmount.Dollars() < 0.10 {
 			score += 15
 			reasons = append(reasons, "Similar amount (~10%)")
 		}

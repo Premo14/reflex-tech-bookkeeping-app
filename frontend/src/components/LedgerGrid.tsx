@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef } from "react";
 import TransactionList from "./TransactionList";
 import ReceiptList from "./ReceiptList";
+import InvoiceList from "./InvoiceList";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Select } from "./ui/Select";
 import { Modal } from "./ui/Modal";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
 import DetailDrawer from "./DetailDrawer";
-import { getTransactions, getExpenses, createTransaction, createExpense, getSummary, uploadReceiptToExpense } from "../services/api";
-import type { BankTransaction, Expense, ChartAccount, LedgerSummary } from "../types/models";
+import { getTransactions, getExpenses, getInvoices, createTransaction, createExpense, getSummary, uploadReceiptToExpense } from "../services/api";
+import type { BankTransaction, Expense, ChartAccount, LedgerSummary, Invoice } from "../types/models";
 import CreateExpenseForm from "./CreateExpenseForm";
 import CreateTransactionForm from "./CreateTransactionForm";
 import Pagination from "./ui/Pagination";
@@ -24,26 +25,31 @@ interface LedgerGridProps {
   viewUncategorizedTrigger?: number;
   onItemsChanged?: () => void;
   onCreateRule?: (data: { name: string; descriptionKeyword: string; categoryAccountId?: number | null }) => void;
+  onOpenInvoices?: () => void;
 }
 
-export default function LedgerGrid({ startDate, endDate, accounts, activeAccountId, viewUnlinkedTrigger, viewUncategorizedTrigger, onItemsChanged, onCreateRule }: LedgerGridProps) {
+export default function LedgerGrid({ startDate, endDate, accounts, activeAccountId, viewUnlinkedTrigger, viewUncategorizedTrigger, onItemsChanged, onCreateRule, onOpenInvoices }: LedgerGridProps) {
   const { alert } = useConfirm();
   const [transactions, setTransactions] = useState<BankTransaction[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [summary, setSummary] = useState<LedgerSummary | null>(null);
 
+  const [sourceDocTab, setSourceDocTab] = useState<"receipts" | "invoices">("receipts");
   const [txFilter, setTxFilter] = useState("ALL");
   const [expFilter, setExpFilter] = useState("ALL");
+  const [invFilter, setInvFilter] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [sortField, setSortField] = useState("date");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
-  const [mobileTab, setMobileTab] = useState<"expenses" | "transactions">("expenses");
+  const [mobileTab, setMobileTab] = useState<"expenses" | "invoices" | "transactions">("expenses");
   const [drawerOffset, setDrawerOffset] = useState(0);
   const [isNarrow, setIsNarrow] = useState(window.innerWidth < 768);
 
-  const [drawerConfig, setDrawerConfig] = useState<{ type: "transaction" | "receipt" | null, id: number | null }>({ type: null, id: null });
+  const [drawerConfig, setDrawerConfig] = useState<{ type: "transaction" | "receipt" | "invoice" | null, id: number | null }>({ type: null, id: null });
   const [isTxLoading, setIsTxLoading] = useState(true);
   const [isExpLoading, setIsExpLoading] = useState(true);
+  const [isInvLoading, setIsInvLoading] = useState(true);
   const [isSummaryLoading, setIsSummaryLoading] = useState(true);
 
   const [showAddTx, setShowAddTx] = useState(false);
@@ -119,6 +125,21 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
     }
   };
 
+  const loadInvoices = async (silent = false) => {
+    if (!silent) setIsInvLoading(true);
+    try {
+      const res = await getInvoices({
+        status: invFilter !== "ALL" ? invFilter : undefined,
+        search: searchQuery || undefined,
+      });
+      setInvoices(res.invoices || []);
+    } catch (err) {
+      console.error("Failed to load invoices:", err);
+    } finally {
+      setIsInvLoading(false);
+    }
+  };
+
   const loadSummary = async (silent = false) => {
     if (!silent) setIsSummaryLoading(true);
     try {
@@ -135,9 +156,10 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
     if (!silent) {
       setIsTxLoading(true);
       setIsExpLoading(true);
+      setIsInvLoading(true);
       setIsSummaryLoading(true);
     }
-    await Promise.all([loadTransactions(silent), loadExpenses(silent), loadSummary(silent)]);
+    await Promise.all([loadTransactions(silent), loadExpenses(silent), loadInvoices(silent), loadSummary(silent)]);
   };
 
   // Filters / account / dates / sort changed -> reload everything
@@ -155,9 +177,15 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
     loadExpenses(false);
   }, [expPage, expFilter]);
 
+  // Filter changed on invoices -> reload invoices
+  useEffect(() => {
+    loadInvoices(false);
+  }, [invFilter]);
+
   // Real-time live background event listeners
   useLiveEvent("TRANSACTIONS_UPDATED", () => {
     loadTransactions(true);
+    loadInvoices(true);
     loadSummary(true);
   });
 
@@ -166,9 +194,15 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
     loadSummary(true);
   });
 
+  useLiveEvent(["INVOICES_UPDATED", "ACCOUNTS_UPDATED"], () => {
+    loadInvoices(true);
+    loadSummary(true);
+  });
+
   useLiveEvent("RECONCILIATION_UPDATED", () => {
     loadTransactions(true);
     loadExpenses(true);
+    loadInvoices(true);
     loadSummary(true);
   });
 
@@ -324,7 +358,7 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
     <div className="flex-1 flex flex-col min-h-0 bg-[#0a0a0a]">
 
       {/* TOOLBAR */}
-      <div className="px-6 py-4 border-b border-white/5 flex flex-wrap gap-4 items-center justify-between bg-[#121212] shrink-0">
+      <div className="px-4 sm:px-6 py-2.5 sm:py-3 border-b border-white/5 flex flex-wrap gap-3 items-center justify-between bg-[#121212] shrink-0">
         <div className="flex items-center gap-3 w-full md:w-auto">
           <div className="relative flex-1 md:w-80">
             <Input type="text" placeholder={isNarrow ? "Search txs and exps..." : "Search transactions and expenses..."} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>} />
@@ -355,10 +389,11 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
           <div className="relative" ref={exportMenuRef}>
             <Button
               variant="secondary"
+              size="sm"
               onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}
               className="flex items-center gap-1.5"
             >
-              <svg className="w-4 h-4 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
               Export
@@ -371,7 +406,7 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
                 <button
                   type="button"
                   onClick={() => { exportTransactionsCSV(); setIsExportMenuOpen(false); }}
-                  className="w-full text-left px-4 py-2.5 text-xs text-zinc-300 hover:text-white hover:bg-white/5 flex items-center gap-2"
+                  className="w-full text-left px-4 py-2 text-xs text-zinc-300 hover:text-white hover:bg-white/5 flex items-center gap-2"
                 >
                   <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0"></span>
                   Export Transactions (CSV)
@@ -379,7 +414,7 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
                 <button
                   type="button"
                   onClick={() => { exportExpensesCSV(); setIsExportMenuOpen(false); }}
-                  className="w-full text-left px-4 py-2.5 text-xs text-zinc-300 hover:text-white hover:bg-white/5 flex items-center gap-2"
+                  className="w-full text-left px-4 py-2 text-xs text-zinc-300 hover:text-white hover:bg-white/5 flex items-center gap-2"
                 >
                   <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
                   Export Expenses (CSV)
@@ -391,63 +426,64 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
       </div>
 
       {/* SUMMARY BAR */}
-      <div className={`px-6 py-4 border-b border-white/5 bg-[#0e0e10] shrink-0 transition-opacity duration-200 ${isSummaryLoading && summary ? 'opacity-60' : ''}`}>
+      <div className={`px-4 sm:px-6 py-2.5 sm:py-3 border-b border-white/5 bg-[#0e0e10] shrink-0 transition-opacity duration-200 ${isSummaryLoading && summary ? 'opacity-60' : ''}`}>
         {!summary ? (
-          <div className="flex items-center gap-3 py-1 text-zinc-400 text-xs font-medium">
+          <div className="flex items-center gap-3 py-0.5 text-zinc-400 text-xs font-medium">
             <LoadingSpinner size="sm" color="text-emerald-500" />
             <span>Calculating ledger summary (income, expenses, cashflow)…</span>
           </div>
         ) : (
-          <div className="flex flex-wrap items-center gap-x-4 lg:gap-x-8 gap-y-4 lg:gap-y-6">
+          <div className="flex flex-wrap items-center gap-x-5 lg:gap-x-8 gap-y-2.5">
             <div className="flex flex-col" title="Total business revenue / bank deposits received in this period">
-              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-0.5 flex items-center gap-1.5">
                 Income (Revenue)
                 {isSummaryLoading && <LoadingSpinner size="xs" color="text-zinc-500" />}
               </span>
-              <span className="text-lg xl:text-xl font-black text-emerald-400 tracking-tight">{formatMoney(summary.totalIncome)}</span>
+              <span className="text-base xl:text-lg font-bold text-emerald-400 tracking-tight">{formatMoney(summary.totalIncome)}</span>
             </div>
             <div className="flex flex-col" title="Total business expenses and receipts logged in this period">
-              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-0.5 flex items-center gap-1.5">
                 Expenses
                 {isSummaryLoading && <LoadingSpinner size="xs" color="text-zinc-500" />}
               </span>
-              <span className="text-lg xl:text-xl font-black text-red-400 tracking-tight">{formatMoney(summary.totalExpenses)}</span>
+              <span className="text-base xl:text-lg font-bold text-red-400 tracking-tight">{formatMoney(summary.totalExpenses)}</span>
             </div>
             <div className="flex flex-col" title="Net profit or loss (Total Income minus Total Expenses)">
-              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-0.5 flex items-center gap-1.5">
                 Net Profit / Loss
                 {isSummaryLoading && <LoadingSpinner size="xs" color="text-zinc-500" />}
               </span>
-              <span className={`text-lg xl:text-xl font-black tracking-tight ${(summary.netIncome ?? (summary.totalIncome - summary.totalExpenses)) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              <span className={`text-base xl:text-lg font-bold tracking-tight ${(summary.netIncome ?? (summary.totalIncome - summary.totalExpenses)) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                 {formatMoney(summary.netIncome ?? (summary.totalIncome - summary.totalExpenses))}
               </span>
             </div>
             <div className="flex flex-col" title="Net change across physical bank accounts (all deposits minus all debits)">
-              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-0.5 flex items-center gap-1.5">
                 Bank Cash Flow
                 {isSummaryLoading && <LoadingSpinner size="xs" color="text-zinc-500" />}
               </span>
-              <span className={`text-lg xl:text-xl font-black tracking-tight ${summary.netCashflow >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatMoney(summary.netCashflow)}</span>
+              <span className={`text-base xl:text-lg font-bold tracking-tight ${summary.netCashflow >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatMoney(summary.netCashflow)}</span>
             </div>
             
-            <div className="flex flex-col items-start xl:items-end xl:pl-8 xl:border-l border-white/5 ml-auto max-w-full">
-              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
+            <div className="flex flex-col items-start xl:items-end xl:pl-6 xl:border-l border-white/5 ml-auto max-w-full">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-0.5 flex items-center gap-1.5">
                 Status
                 {isSummaryLoading && <LoadingSpinner size="xs" color="text-zinc-500" />}
               </span>
               {(summary.unlinkedExpCount > 0 || summary.unlinkedTxCount > 0) ? (
                 <Button 
                   variant="warning"
+                  size="sm"
                   onClick={() => { setTxFilter('NEEDS_ATTENTION'); setExpFilter('NEEDS_ATTENTION'); }}
-                  className="max-w-full"
+                  className="max-w-full py-1! px-2.5! text-xs!"
                   title="Filter both lists to show items requiring your attention"
                 >
-                  <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                  <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
                   <span className="truncate">{summary.unlinkedTxCount + summary.unlinkedExpCount} Need Attention ({summary.unlinkedTxCount} Tx / {summary.unlinkedExpCount} Exp)</span>
                 </Button>
               ) : (
-                <span className="flex items-center text-left whitespace-nowrap gap-1.5 text-sm font-bold text-zinc-400 px-3 py-1.5 max-w-full" title="All Caught Up">
-                  <svg className="w-5 h-5 shrink-0 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
+                <span className="flex items-center text-left whitespace-nowrap gap-1.5 text-xs font-semibold text-zinc-400 px-2.5 py-1 max-w-full" title="All Caught Up">
+                  <svg className="w-4 h-4 shrink-0 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
                   <span className="truncate hidden xl:inline text-emerald-400">All Caught Up</span>
                 </span>
               )}
@@ -492,66 +528,155 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
           <div className="w-10 h-1.5 rounded-full bg-zinc-600 pointer-events-none" />
         </div>
 
+        {/* Mobile 3-Tab Switcher */}
         <div className="lg:hidden flex border-b border-white/5 shrink-0 bg-[#0e0e10]">
           <button 
-            onClick={() => setMobileTab("expenses")} 
-            className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors ${mobileTab === 'expenses' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-zinc-400 hover:text-zinc-300'}`}
+            onClick={() => { setMobileTab("expenses"); setSourceDocTab("receipts"); }} 
+            className={`flex-1 py-2.5 text-xs font-bold border-b-2 transition-colors flex items-center justify-center gap-1.5 ${mobileTab === 'expenses' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-zinc-400 hover:text-zinc-300'}`}
           >
-            Expenses
+            <span>Receipts</span>
+            <span className="text-[10px] text-zinc-500 font-normal">({expenses.length})</span>
+          </button>
+          <button 
+            onClick={() => { setMobileTab("invoices"); setSourceDocTab("invoices"); }} 
+            className={`flex-1 py-2.5 text-xs font-bold border-b-2 transition-colors flex items-center justify-center gap-1.5 ${mobileTab === 'invoices' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-zinc-400 hover:text-zinc-300'}`}
+          >
+            <span>Invoices</span>
+            <span className="text-[10px] text-zinc-500 font-normal">({invoices.length})</span>
           </button>
           <button 
             onClick={() => setMobileTab("transactions")} 
-            className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors ${mobileTab === 'transactions' ? 'border-blue-500 text-blue-400' : 'border-transparent text-zinc-400 hover:text-zinc-300'}`}
+            className={`flex-1 py-2.5 text-xs font-bold border-b-2 transition-colors flex items-center justify-center gap-1.5 ${mobileTab === 'transactions' ? 'border-blue-500 text-blue-400' : 'border-transparent text-zinc-400 hover:text-zinc-300'}`}
           >
-            Bank Transactions
+            <span>Bank Register</span>
+            <span className="text-[10px] text-zinc-500 font-normal">({transactions.length})</span>
           </button>
         </div>
 
         <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-2 gap-px bg-white/5 relative">
-          {/* EXPENSES COLUMN */}
-          <div className={`flex-col bg-[#0a0a0a] min-h-0 ${mobileTab === 'expenses' ? 'flex' : 'hidden lg:flex'}`}>
-            <div className="px-4 sm:px-6 py-3.5 flex justify-between items-center gap-2 bg-[#121212] border-b border-white/5 shrink-0 min-w-0">
-              <h2 className="text-base sm:text-lg font-bold flex items-center gap-2 text-white tracking-tight shrink-0 whitespace-nowrap">
-                <svg className="w-5 h-5 text-emerald-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                <span>Expenses</span>
-                {isExpLoading && (
-                  <LoadingSpinner size="xs" color="text-emerald-400" className="ml-1" />
-                )}
-              </h2>
-              <div className="flex gap-2 items-center shrink-0">
-                <div className="w-auto shrink-0">
-                  <Select
-                    value={expFilter}
-                    onChange={e => { setExpFilter(e.target.value); setExpPage(1); }}
-                    className="py-1.5! text-xs! whitespace-nowrap"
-                    autoWidth
-                    dropdownAlign="right"
-                  >
-                    <option value="ALL">All</option>
-                    <option value="NEEDS_ATTENTION">Needs Attention</option>
-                    <option value="UNCATEGORIZED">Uncategorized</option>
-                    <option value="UNLINKED">Unlinked</option>
-                    <option value="BALANCED">Balanced</option>
-                    <option value="PARTIALLY_ALLOCATED">Under-Allocated</option>
-                    <option value="OVER_ALLOCATED">Over-Allocated</option>
-                  </Select>
-                </div>
-                <Button variant="secondary" onClick={handleOpenAddExpense} title="Add Expense" className="p-1.5!" size="sm">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
-                </Button>
+          {/* SOURCE DOCUMENTS COLUMN (RECEIPTS & CLIENT INVOICES) */}
+          <div className={`flex-col bg-[#0a0a0a] min-h-0 ${mobileTab === 'expenses' || mobileTab === 'invoices' ? 'flex' : 'hidden lg:flex'}`}>
+            <div className="px-4 sm:px-6 py-3 flex justify-between items-center gap-2 bg-[#121212] border-b border-white/5 shrink-0 min-w-0">
+              {/* Desktop Segmented Tab Switcher */}
+              <div className="flex items-center gap-1 bg-zinc-950/80 p-0.5 rounded-lg border border-white/10 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => { setSourceDocTab("receipts"); setMobileTab("expenses"); }}
+                  className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
+                    (mobileTab === 'invoices' ? false : sourceDocTab === "receipts")
+                      ? "bg-zinc-800 text-white shadow-sm border border-white/10"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  <svg className="w-3.5 h-3.5 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                  <span>Receipts & Slips</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/10 text-zinc-300">
+                    {expenses.length}
+                  </span>
+                  {isExpLoading && <LoadingSpinner size="xs" color="text-emerald-400" className="ml-0.5" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setSourceDocTab("invoices"); setMobileTab("invoices"); }}
+                  className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
+                    (mobileTab === 'invoices' || sourceDocTab === "invoices")
+                      ? "bg-zinc-800 text-white shadow-sm border border-white/10"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  <svg className="w-3.5 h-3.5 text-indigo-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                  <span>Client Invoices</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/10 text-zinc-300">
+                    {invoices.length}
+                  </span>
+                  {isInvLoading && <LoadingSpinner size="xs" color="text-indigo-400" className="ml-0.5" />}
+                </button>
               </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24">
-              {isExpLoading && expenses.length === 0 ? (
-                <div className="py-16 flex flex-col items-center justify-center space-y-3">
-                  <LoadingSpinner size="lg" color="text-emerald-500" />
-                  <span className="text-xs text-zinc-400">Loading expenses…</span>
+
+              {/* Controls for Active Document Sub-Tab */}
+              {(mobileTab === 'invoices' || sourceDocTab === "invoices") ? (
+                <div className="flex gap-2 items-center shrink-0">
+                  <div className="w-auto shrink-0">
+                    <Select
+                      value={invFilter}
+                      onChange={e => { setInvFilter(e.target.value); }}
+                      className="py-1.5! text-xs! whitespace-nowrap"
+                      autoWidth
+                      dropdownAlign="right"
+                    >
+                      <option value="ALL">All Statuses</option>
+                      <option value="DRAFT">Draft</option>
+                      <option value="SENT">Sent</option>
+                      <option value="PARTIALLY_PAID">Partially Paid</option>
+                      <option value="PAID">Paid</option>
+                      <option value="OVERDUE">Overdue</option>
+                    </Select>
+                  </div>
+                  {onOpenInvoices && (
+                    <Button variant="secondary" onClick={onOpenInvoices} title="Create Client Invoice" className="p-1.5!" size="sm">
+                      <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
+                    </Button>
+                  )}
                 </div>
               ) : (
-                <div className={isExpLoading ? "opacity-60 transition-opacity" : "transition-opacity"}>
-                  <ReceiptList expenses={expenses} filter={expFilter} searchQuery={searchQuery} sortField={sortField} sortOrder={sortOrder} onSelect={(id) => setDrawerConfig({ type: 'receipt', id })} />
-                  <Pagination currentPage={expPage} totalPages={expTotalPages} onPageChange={setExpPage} />
+                <div className="flex gap-2 items-center shrink-0">
+                  <div className="w-auto shrink-0">
+                    <Select
+                      value={expFilter}
+                      onChange={e => { setExpFilter(e.target.value); setExpPage(1); }}
+                      className="py-1.5! text-xs! whitespace-nowrap"
+                      autoWidth
+                      dropdownAlign="right"
+                    >
+                      <option value="ALL">All</option>
+                      <option value="NEEDS_ATTENTION">Needs Attention</option>
+                      <option value="UNCATEGORIZED">Uncategorized</option>
+                      <option value="UNLINKED">Unlinked</option>
+                      <option value="BALANCED">Balanced</option>
+                      <option value="PARTIALLY_ALLOCATED">Under-Allocated</option>
+                      <option value="OVER_ALLOCATED">Over-Allocated</option>
+                    </Select>
+                  </div>
+                  <Button variant="secondary" onClick={handleOpenAddExpense} title="Add Expense" className="p-1.5!" size="sm">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
+                  </Button>
                 </div>
+              )}
+            </div>
+
+            {/* List Body for Active Document Sub-Tab */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24">
+              {(mobileTab === 'invoices' || sourceDocTab === "invoices") ? (
+                isInvLoading && invoices.length === 0 ? (
+                  <div className="py-16 flex flex-col items-center justify-center space-y-3">
+                    <LoadingSpinner size="lg" color="text-indigo-500" />
+                    <span className="text-xs text-zinc-400">Loading client invoices…</span>
+                  </div>
+                ) : (
+                  <div className={isInvLoading ? "opacity-60 transition-opacity" : "transition-opacity"}>
+                    <InvoiceList
+                      invoices={invoices}
+                      filter={invFilter}
+                      searchQuery={searchQuery}
+                      sortField={sortField}
+                      sortOrder={sortOrder}
+                      onSelect={(id) => setDrawerConfig({ type: 'invoice', id })}
+                      onOpenCreate={onOpenInvoices}
+                    />
+                  </div>
+                )
+              ) : (
+                isExpLoading && expenses.length === 0 ? (
+                  <div className="py-16 flex flex-col items-center justify-center space-y-3">
+                    <LoadingSpinner size="lg" color="text-emerald-500" />
+                    <span className="text-xs text-zinc-400">Loading expenses…</span>
+                  </div>
+                ) : (
+                  <div className={isExpLoading ? "opacity-60 transition-opacity" : "transition-opacity"}>
+                    <ReceiptList expenses={expenses} filter={expFilter} searchQuery={searchQuery} sortField={sortField} sortOrder={sortOrder} onSelect={(id) => setDrawerConfig({ type: 'receipt', id })} />
+                    <Pagination currentPage={expPage} totalPages={expTotalPages} onPageChange={setExpPage} />
+                  </div>
+                )
               )}
             </div>
           </div>
@@ -611,6 +736,7 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
         id={drawerConfig.id} 
         onClose={() => { setDrawerConfig({ type: null, id: null }); loadGridData(); onItemsChanged?.(); }}
         onCreateRule={onCreateRule}
+        onOpenInvoices={onOpenInvoices}
       />
 
       {/* ADD TRANSACTION MODAL */}

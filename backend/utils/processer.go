@@ -129,8 +129,8 @@ func processFile(filePath string) error {
 				Timestamp:        time.Now().UTC(),
 				Vendor:           fmt.Sprintf("Receipt %d", receipt.ID),
 				Description:      "Receipt uploaded; AI extraction unavailable. Please enter details manually.",
-				Amount:           0.00,
-				TaxAmount:        0.00,
+				Amount:           models.NewMoney(0),
+				TaxAmount:        models.NewMoney(0),
 				CurrencyCode:     "USD",
 				Tender:           "card",
 				ChartAccountID:   nil,
@@ -414,17 +414,23 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 		currCode = "USD"
 	}
 
+	normTender := NormalizeTender(raw.Tender)
+	initialAllocation := "UNLINKED"
+	if IsCashTender(normTender) {
+		initialAllocation = "BALANCED"
+	}
+
 	newExpense := models.Expense{
 		Timestamp:        parsedTime,
 		Vendor:           strings.TrimSpace(raw.Vendor),
 		Description:      strings.TrimSpace(raw.Description),
-		Amount:           finalAmount,
-		TaxAmount:        taxAmount,
+		Amount:           models.NewMoney(finalAmount),
+		TaxAmount:        models.NewMoney(taxAmount),
 		CurrencyCode:     currCode,
-		Tender:           NormalizeTender(raw.Tender),
+		Tender:           normTender,
 		ChartAccountID:   validatedAccountID,
 		IsManual:         false,
-		AllocationStatus: "UNLINKED",
+		AllocationStatus: initialAllocation,
 		ReviewStatus:     reviewStatus,
 	}
 
@@ -439,7 +445,7 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 	db.DB.Save(receipt)
 
 	log.Printf(" Successfully extracted & saved Expense: ID=%d Vendor='%s', Amount=%.2f, CategoryID=%v\n",
-		newExpense.ID, newExpense.Vendor, newExpense.Amount, newExpense.ChartAccountID)
+		newExpense.ID, newExpense.Vendor, newExpense.Amount.Dollars(), newExpense.ChartAccountID)
 
 	go RunReconciliation()
 

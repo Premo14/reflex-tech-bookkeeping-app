@@ -17,8 +17,8 @@ type Expense struct {
 	Timestamp   time.Time `json:"timestamp"`
 	Vendor      string    `json:"vendor"`
 	Description string    `json:"description"`
-	Amount       float64   `json:"amount"`
-	TaxAmount    float64   `json:"taxAmount"`
+	Amount       Money     `json:"amount"`
+	TaxAmount    Money     `json:"taxAmount"`
 	CurrencyCode string    `json:"currencyCode"`
 	Tender       string    `json:"tender"` // "card", "cash", "check", "other"
 

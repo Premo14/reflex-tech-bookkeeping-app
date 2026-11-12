@@ -62,9 +62,9 @@ func TestIsCashTender(t *testing.T) {
 
 func TestCalculateExpenseSum(t *testing.T) {
 	expenses := []models.Expense{
-		{Amount: 60.50},
-		{Amount: 39.50},
-		{Amount: 100.00},
+		{Amount: models.NewMoney(60.50)},
+		{Amount: models.NewMoney(39.50)},
+		{Amount: models.NewMoney(100.00)},
 	}
 
 	sum := calculateExpenseSum(expenses)
@@ -144,24 +144,24 @@ func TestCalculateMatchScoreHardening(t *testing.T) {
 	now := time.Now()
 
 	// Case 1: Exact amount + Same day = 80
-	tx1 := models.BankTransaction{Amount: -50.00, Date: now, Description: "Walmart #3334"}
-	exp1 := models.Expense{Amount: 50.00, Timestamp: now, Vendor: "Walmart #3334"}
+	tx1 := models.BankTransaction{Amount: models.NewMoney(-50.00), Date: now, Description: "Walmart #3334"}
+	exp1 := models.Expense{Amount: models.NewMoney(50.00), Timestamp: now, Vendor: "Walmart #3334"}
 	score1 := calculateMatchScore(exp1, tx1)
 	if score1 < 80 {
 		t.Errorf("expected exact amount + vendor + date score >= 80, got %d", score1)
 	}
 
 	// Case 2: Complete mismatch (Staples $49.99 vs ATM -$62.50) must score 0
-	txATM := models.BankTransaction{Amount: -62.50, Date: now, Description: "Withdrawal at ATM #382230 PIT STOP"}
-	expStaples := models.Expense{Amount: 49.99, Timestamp: now, Vendor: "Staples #0412"}
+	txATM := models.BankTransaction{Amount: models.NewMoney(-62.50), Date: now, Description: "Withdrawal at ATM #382230 PIT STOP"}
+	expStaples := models.Expense{Amount: models.NewMoney(49.99), Timestamp: now, Vendor: "Staples #0412"}
 	scoreATM := calculateMatchScore(expStaples, txATM)
 	if scoreATM != 0 {
 		t.Errorf("expected mismatch (Staples vs ATM) score == 0, got %d", scoreATM)
 	}
 
 	// Case 3: Restaurant tip (receipt $40 vs bank debit -$46 with 15% tip) and matching vendor
-	txRest := models.BankTransaction{Amount: -46.00, Date: now, Description: "Bokie's Burgers Malone NY"}
-	expRest := models.Expense{Amount: 40.00, Timestamp: now, Vendor: "Bokie's Burgers & Catering"}
+	txRest := models.BankTransaction{Amount: models.NewMoney(-46.00), Date: now, Description: "Bokie's Burgers Malone NY"}
+	expRest := models.Expense{Amount: models.NewMoney(40.00), Timestamp: now, Vendor: "Bokie's Burgers & Catering"}
 	scoreRest := calculateMatchScore(expRest, txRest)
 	if scoreRest < 70 {
 		t.Errorf("expected tip variance with matching vendor score >= 70, got %d", scoreRest)

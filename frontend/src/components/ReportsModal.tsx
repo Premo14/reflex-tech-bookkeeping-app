@@ -6,6 +6,8 @@ import {
   getCashFlowReport,
   getVendorSpendReport,
   getARAgingReport,
+  getTrialBalance,
+  getTrialBalanceExportUrl,
 } from "../services/api";
 import type {
   ProfitLossReport,
@@ -13,6 +15,7 @@ import type {
   CashFlowReport,
   VendorSpendReport,
   ARAgingReport,
+  TrialBalanceReport,
 } from "../types/models";
 import { Modal } from "./ui/Modal";
 import { Input } from "./ui/Input";
@@ -20,7 +23,7 @@ import { Button } from "./ui/Button";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
 import { toLocalISODate } from "../utils/dateUtils";
 
-export type ReportTab = "pl" | "cash_flow" | "vendor_spend" | "ar_aging" | "schedule_c";
+export type ReportTab = "pl" | "cash_flow" | "vendor_spend" | "ar_aging" | "schedule_c" | "trial_balance";
 
 interface ReportsModalProps {
   isOpen?: boolean;
@@ -49,12 +52,19 @@ export default function ReportsModal({
   );
   const [expandedLines, setExpandedLines] = useState<Record<string, boolean>>({});
 
+  // Solopreneur Tax Deduction Calculators
+  const [businessMiles, setBusinessMiles] = useState<number>(0);
+  const [selectedMileageRateYear, setSelectedMileageRateYear] = useState<number>(taxYear);
+  const [homeOfficeSqFt, setHomeOfficeSqFt] = useState<number>(0);
+
   // Report states
   const [report, setReport] = useState<ProfitLossReport | null>(null);
   const [cashFlowReport, setCashFlowReport] = useState<CashFlowReport | null>(null);
   const [vendorSpendReport, setVendorSpendReport] = useState<VendorSpendReport | null>(null);
   const [arAgingReport, setARAgingReport] = useState<ARAgingReport | null>(null);
   const [scheduleCReport, setScheduleCReport] = useState<ScheduleCReport | null>(null);
+  const [trialBalanceReport, setTrialBalanceReport] = useState<TrialBalanceReport | null>(null);
+  const [tbTypeFilter, setTbTypeFilter] = useState<string>("ALL");
 
   // Loading states
   const [isLoading, setIsLoading] = useState(false);
@@ -62,6 +72,7 @@ export default function ReportsModal({
   const [isVendorLoading, setIsVendorLoading] = useState(false);
   const [isARLoading, setIsARLoading] = useState(false);
   const [isTaxLoading, setIsTaxLoading] = useState(false);
+  const [isTrialBalanceLoading, setIsTrialBalanceLoading] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -100,6 +111,9 @@ export default function ReportsModal({
       case "schedule_c":
         loadScheduleC(taxYear, start, end);
         break;
+      case "trial_balance":
+        loadTrialBalance(start, end);
+        break;
     }
   };
 
@@ -129,6 +143,11 @@ export default function ReportsModal({
       case "schedule_c":
         if (!scheduleCReport || scheduleCReport.year !== taxYear) {
           loadScheduleC(taxYear);
+        }
+        break;
+      case "trial_balance":
+        if (!trialBalanceReport || trialBalanceReport.startDate !== startDate || trialBalanceReport.endDate !== endDate) {
+          loadTrialBalance(startDate, endDate);
         }
         break;
     }
@@ -198,6 +217,23 @@ export default function ReportsModal({
     }
   };
 
+  const loadTrialBalance = async (start: string, end: string) => {
+    setIsTrialBalanceLoading(true);
+    try {
+      const data = await getTrialBalance({ startDate: start, endDate: end });
+      setTrialBalanceReport(data);
+    } catch (err) {
+      console.error("Failed to load Trial Balance report:", err);
+    } finally {
+      setIsTrialBalanceLoading(false);
+    }
+  };
+
+  const exportTrialBalanceCSV = () => {
+    const url = getTrialBalanceExportUrl({ startDate, endDate });
+    window.open(url, "_blank");
+  };
+
   const applyPreset = (preset: "this_month" | "last_month" | "ytd" | "full_year") => {
     setActivePreset(preset);
     const now = new Date();
@@ -232,6 +268,7 @@ export default function ReportsModal({
     if (activeTab !== "pl") setReport(null);
     if (activeTab !== "cash_flow") setCashFlowReport(null);
     if (activeTab !== "vendor_spend") setVendorSpendReport(null);
+    if (activeTab !== "trial_balance") setTrialBalanceReport(null);
 
     // Refresh current active tab
     if (activeTab === "pl") {
@@ -242,6 +279,8 @@ export default function ReportsModal({
       loadVendorSpend(start, end);
     } else if (activeTab === "schedule_c") {
       loadScheduleC(taxYear, start, end);
+    } else if (activeTab === "trial_balance") {
+      loadTrialBalance(start, end);
     }
   };
 
@@ -252,6 +291,7 @@ export default function ReportsModal({
     if (activeTab !== "pl") setReport(null);
     if (activeTab !== "cash_flow") setCashFlowReport(null);
     if (activeTab !== "vendor_spend") setVendorSpendReport(null);
+    if (activeTab !== "trial_balance") setTrialBalanceReport(null);
 
     if (activeTab === "pl") {
       loadReport(startDate, endDate);
@@ -261,6 +301,8 @@ export default function ReportsModal({
       loadVendorSpend(startDate, endDate);
     } else if (activeTab === "schedule_c") {
       loadScheduleC(taxYear, startDate, endDate);
+    } else if (activeTab === "trial_balance") {
+      loadTrialBalance(startDate, endDate);
     }
   };
 
@@ -272,6 +314,7 @@ export default function ReportsModal({
       setVendorSpendReport(null);
       setARAgingReport(null);
       setScheduleCReport(null);
+      setTrialBalanceReport(null);
     }, 300);
   };
 
@@ -685,6 +728,14 @@ export default function ReportsModal({
           spinnerColor: "text-amber-400",
           isLoading: isTaxLoading,
         };
+      case "trial_balance":
+        return {
+          title: "Trial Balance & Double-Entry Ledger",
+          subtitle: "GAAP verified general ledger balance: Total Debits = Total Credits verification",
+          iconBg: "bg-blue-900/30 text-blue-400",
+          spinnerColor: "text-blue-400",
+          isLoading: isTrialBalanceLoading,
+        };
     }
   };
 
@@ -718,6 +769,11 @@ export default function ReportsModal({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
         )}
+        {activeTab === "trial_balance" && (
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+          </svg>
+        )}
       </div>
       <div>
         <div className="flex items-center gap-2">
@@ -738,14 +794,14 @@ export default function ReportsModal({
 
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title={titleContent} maxWidth="4xl" headerClassName="print:hidden">
-      <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-4 sm:gap-5">
         {/* REPORT TAB SELECTOR (5 TABS) - STICKY */}
-        <div className="sticky -top-6 -mt-6 -mx-6 px-4 sm:px-6 py-2.5 sm:py-3.5 bg-zinc-900/95 backdrop-blur-md z-30 border-b border-white/10 flex items-center justify-between gap-2 shadow-md overflow-x-auto no-scrollbar print:static print:bg-transparent print:p-0 print:border-none print:m-0">
+        <div className="sticky -top-5 sm:-top-6 -mt-5 sm:-mt-6 -mx-5 sm:-mx-6 px-4 sm:px-6 py-2 sm:py-2.5 bg-zinc-900/95 backdrop-blur-md z-30 border-b border-white/10 flex items-center justify-between gap-2 shadow-md overflow-x-auto no-scrollbar print:static print:bg-transparent print:p-0 print:border-none print:m-0">
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               type="button"
               onClick={() => handleTabChange("pl")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === "pl"
                   ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm"
                   : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10 border border-white/5"
@@ -760,7 +816,7 @@ export default function ReportsModal({
             <button
               type="button"
               onClick={() => handleTabChange("cash_flow")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === "cash_flow"
                   ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm"
                   : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10 border border-white/5"
@@ -778,7 +834,7 @@ export default function ReportsModal({
             <button
               type="button"
               onClick={() => handleTabChange("vendor_spend")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === "vendor_spend"
                   ? "bg-purple-500/20 text-purple-300 border border-purple-500/40 shadow-sm"
                   : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10 border border-white/5"
@@ -793,7 +849,7 @@ export default function ReportsModal({
             <button
               type="button"
               onClick={() => handleTabChange("ar_aging")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === "ar_aging"
                   ? "bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-sm"
                   : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10 border border-white/5"
@@ -811,7 +867,7 @@ export default function ReportsModal({
             <button
               type="button"
               onClick={() => handleTabChange("schedule_c")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === "schedule_c"
                   ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm"
                   : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10 border border-white/5"
@@ -823,6 +879,24 @@ export default function ReportsModal({
               Schedule C
               <span className="bg-amber-500/30 text-amber-200 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
                 Tax Pack
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleTabChange("trial_balance")}
+              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === "trial_balance"
+                  ? "bg-blue-500/20 text-blue-300 border border-blue-500/40 shadow-sm"
+                  : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10 border border-white/5"
+              }`}
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+              </svg>
+              Trial Balance
+              <span className="bg-blue-500/30 text-blue-200 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+                Double-Entry
               </span>
             </button>
           </div>
@@ -851,11 +925,11 @@ export default function ReportsModal({
           )}
         </div>
 
-        {/* DATE RANGE FILTER TOOLBAR FOR DATE-BOUND REPORTS (P&L, Cash Flow, Vendor Spend) */}
-        {(activeTab === "pl" || activeTab === "cash_flow" || activeTab === "vendor_spend") && (
-          <div className="flex flex-col gap-3 bg-black/20 p-4 rounded-xl border border-white/5 print:hidden">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mr-1">
+        {/* DATE RANGE FILTER TOOLBAR FOR DATE-BOUND REPORTS (P&L, Cash Flow, Vendor Spend, Trial Balance) */}
+        {(activeTab === "pl" || activeTab === "cash_flow" || activeTab === "vendor_spend" || activeTab === "trial_balance") && (
+          <div className="flex flex-col gap-2.5 bg-black/20 p-3 sm:p-3.5 rounded-xl border border-white/5 print:hidden">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mr-1">
                 Quick Presets:
               </span>
               {[
@@ -868,7 +942,7 @@ export default function ReportsModal({
                   key={p.id}
                   type="button"
                   onClick={() => applyPreset(p.id as any)}
-                  className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors border cursor-pointer ${
+                  className={`px-2.5 py-0.5 rounded-lg text-xs font-medium transition-colors border cursor-pointer ${
                     activePreset === p.id
                       ? "bg-white/20 text-white border-white/30 font-semibold"
                       : "bg-white/5 text-zinc-400 border-white/10 hover:text-white hover:bg-white/10"
@@ -879,7 +953,7 @@ export default function ReportsModal({
               ))}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:flex-wrap gap-3 items-end pt-2 border-t border-white/5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:flex-wrap gap-2.5 items-end pt-2 border-t border-white/5">
               <div className="w-full sm:w-auto flex-1 min-w-0">
                 <Input
                   id="report-start-date"
@@ -908,17 +982,18 @@ export default function ReportsModal({
               </div>
               <Button
                 variant="secondary"
+                size="sm"
                 onClick={handleApplyFilters}
-                isLoading={isLoading || isCashFlowLoading || isVendorLoading}
+                isLoading={isLoading || isCashFlowLoading || isVendorLoading || isTrialBalanceLoading}
                 className="w-full sm:w-auto shrink-0"
               >
                 Update Report
               </Button>
 
-              <div className="flex gap-2 shrink-0">
+              <div className="flex gap-1.5 shrink-0 flex-wrap">
                 {activeTab === "pl" && report && (
-                  <Button variant="secondary" onClick={exportCSV} title="Export to CSV Spreadsheet">
-                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <Button variant="secondary" size="sm" onClick={exportCSV} title="Export to CSV Spreadsheet">
+                    <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
                     Export CSV
@@ -926,8 +1001,8 @@ export default function ReportsModal({
                 )}
 
                 {activeTab === "cash_flow" && cashFlowReport && (
-                  <Button variant="secondary" onClick={exportCashFlowCSV} title="Export Cash Flow to CSV">
-                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <Button variant="secondary" size="sm" onClick={exportCashFlowCSV} title="Export Cash Flow to CSV">
+                    <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
                     Export CSV
@@ -935,16 +1010,25 @@ export default function ReportsModal({
                 )}
 
                 {activeTab === "vendor_spend" && vendorSpendReport && (
-                  <Button variant="secondary" onClick={exportVendorSpendCSV} title="Export Vendor Spend to CSV">
-                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <Button variant="secondary" size="sm" onClick={exportVendorSpendCSV} title="Export Vendor Spend to CSV">
+                    <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
                     Export CSV
                   </Button>
                 )}
 
-                <Button variant="secondary" onClick={handlePrint} title="Print or Save as PDF">
-                  <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {activeTab === "trial_balance" && trialBalanceReport && (
+                  <Button variant="secondary" size="sm" onClick={exportTrialBalanceCSV} title="Export Trial Balance to CSV">
+                    <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Export CSV
+                  </Button>
+                )}
+
+                <Button variant="secondary" size="sm" onClick={handlePrint} title="Print or Save as PDF">
+                  <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                   </svg>
                   Print / PDF
@@ -960,7 +1044,7 @@ export default function ReportsModal({
         {activeTab === "pl" && (
           <>
             {/* EDUCATIONAL BANNER */}
-            <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-xl flex items-start gap-3 backdrop-blur-md print:hidden">
+            <div className="bg-emerald-500/10 border border-emerald-500/20 p-3 sm:p-3.5 rounded-xl flex items-start gap-3 backdrop-blur-md print:hidden">
               <svg className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
@@ -976,12 +1060,12 @@ export default function ReportsModal({
             </div>
 
             {!report && isLoading ? (
-              <div className="py-16 flex items-center justify-center text-zinc-400 flex-col">
+              <div className="py-12 flex items-center justify-center text-zinc-400 flex-col">
                 <LoadingSpinner size="lg" color="text-emerald-500" className="mb-3" />
                 <p className="text-sm">Generating Profit & Loss statement...</p>
               </div>
             ) : !report ? (
-              <div className="py-12 flex items-center justify-center text-zinc-400 flex-col">
+              <div className="py-10 flex items-center justify-center text-zinc-400 flex-col">
                 <svg className="w-12 h-12 mb-4 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
@@ -989,33 +1073,33 @@ export default function ReportsModal({
               </div>
             ) : (
               <div
-                className={`max-w-3xl mx-auto w-full space-y-8 bg-black/40 border border-white/5 p-8 rounded-xl shadow-inner backdrop-blur-sm print:bg-white print:text-black print:border-none print:shadow-none print:p-0 transition-opacity duration-200 ${
+                className={`max-w-3xl mx-auto w-full space-y-5 bg-black/40 border border-white/5 p-4 sm:p-6 rounded-xl shadow-inner backdrop-blur-sm print:bg-white print:text-black print:border-none print:shadow-none print:p-0 transition-opacity duration-200 ${
                   isLoading ? "opacity-50 pointer-events-none" : ""
                 }`}
               >
-                <div className="text-center border-b border-white/10 print:border-black/20 pb-6">
-                  <h3 className="text-2xl font-bold uppercase tracking-wider text-white print:text-black">
+                <div className="text-center border-b border-white/10 print:border-black/20 pb-4">
+                  <h3 className="text-xl font-bold uppercase tracking-wider text-white print:text-black">
                     Profit and Loss Statement
                   </h3>
-                  <p className="text-zinc-400 print:text-zinc-600 mt-2 font-medium">
+                  <p className="text-xs text-zinc-400 print:text-zinc-600 mt-1.5 font-medium">
                     {formatReportDate(report.startDate)} – {formatReportDate(report.endDate)}
                   </p>
                 </div>
 
                 {/* REVENUE */}
                 <div>
-                  <h4 className="text-sm font-bold text-zinc-400 print:text-zinc-700 uppercase tracking-wider mb-3">
+                  <h4 className="text-xs font-bold text-zinc-400 print:text-zinc-700 uppercase tracking-wider mb-2">
                     Revenue
                   </h4>
-                  <div className="space-y-1">
+                  <div className="space-y-0.5">
                     {report.revenue.map((line) => (
                       <div
                         key={line.accountCode}
-                        className="flex justify-between items-center gap-3 py-2 border-b border-white/5 print:border-zinc-200 min-w-0"
+                        className="flex justify-between items-center gap-3 py-1.5 border-b border-white/5 print:border-zinc-200 min-w-0 text-xs"
                       >
                         <span className="text-zinc-300 print:text-zinc-800 truncate min-w-0 flex-1">
                           {line.accountName}{" "}
-                          <span className="text-zinc-400 print:text-zinc-500 text-xs ml-2">
+                          <span className="text-zinc-400 print:text-zinc-500 text-[11px] ml-2 font-mono">
                             {line.accountCode}
                           </span>
                         </span>
@@ -1023,10 +1107,10 @@ export default function ReportsModal({
                       </div>
                     ))}
                     {report.revenue.length === 0 && (
-                      <div className="text-sm text-zinc-400 py-2 italic">No revenue recorded</div>
+                      <div className="text-xs text-zinc-400 py-2 italic">No revenue recorded</div>
                     )}
                   </div>
-                  <div className="flex justify-between items-center gap-3 py-3 mt-2 border-t border-white/10 print:border-black/30 min-w-0">
+                  <div className="flex justify-between items-center gap-3 py-2 mt-1 border-t border-white/10 print:border-black/30 min-w-0 text-xs">
                     <span className="font-bold print:text-black truncate">Total Revenue</span>
                     <span className="font-bold font-mono text-right shrink-0 text-emerald-400 print:text-emerald-700">
                       {formatMoney(report.totalRevenue)}
@@ -1036,18 +1120,18 @@ export default function ReportsModal({
 
                 {/* EXPENSES */}
                 <div>
-                  <h4 className="text-sm font-bold text-zinc-400 print:text-zinc-700 uppercase tracking-wider mb-3">
+                  <h4 className="text-xs font-bold text-zinc-400 print:text-zinc-700 uppercase tracking-wider mb-2">
                     Operating Expenses
                   </h4>
-                  <div className="space-y-1">
+                  <div className="space-y-0.5">
                     {report.expenses.map((line) => (
                       <div
                         key={line.accountCode}
-                        className="flex justify-between items-center gap-3 py-2 border-b border-white/5 print:border-zinc-200 min-w-0"
+                        className="flex justify-between items-center gap-3 py-1.5 border-b border-white/5 print:border-zinc-200 min-w-0 text-xs"
                       >
                         <span className="text-zinc-300 print:text-zinc-800 truncate min-w-0 flex-1">
                           {line.accountName}{" "}
-                          <span className="text-zinc-400 print:text-zinc-500 text-xs ml-2">
+                          <span className="text-zinc-400 print:text-zinc-500 text-[11px] ml-2 font-mono">
                             {line.accountCode}
                           </span>
                         </span>
@@ -1055,10 +1139,10 @@ export default function ReportsModal({
                       </div>
                     ))}
                     {report.expenses.length === 0 && (
-                      <div className="text-sm text-zinc-400 py-2 italic">No expenses recorded</div>
+                      <div className="text-xs text-zinc-400 py-2 italic">No expenses recorded</div>
                     )}
                   </div>
-                  <div className="flex justify-between items-center gap-3 py-3 mt-2 border-t border-white/10 print:border-black/30 min-w-0">
+                  <div className="flex justify-between items-center gap-3 py-2 mt-1 border-t border-white/10 print:border-black/30 min-w-0 text-xs">
                     <span className="font-bold print:text-black truncate">Total Operating Expenses</span>
                     <span className="font-bold font-mono text-right shrink-0 text-red-400 print:text-red-700">
                       {formatMoney(report.totalExpenses)}
@@ -1067,11 +1151,11 @@ export default function ReportsModal({
                 </div>
 
                 {/* NET INCOME */}
-                <div className="pt-6 border-t-4 border-white/10 print:border-black">
+                <div className="pt-4 border-t-2 border-white/10 print:border-black">
                   <div className="flex justify-between items-center">
-                    <span className="text-xl font-bold uppercase tracking-wider print:text-black">Net Income</span>
+                    <span className="text-base font-bold uppercase tracking-wider print:text-black">Net Income</span>
                     <span
-                      className={`text-2xl font-black ${
+                      className={`text-xl font-black ${
                         report.netIncome >= 0
                           ? "text-emerald-400 print:text-emerald-700"
                           : "text-red-400 print:text-red-700"
@@ -1178,9 +1262,9 @@ export default function ReportsModal({
         {/* TAB 2: CASH FLOW SUMMARY                                                  */}
         {/* ========================================================================= */}
         {activeTab === "cash_flow" && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             {/* EDUCATIONAL BANNER */}
-            <div className="bg-cyan-500/10 border border-cyan-500/20 p-4 rounded-xl flex items-start gap-3 backdrop-blur-md print:hidden">
+            <div className="bg-cyan-500/10 border border-cyan-500/20 p-3 sm:p-3.5 rounded-xl flex items-start gap-3 backdrop-blur-md print:hidden">
               <svg className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
@@ -1197,44 +1281,44 @@ export default function ReportsModal({
             </div>
 
             {isCashFlowLoading && !cashFlowReport ? (
-              <div className="py-16 flex items-center justify-center text-zinc-400 flex-col">
+              <div className="py-12 flex items-center justify-center text-zinc-400 flex-col">
                 <LoadingSpinner size="lg" color="text-cyan-400" className="mb-3" />
                 <p className="text-sm">Calculating liquid cash flow trajectory...</p>
               </div>
             ) : cashFlowReport ? (
-              <div className="space-y-6">
+              <div className="space-y-4">
                 {/* 4 SUMMARY METRIC CARDS */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div className="bg-black/30 border border-white/10 rounded-xl p-4">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                       Total Cash In (Deposits)
                     </span>
-                    <p className="text-2xl font-black text-emerald-400 mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-emerald-400 mt-1 font-mono">
                       {formatMoney(cashFlowReport.totalCashIn)}
                     </p>
-                    <span className="text-[10px] text-zinc-500">
+                    <span className="text-[10px] text-zinc-500 font-mono">
                       Avg: {formatMoney(cashFlowReport.avgMonthlyInflow)} / mo
                     </span>
                   </div>
 
-                  <div className="bg-black/30 border border-white/10 rounded-xl p-4">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                       Total Cash Out (Disbursements)
                     </span>
-                    <p className="text-2xl font-black text-red-400 mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-red-400 mt-1 font-mono">
                       {formatMoney(cashFlowReport.totalCashOut)}
                     </p>
-                    <span className="text-[10px] text-zinc-500">
+                    <span className="text-[10px] text-zinc-500 font-mono">
                       Avg: {formatMoney(cashFlowReport.avgMonthlyOutflow)} / mo
                     </span>
                   </div>
 
-                  <div className="bg-black/30 border border-white/10 rounded-xl p-4">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                       Net Cash Flow
                     </span>
                     <p
-                      className={`text-2xl font-black mt-1 ${
+                      className={`text-xl sm:text-2xl font-black mt-1 font-mono ${
                         cashFlowReport.netCashFlow >= 0 ? "text-emerald-400" : "text-red-400"
                       }`}
                     >
@@ -1246,16 +1330,16 @@ export default function ReportsModal({
                     </span>
                   </div>
 
-                  <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-4">
+                  <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-3 sm:p-3.5">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-cyan-300">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">
                         Cash Savings Rate
                       </span>
                       <span className="text-[10px] bg-cyan-500/30 text-cyan-200 px-1.5 py-0.2 rounded font-bold">
                         Retention
                       </span>
                     </div>
-                    <p className="text-2xl font-black text-cyan-300 mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-cyan-300 mt-1 font-mono">
                       {cashFlowReport.savingsRatePercent.toFixed(1)}%
                     </p>
                     <span className="text-[10px] text-cyan-400/80">
@@ -1265,34 +1349,34 @@ export default function ReportsModal({
                 </div>
 
                 {/* MONTHLY CASH TRAJECTORY TABLE */}
-                <div className="bg-black/40 border border-white/5 rounded-xl p-6 space-y-4">
-                  <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="bg-black/40 border border-white/5 rounded-xl p-4 sm:p-5 space-y-3">
+                  <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
                     <div>
-                      <h4 className="text-sm font-bold text-white">Monthly Cash Flow Trajectory</h4>
-                      <p className="text-xs text-zinc-400">
+                      <h4 className="text-xs font-bold text-white uppercase tracking-wider">Monthly Cash Flow Trajectory</h4>
+                      <p className="text-[11px] text-zinc-400">
                         Month-by-month inflow vs outflow with cumulative position
                       </p>
                     </div>
-                    <span className="text-xs font-mono text-zinc-500">
+                    <span className="text-[11px] font-mono text-zinc-500">
                       {cashFlowReport.periods.length} months tracked
                     </span>
                   </div>
 
                   {cashFlowReport.periods.length === 0 ? (
-                    <div className="py-8 text-center text-zinc-400 text-sm">
+                    <div className="py-6 text-center text-zinc-400 text-xs">
                       No cash transactions recorded within this date range.
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs text-left">
                         <thead>
-                          <tr className="border-b border-white/10 text-zinc-400 uppercase tracking-wider text-[11px]">
-                            <th className="py-2.5 font-bold">Month</th>
-                            <th className="py-2.5 font-bold text-right">Cash In (+)</th>
-                            <th className="py-2.5 font-bold text-right">Cash Out (-)</th>
-                            <th className="py-2.5 font-bold text-right">Net Flow</th>
-                            <th className="py-2.5 font-bold text-center">Direction</th>
-                            <th className="py-2.5 font-bold text-right">Running Position</th>
+                          <tr className="border-b border-white/10 text-zinc-400 uppercase tracking-wider text-[10px]">
+                            <th className="py-2 px-2.5 font-bold">Month</th>
+                            <th className="py-2 px-2.5 font-bold text-right">Cash In (+)</th>
+                            <th className="py-2 px-2.5 font-bold text-right">Cash Out (-)</th>
+                            <th className="py-2 px-2.5 font-bold text-right">Net Flow</th>
+                            <th className="py-2 px-2.5 font-bold text-center">Direction</th>
+                            <th className="py-2 px-2.5 font-bold text-right">Running Position</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-white/5">
@@ -1300,27 +1384,27 @@ export default function ReportsModal({
                             const isPositive = p.netCashFlow >= 0;
                             return (
                               <tr key={p.period} className="hover:bg-white/5 transition-colors">
-                                <td className="py-2.5 font-medium text-white">
+                                <td className="py-1.5 px-2.5 font-medium text-white">
                                   {formatMonthLabel(p.period)}
                                   <span className="text-zinc-500 text-[10px] ml-1.5 font-mono">({p.period})</span>
                                 </td>
-                                <td className="py-2.5 text-right font-mono text-emerald-400">
+                                <td className="py-1.5 px-2.5 text-right font-mono text-emerald-400">
                                   {formatMoney(p.cashIn)}
                                 </td>
-                                <td className="py-2.5 text-right font-mono text-red-400">
+                                <td className="py-1.5 px-2.5 text-right font-mono text-red-400">
                                   {formatMoney(p.cashOut)}
                                 </td>
                                 <td
-                                  className={`py-2.5 text-right font-mono font-bold ${
+                                  className={`py-1.5 px-2.5 text-right font-mono font-bold ${
                                     isPositive ? "text-emerald-400" : "text-red-400"
                                   }`}
                                 >
                                   {isPositive ? "+" : ""}
                                   {formatMoney(p.netCashFlow)}
                                 </td>
-                                <td className="py-2.5 text-center">
+                                <td className="py-1.5 px-2.5 text-center">
                                   <span
-                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                    className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
                                       isPositive
                                         ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
                                         : "bg-red-500/20 text-red-300 border border-red-500/30"
@@ -1329,7 +1413,7 @@ export default function ReportsModal({
                                     {isPositive ? "▲ Surplus" : "▼ Burn"}
                                   </span>
                                 </td>
-                                <td className="py-2.5 text-right font-mono font-bold text-zinc-200">
+                                <td className="py-1.5 px-2.5 text-right font-mono font-bold text-zinc-200">
                                   {p.runningCashTotal >= 0 ? "+" : ""}
                                   {formatMoney(p.runningCashTotal)}
                                 </td>
@@ -1339,27 +1423,27 @@ export default function ReportsModal({
                         </tbody>
                         <tfoot>
                           <tr className="border-t-2 border-white/20 font-bold text-zinc-100">
-                            <td className="py-3 uppercase tracking-wider">Total Period</td>
-                            <td className="py-3 text-right font-mono text-emerald-400">
+                            <td className="py-2 px-2.5 uppercase tracking-wider text-[11px]">Total Period</td>
+                            <td className="py-2 px-2.5 text-right font-mono text-emerald-400">
                               {formatMoney(cashFlowReport.totalCashIn)}
                             </td>
-                            <td className="py-3 text-right font-mono text-red-400">
+                            <td className="py-2 px-2.5 text-right font-mono text-red-400">
                               {formatMoney(cashFlowReport.totalCashOut)}
                             </td>
                             <td
-                              className={`py-3 text-right font-mono ${
+                              className={`py-2 px-2.5 text-right font-mono ${
                                 cashFlowReport.netCashFlow >= 0 ? "text-emerald-400" : "text-red-400"
                               }`}
                             >
                               {cashFlowReport.netCashFlow >= 0 ? "+" : ""}
                               {formatMoney(cashFlowReport.netCashFlow)}
                             </td>
-                            <td className="py-3 text-center">
+                            <td className="py-2 px-2.5 text-center">
                               <span className="text-[10px] text-zinc-400 uppercase font-mono">
                                 Net Position
                               </span>
                             </td>
-                            <td className="py-3 text-right font-mono text-white">
+                            <td className="py-2 px-2.5 text-right font-mono text-white">
                               {formatMoney(cashFlowReport.netCashFlow)}
                             </td>
                           </tr>
@@ -1377,9 +1461,9 @@ export default function ReportsModal({
         {/* TAB 3: VENDOR SPEND ANALYTICS                                             */}
         {/* ========================================================================= */}
         {activeTab === "vendor_spend" && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             {/* EDUCATIONAL BANNER */}
-            <div className="bg-purple-500/10 border border-purple-500/20 p-4 rounded-xl flex items-start gap-3 backdrop-blur-md print:hidden">
+            <div className="bg-purple-500/10 border border-purple-500/20 p-3 sm:p-3.5 rounded-xl flex items-start gap-3 backdrop-blur-md print:hidden">
               <svg className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
@@ -1396,37 +1480,37 @@ export default function ReportsModal({
             </div>
 
             {isVendorLoading && !vendorSpendReport ? (
-              <div className="py-16 flex items-center justify-center text-zinc-400 flex-col">
+              <div className="py-12 flex items-center justify-center text-zinc-400 flex-col">
                 <LoadingSpinner size="lg" color="text-purple-400" className="mb-3" />
                 <p className="text-sm">Aggregating vendor spend and payee concentration...</p>
               </div>
             ) : vendorSpendReport ? (
-              <div className="space-y-6">
+              <div className="space-y-4">
                 {/* 4 SUMMARY METRIC CARDS */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div className="bg-black/30 border border-white/10 rounded-xl p-4">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                       Total Outflow Analyzed
                     </span>
-                    <p className="text-2xl font-black text-purple-400 mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-purple-400 mt-1 font-mono">
                       {formatMoney(vendorSpendReport.totalSpend)}
                     </p>
                     <span className="text-[10px] text-zinc-500">Across all business expenses</span>
                   </div>
 
-                  <div className="bg-black/30 border border-white/10 rounded-xl p-4">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                       Unique Payees / Vendors
                     </span>
-                    <p className="text-2xl font-black text-white mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-white mt-1 font-mono">
                       {vendorSpendReport.totalVendors}
                     </p>
                     <span className="text-[10px] text-zinc-500">Distinct suppliers identified</span>
                   </div>
 
-                  <div className="bg-black/30 border border-white/10 rounded-xl p-4">
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                         Top 5 Concentration
                       </span>
                       <span
@@ -1439,20 +1523,20 @@ export default function ReportsModal({
                         {vendorSpendReport.top5Percent > 75 ? "High Risk" : "Balanced"}
                       </span>
                     </div>
-                    <p className="text-2xl font-black text-amber-300 mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-amber-300 mt-1 font-mono">
                       {vendorSpendReport.top5Percent.toFixed(1)}%
                     </p>
                     <span className="text-[10px] text-zinc-500">Of spend captured by top 5 payees</span>
                   </div>
 
-                  <div className="bg-purple-500/10 border border-purple-500/30 rounded-xl p-4">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-purple-300">
+                  <div className="bg-purple-500/10 border border-purple-500/30 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-purple-300">
                       #1 Top Payee
                     </span>
-                    <p className="text-base font-black text-white break-words line-clamp-2 leading-tight mt-1" title={vendorSpendReport.vendors[0]?.vendorName}>
+                    <p className="text-sm font-black text-white break-words line-clamp-1 leading-tight mt-1" title={vendorSpendReport.vendors[0]?.vendorName}>
                       {vendorSpendReport.vendors[0]?.vendorName || "None"}
                     </p>
-                    <span className="text-[10px] text-purple-300/80">
+                    <span className="text-[10px] text-purple-300/80 font-mono">
                       {vendorSpendReport.vendors[0]
                         ? `${formatMoney(vendorSpendReport.vendors[0].totalSpend)} (${vendorSpendReport.vendors[0].percentOfTotal.toFixed(1)}%)`
                         : "No spend recorded"}
@@ -1461,85 +1545,85 @@ export default function ReportsModal({
                 </div>
 
                 {/* VENDORS TABLE */}
-                <div className="bg-black/40 border border-white/5 rounded-xl p-6 space-y-4">
-                  <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="bg-black/40 border border-white/5 rounded-xl p-4 sm:p-5 space-y-3">
+                  <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
                     <div>
-                      <h4 className="text-sm font-bold text-white">Vendor Ranking & Spend Distribution</h4>
-                      <p className="text-xs text-zinc-400">
+                      <h4 className="text-xs font-bold text-white uppercase tracking-wider">Vendor Ranking & Spend Distribution</h4>
+                      <p className="text-[11px] text-zinc-400">
                         Sorted by highest total cash outflow with category allocation
                       </p>
                     </div>
-                    <span className="text-xs font-mono text-zinc-500">
+                    <span className="text-[11px] font-mono text-zinc-500">
                       {vendorSpendReport.vendors.length} payees
                     </span>
                   </div>
 
                   {vendorSpendReport.vendors.length === 0 ? (
-                    <div className="py-8 text-center text-zinc-400 text-sm">
+                    <div className="py-6 text-center text-zinc-400 text-xs">
                       No vendor expenses found in this date range.
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs text-left">
                         <thead>
-                          <tr className="border-b border-white/10 text-zinc-400 uppercase tracking-wider text-[11px] whitespace-nowrap">
-                            <th className="py-2.5 px-3 font-bold w-12 text-center">Rank</th>
-                            <th className="py-2.5 px-3 font-bold min-w-[170px]">Payee / Vendor</th>
-                            <th className="py-2.5 px-3 font-bold min-w-[150px]">Spend Share</th>
-                            <th className="py-2.5 px-3 font-bold text-right min-w-[100px]">Total Spent</th>
-                            <th className="py-2.5 px-3 font-bold text-center min-w-[60px]">Txns</th>
-                            <th className="py-2.5 px-3 font-bold text-right min-w-[100px]">Avg Ticket</th>
-                            <th className="py-2.5 px-3 font-bold min-w-[150px]">Primary Category</th>
+                          <tr className="border-b border-white/10 text-zinc-400 uppercase tracking-wider text-[10px] whitespace-nowrap">
+                            <th className="py-2 px-2.5 font-bold w-12 text-center">Rank</th>
+                            <th className="py-2 px-2.5 font-bold min-w-[170px]">Payee / Vendor</th>
+                            <th className="py-2 px-2.5 font-bold min-w-[150px]">Spend Share</th>
+                            <th className="py-2 px-2.5 font-bold text-right min-w-[100px]">Total Spent</th>
+                            <th className="py-2 px-2.5 font-bold text-center min-w-[60px]">Txns</th>
+                            <th className="py-2 px-2.5 font-bold text-right min-w-[100px]">Avg Ticket</th>
+                            <th className="py-2 px-2.5 font-bold min-w-[150px]">Primary Category</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-white/5 whitespace-nowrap">
                           {vendorSpendReport.vendors.map((v, idx) => (
                             <tr key={v.vendorName} className="hover:bg-white/5 transition-colors">
-                              <td className="py-2.5 px-3 text-center font-mono">
+                              <td className="py-1.5 px-2.5 text-center font-mono">
                                 {idx === 0 && (
-                                  <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-300 font-bold inline-flex items-center justify-center text-[10px]">
+                                  <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 font-bold inline-flex items-center justify-center text-[10px]">
                                     1
                                   </span>
                                 )}
                                 {idx === 1 && (
-                                  <span className="w-5 h-5 rounded-full bg-zinc-400/20 text-zinc-300 font-bold inline-flex items-center justify-center text-[10px]">
+                                  <span className="w-4 h-4 rounded-full bg-zinc-400/20 text-zinc-300 font-bold inline-flex items-center justify-center text-[10px]">
                                     2
                                   </span>
                                 )}
                                 {idx === 2 && (
-                                  <span className="w-5 h-5 rounded-full bg-amber-700/20 text-amber-600 font-bold inline-flex items-center justify-center text-[10px]">
+                                  <span className="w-4 h-4 rounded-full bg-amber-700/20 text-amber-600 font-bold inline-flex items-center justify-center text-[10px]">
                                     3
                                   </span>
                                 )}
-                                {idx > 2 && <span className="text-zinc-500">#{idx + 1}</span>}
+                                {idx > 2 && <span className="text-zinc-500 text-[10px]">#{idx + 1}</span>}
                               </td>
-                              <td className="py-2.5 px-3 font-semibold text-white">
+                              <td className="py-1.5 px-2.5 font-semibold text-white">
                                 {v.vendorName}
                               </td>
-                              <td className="py-2.5 px-3">
+                              <td className="py-1.5 px-2.5">
                                 <div className="flex items-center gap-2">
-                                  <div className="w-24 bg-white/10 rounded-full h-1.5 overflow-hidden">
+                                  <div className="w-20 bg-white/10 rounded-full h-1.5 overflow-hidden">
                                     <div
                                       className="bg-purple-500 h-1.5 rounded-full"
                                       style={{ width: `${Math.min(v.percentOfTotal, 100)}%` }}
                                     />
                                   </div>
-                                  <span className="text-[10px] font-mono text-zinc-400 w-10 text-right">
+                                  <span className="text-[10px] font-mono text-zinc-400 w-9 text-right">
                                     {v.percentOfTotal.toFixed(1)}%
                                   </span>
                                 </div>
                               </td>
-                              <td className="py-2.5 px-3 text-right font-mono font-bold text-white">
+                              <td className="py-1.5 px-2.5 text-right font-mono font-bold text-white">
                                 {formatMoney(v.totalSpend)}
                               </td>
-                              <td className="py-2.5 px-3 text-center font-mono text-zinc-400">
+                              <td className="py-1.5 px-2.5 text-center font-mono text-zinc-400">
                                 {v.transactionCount}
                               </td>
-                              <td className="py-2.5 px-3 text-right font-mono text-zinc-300">
+                              <td className="py-1.5 px-2.5 text-right font-mono text-zinc-300">
                                 {formatMoney(v.averageSpend)}
                               </td>
-                              <td className="py-2.5 px-3">
-                                <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[10px] font-medium border border-white/5">
+                              <td className="py-1.5 px-2.5">
+                                <span className="px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-300 text-[10px] font-medium border border-white/5">
                                   {v.primaryCategoryName || "Uncategorized"}
                                 </span>
                               </td>
@@ -1559,9 +1643,9 @@ export default function ReportsModal({
         {/* TAB 4: ACCOUNTS RECEIVABLE (A/R) AGING                                     */}
         {/* ========================================================================= */}
         {activeTab === "ar_aging" && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             {/* EDUCATIONAL BANNER */}
-            <div className="bg-rose-500/10 border border-rose-500/20 p-4 rounded-xl flex items-start gap-3 backdrop-blur-md print:hidden">
+            <div className="bg-rose-500/10 border border-rose-500/20 p-3 sm:p-3.5 rounded-xl flex items-start gap-3 backdrop-blur-md print:hidden">
               <svg className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
@@ -1578,9 +1662,9 @@ export default function ReportsModal({
             </div>
 
             {/* AS OF DATE FILTER TOOLBAR */}
-            <div className="flex flex-wrap items-end justify-between gap-4 bg-black/20 p-4 rounded-xl border border-white/5 print:hidden">
-              <div className="flex items-end gap-3 flex-1 min-w-[220px]">
-                <div className="w-48">
+            <div className="flex flex-wrap items-end justify-between gap-3 bg-black/20 p-3 sm:p-3.5 rounded-xl border border-white/5 print:hidden">
+              <div className="flex items-end gap-2.5 flex-1 min-w-[220px]">
+                <div className="w-44">
                   <Input
                     id="ar-as-of-date"
                     name="asOfDate"
@@ -1590,21 +1674,21 @@ export default function ReportsModal({
                     onChange={(e) => setAsOfDate(e.target.value)}
                   />
                 </div>
-                <Button variant="secondary" onClick={() => loadARAging(asOfDate)} isLoading={isARLoading}>
+                <Button variant="secondary" size="sm" onClick={() => loadARAging(asOfDate)} isLoading={isARLoading}>
                   Recalculate Aging
                 </Button>
               </div>
 
               {arAgingReport && (
-                <div className="flex items-center gap-2">
-                  <Button variant="secondary" onClick={exportARAgingCSV} title="Export A/R Aging to CSV">
-                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Button variant="secondary" size="sm" onClick={exportARAgingCSV} title="Export A/R Aging to CSV">
+                    <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
                     Export CSV
                   </Button>
-                  <Button variant="secondary" onClick={handlePrint} title="Print or Save PDF">
-                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <Button variant="secondary" size="sm" onClick={handlePrint} title="Print or Save PDF">
+                    <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                     </svg>
                     Print
@@ -1614,37 +1698,37 @@ export default function ReportsModal({
             </div>
 
             {isARLoading && !arAgingReport ? (
-              <div className="py-16 flex items-center justify-center text-zinc-400 flex-col">
+              <div className="py-12 flex items-center justify-center text-zinc-400 flex-col">
                 <LoadingSpinner size="lg" color="text-rose-400" className="mb-3" />
                 <p className="text-sm">Calculating A/R aging buckets and invoice statuses...</p>
               </div>
             ) : arAgingReport ? (
-              <div className="space-y-6">
+              <div className="space-y-4">
                 {/* 4 SUMMARY METRIC CARDS */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div className="bg-black/30 border border-white/10 rounded-xl p-4">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                       Total Receivables
                     </span>
-                    <p className="text-2xl font-black text-white mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-white mt-1 font-mono">
                       {formatMoney(arAgingReport.totalReceivables)}
                     </p>
                     <span className="text-[10px] text-zinc-500">Uncollected invoice balance</span>
                   </div>
 
-                  <div className="bg-black/30 border border-white/10 rounded-xl p-4">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                       Current (Not Due Yet)
                     </span>
-                    <p className="text-2xl font-black text-emerald-400 mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-emerald-400 mt-1 font-mono">
                       {formatMoney(arAgingReport.totalCurrent)}
                     </p>
                     <span className="text-[10px] text-zinc-500">Within payment terms</span>
                   </div>
 
-                  <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-4">
+                  <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 sm:p-3.5">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-rose-300">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-rose-300">
                         Total Overdue
                       </span>
                       {arAgingReport.totalOverdue > 0 && (
@@ -1653,17 +1737,17 @@ export default function ReportsModal({
                         </span>
                       )}
                     </div>
-                    <p className="text-2xl font-black text-rose-300 mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-rose-300 mt-1 font-mono">
                       {formatMoney(arAgingReport.totalOverdue)}
                     </p>
                     <span className="text-[10px] text-rose-400/80">Past contractual due date</span>
                   </div>
 
-                  <div className="bg-black/30 border border-white/10 rounded-xl p-4">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                       Open Invoices
                     </span>
-                    <p className="text-2xl font-black text-zinc-200 mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-zinc-200 mt-1 font-mono">
                       {arAgingReport.invoiceCount}
                     </p>
                     <span className="text-[10px] text-zinc-500">
@@ -1674,10 +1758,10 @@ export default function ReportsModal({
 
                 {/* 5 AGING BUCKETS GRID */}
                 <div>
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-3">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 mb-2">
                     Aging Distribution Buckets (As of {formatReportDate(arAgingReport.asOfDate)})
                   </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5">
                     {arAgingReport.buckets.map((b) => {
                       const isPastDue = b.bucketName !== "Current (Not Due)";
                       const hasBalance = b.totalAmount > 0;
@@ -1688,7 +1772,7 @@ export default function ReportsModal({
                       return (
                         <div
                           key={b.bucketName}
-                          className={`p-3 rounded-xl border transition-all ${
+                          className={`p-2.5 rounded-lg border transition-all ${
                             hasBalance && isPastDue
                               ? "bg-rose-950/20 border-rose-500/30 text-rose-200"
                               : hasBalance
@@ -1696,7 +1780,7 @@ export default function ReportsModal({
                               : "bg-black/30 border-white/5 text-zinc-400"
                           }`}
                         >
-                          <div className="flex items-start justify-between gap-1.5 min-h-[2rem]">
+                          <div className="flex items-start justify-between gap-1.5 min-h-[1.75rem]">
                             <span className="text-[10px] font-bold uppercase tracking-wider leading-tight text-white/90" title={b.bucketName}>
                               {b.bucketName}
                             </span>
@@ -1705,7 +1789,7 @@ export default function ReportsModal({
                             </span>
                           </div>
                           <p
-                            className={`text-lg font-black mt-1 font-mono ${
+                            className={`text-base font-black mt-1 font-mono ${
                               hasBalance && isPastDue
                                 ? "text-rose-400"
                                 : hasBalance
@@ -1715,7 +1799,7 @@ export default function ReportsModal({
                           >
                             {formatMoney(b.totalAmount)}
                           </p>
-                          <div className="flex items-center justify-between text-[10px] mt-1 text-zinc-400">
+                          <div className="flex items-center justify-between text-[10px] mt-0.5 text-zinc-400">
                             <span>Share</span>
                             <span className="font-mono font-semibold">{share.toFixed(1)}%</span>
                           </div>
@@ -1726,35 +1810,35 @@ export default function ReportsModal({
                 </div>
 
                 {/* INVOICES DETAIL TABLE */}
-                <div className="bg-black/40 border border-white/5 rounded-xl p-6 space-y-4">
-                  <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="bg-black/40 border border-white/5 rounded-xl p-4 sm:p-5 space-y-3">
+                  <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
                     <div>
-                      <h4 className="text-sm font-bold text-white">Outstanding Invoices Ledger</h4>
-                      <p className="text-xs text-zinc-400">
+                      <h4 className="text-xs font-bold text-white uppercase tracking-wider">Outstanding Invoices Ledger</h4>
+                      <p className="text-[11px] text-zinc-400">
                         Detailed invoice status, due dates, and days overdue
                       </p>
                     </div>
-                    <span className="text-xs font-mono text-zinc-500">
+                    <span className="text-[11px] font-mono text-zinc-500">
                       {allARInvoices.length} open invoices
                     </span>
                   </div>
 
                   {allARInvoices.length === 0 ? (
-                    <div className="py-8 text-center text-zinc-400 text-sm">
+                    <div className="py-6 text-center text-zinc-400 text-xs">
                       No unpaid invoices found! All invoices are fully collected.
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs text-left">
                         <thead>
-                          <tr className="border-b border-white/10 text-zinc-400 uppercase tracking-wider text-[11px]">
-                            <th className="py-2.5 font-bold">Invoice #</th>
-                            <th className="py-2.5 font-bold">Customer / Client</th>
-                            <th className="py-2.5 font-bold">Issue Date</th>
-                            <th className="py-2.5 font-bold">Due Date</th>
-                            <th className="py-2.5 font-bold text-center">Overdue Status</th>
-                            <th className="py-2.5 font-bold">Aging Bucket</th>
-                            <th className="py-2.5 font-bold text-right">Amount</th>
+                          <tr className="border-b border-white/10 text-zinc-400 uppercase tracking-wider text-[10px]">
+                            <th className="py-2 px-2.5 font-bold">Invoice #</th>
+                            <th className="py-2 px-2.5 font-bold">Customer / Client</th>
+                            <th className="py-2 px-2.5 font-bold">Issue Date</th>
+                            <th className="py-2 px-2.5 font-bold">Due Date</th>
+                            <th className="py-2 px-2.5 font-bold text-center">Overdue Status</th>
+                            <th className="py-2 px-2.5 font-bold">Aging Bucket</th>
+                            <th className="py-2 px-2.5 font-bold text-right">Amount</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-white/5">
@@ -1762,35 +1846,35 @@ export default function ReportsModal({
                             const isOverdue = inv.daysOverdue > 0;
                             return (
                               <tr key={inv.id} className="hover:bg-white/5 transition-colors">
-                                <td className="py-2.5 font-mono font-bold text-white">
+                                <td className="py-1.5 px-2.5 font-mono font-bold text-white">
                                   {inv.invoiceNumber}
                                 </td>
-                                <td className="py-2.5 font-semibold text-zinc-200">
+                                <td className="py-1.5 px-2.5 font-semibold text-zinc-200">
                                   {inv.clientName}
                                 </td>
-                                <td className="py-2.5 text-zinc-400">
+                                <td className="py-1.5 px-2.5 text-zinc-400">
                                   {formatReportDate(inv.issueDate)}
                                 </td>
-                                <td className="py-2.5 text-zinc-400">
+                                <td className="py-1.5 px-2.5 text-zinc-400">
                                   {formatReportDate(inv.dueDate)}
                                 </td>
-                                <td className="py-2.5 text-center">
+                                <td className="py-1.5 px-2.5 text-center">
                                   {isOverdue ? (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
                                       ⚠️ {inv.daysOverdue}d overdue
                                     </span>
                                   ) : (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                                       ✓ Current
                                     </span>
                                   )}
                                 </td>
-                                <td className="py-2.5">
-                                  <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[10px] font-medium border border-white/5">
+                                <td className="py-1.5 px-2.5">
+                                  <span className="px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-300 text-[10px] font-medium border border-white/5">
                                     {inv.bucketName}
                                   </span>
                                 </td>
-                                <td className="py-2.5 text-right font-mono font-bold text-white">
+                                <td className="py-1.5 px-2.5 text-right font-mono font-bold text-white">
                                   {formatMoney(inv.totalAmount)}
                                 </td>
                               </tr>
@@ -1799,10 +1883,10 @@ export default function ReportsModal({
                         </tbody>
                         <tfoot>
                           <tr className="border-t-2 border-white/20 font-bold text-zinc-100">
-                            <td colSpan={6} className="py-3 uppercase tracking-wider text-right pr-4">
+                            <td colSpan={6} className="py-2 px-2.5 uppercase tracking-wider text-right pr-4 text-[11px]">
                               Total Outstanding:
                             </td>
-                            <td className="py-3 text-right font-mono text-white text-sm">
+                            <td className="py-2 px-2.5 text-right font-mono text-white text-xs font-bold">
                               {formatMoney(arAgingReport.totalReceivables)}
                             </td>
                           </tr>
@@ -1814,15 +1898,15 @@ export default function ReportsModal({
 
                 {/* CLIENT CONCENTRATION BREAKDOWN */}
                 {(arAgingReport.clients || []).length > 0 && (
-                  <div className="bg-black/40 border border-white/5 rounded-xl p-6 space-y-4">
-                    <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                  <div className="bg-black/40 border border-white/5 rounded-xl p-4 sm:p-5 space-y-3">
+                    <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
                       <div>
-                        <h4 className="text-sm font-bold text-white">Client Receivables Concentration</h4>
-                        <p className="text-xs text-zinc-400">
+                        <h4 className="text-xs font-bold text-white uppercase tracking-wider">Client Receivables Concentration</h4>
+                        <p className="text-[11px] text-zinc-400">
                           Summary of outstanding and overdue balances grouped by client
                         </p>
                       </div>
-                      <span className="text-xs font-mono text-zinc-500">
+                      <span className="text-[11px] font-mono text-zinc-500">
                         {(arAgingReport.clients || []).length} clients
                       </span>
                     </div>
@@ -1830,32 +1914,32 @@ export default function ReportsModal({
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs text-left">
                         <thead>
-                          <tr className="border-b border-white/10 text-zinc-400 uppercase tracking-wider text-[11px]">
-                            <th className="py-2.5 font-bold">Client Name</th>
-                            <th className="py-2.5 font-bold text-center">Open Invoices</th>
-                            <th className="py-2.5 font-bold text-right">Current</th>
-                            <th className="py-2.5 font-bold text-right">Overdue</th>
-                            <th className="py-2.5 font-bold text-right">Total Outstanding</th>
+                          <tr className="border-b border-white/10 text-zinc-400 uppercase tracking-wider text-[10px]">
+                            <th className="py-2 px-2.5 font-bold">Client Name</th>
+                            <th className="py-2 px-2.5 font-bold text-center">Open Invoices</th>
+                            <th className="py-2 px-2.5 font-bold text-right">Current</th>
+                            <th className="py-2 px-2.5 font-bold text-right">Overdue</th>
+                            <th className="py-2 px-2.5 font-bold text-right">Total Outstanding</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-white/5">
                           {(arAgingReport.clients || []).map((c) => (
                             <tr key={c.clientName} className="hover:bg-white/5 transition-colors">
-                              <td className="py-2.5 font-semibold text-white">{c.clientName}</td>
-                              <td className="py-2.5 text-center font-mono text-zinc-300">
+                              <td className="py-1.5 px-2.5 font-semibold text-white">{c.clientName}</td>
+                              <td className="py-1.5 px-2.5 text-center font-mono text-zinc-300">
                                 {c.invoiceCount}
                               </td>
-                              <td className="py-2.5 text-right font-mono text-emerald-400">
+                              <td className="py-1.5 px-2.5 text-right font-mono text-emerald-400">
                                 {formatMoney(c.currentAmount)}
                               </td>
                               <td
-                                className={`py-2.5 text-right font-mono font-bold ${
+                                className={`py-1.5 px-2.5 text-right font-mono font-bold ${
                                   c.overdueAmount > 0 ? "text-rose-400" : "text-zinc-500"
                                 }`}
                               >
                                 {formatMoney(c.overdueAmount)}
                               </td>
-                              <td className="py-2.5 text-right font-mono font-bold text-white">
+                              <td className="py-1.5 px-2.5 text-right font-mono font-bold text-white">
                                 {formatMoney(c.totalOutstanding)}
                               </td>
                             </tr>
@@ -1874,26 +1958,27 @@ export default function ReportsModal({
         {/* TAB 5: IRS SCHEDULE C (FORM 1040)                                         */}
         {/* ========================================================================= */}
         {activeTab === "schedule_c" && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             {/* ACTION TOOLBAR & EXPORTS */}
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-black/20 p-4 rounded-xl border border-white/5 print:hidden">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 bg-black/20 p-3 sm:p-3.5 rounded-xl border border-white/5 print:hidden">
               <div>
-                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <h4 className="text-xs font-bold text-white flex items-center gap-2 uppercase tracking-wider">
                   Form 1040 Schedule C — Profit or Loss From Business
                 </h4>
-                <p className="text-xs text-zinc-400 mt-0.5">
+                <p className="text-[11px] text-zinc-400 mt-0.5">
                   Tax year {taxYear} • Single-entry ledger mapped directly to IRS tax schedule lines.
                 </p>
               </div>
 
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 <Button
                   variant="primary"
+                  size="sm"
                   onClick={handleDownloadTaxPack}
-                  className="bg-amber-500 hover:bg-amber-400 text-black font-bold shadow-lg shadow-amber-500/20"
+                  className="bg-amber-500 hover:bg-amber-400 text-black font-bold shadow-md shadow-amber-500/20"
                   title="Download bundled ZIP of Schedule C CSV, Transaction Register, and Categorized Receipts"
                 >
-                  <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                   </svg>
                   1-Click CPA Tax Pack (.zip)
@@ -1901,14 +1986,14 @@ export default function ReportsModal({
 
                 {scheduleCReport && (
                   <>
-                    <Button variant="secondary" onClick={exportScheduleCCSV} title="Export Schedule C CSV">
-                      <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <Button variant="secondary" size="sm" onClick={exportScheduleCCSV} title="Export Schedule C CSV">
+                      <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                       </svg>
                       Export CSV
                     </Button>
-                    <Button variant="secondary" onClick={handlePrint} title="Print or Save PDF">
-                      <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <Button variant="secondary" size="sm" onClick={handlePrint} title="Print or Save PDF">
+                      <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                       </svg>
                       Print
@@ -1919,42 +2004,42 @@ export default function ReportsModal({
             </div>
 
             {isTaxLoading && !scheduleCReport ? (
-              <div className="py-16 flex items-center justify-center text-zinc-400 flex-col">
+              <div className="py-12 flex items-center justify-center text-zinc-400 flex-col">
                 <LoadingSpinner size="lg" color="text-amber-500" className="mb-3" />
                 <p className="text-sm">Compiling IRS Form 1040 Schedule C...</p>
               </div>
             ) : scheduleCReport ? (
-              <div className="space-y-6">
+              <div className="space-y-4">
                 {/* 4 SUMMARY METRIC CARDS */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div className="bg-black/30 border border-white/10 rounded-xl p-4">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                       Gross Income (Line 7)
                     </span>
-                    <p className="text-2xl font-black text-emerald-400 mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-emerald-400 mt-1 font-mono">
                       {formatMoney(scheduleCReport.grossIncome)}
                     </p>
                     <span className="text-[10px] text-zinc-500">Gross receipts & revenues</span>
                   </div>
 
-                  <div className="bg-black/30 border border-white/10 rounded-xl p-4">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                       Total Expenses (Line 28)
                     </span>
-                    <p className="text-2xl font-black text-red-400 mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-red-400 mt-1 font-mono">
                       {formatMoney(scheduleCReport.totalExpensesDeductible)}
                     </p>
-                    <span className="text-[10px] text-zinc-500">
+                    <span className="text-[10px] text-zinc-500 font-mono">
                       Gross: {formatMoney(scheduleCReport.totalExpensesGross)}
                     </span>
                   </div>
 
-                  <div className="bg-black/30 border border-white/10 rounded-xl p-4">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                  <div className="bg-black/30 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                       Net Profit / Loss (Line 31)
                     </span>
                     <p
-                      className={`text-2xl font-black mt-1 ${
+                      className={`text-xl sm:text-2xl font-black mt-1 font-mono ${
                         scheduleCReport.netProfitOrLoss >= 0 ? "text-emerald-400" : "text-red-400"
                       }`}
                     >
@@ -1963,16 +2048,16 @@ export default function ReportsModal({
                     <span className="text-[10px] text-zinc-500">Taxable business income</span>
                   </div>
 
-                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4">
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 sm:p-3.5">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
                         Meals 50% IRS Limit
                       </span>
                       <span className="text-[10px] bg-amber-500/30 text-amber-200 px-1.5 py-0.2 rounded font-bold">
                         Line 24b
                       </span>
                     </div>
-                    <p className="text-2xl font-black text-amber-300 mt-1">
+                    <p className="text-xl sm:text-2xl font-black text-amber-300 mt-1 font-mono">
                       {formatMoney(scheduleCReport.nondeductibleMeals)}
                     </p>
                     <span className="text-[10px] text-amber-400/80">
@@ -1984,7 +2069,7 @@ export default function ReportsModal({
                 {/* SUSPENSE WARNING */}
                 {(scheduleCReport.uncategorizedExpenseAmount > 0 ||
                   scheduleCReport.uncategorizedIncomeAmount > 0) && (
-                  <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-xl flex items-start gap-3 backdrop-blur-md">
+                  <div className="bg-amber-500/10 border border-amber-500/30 p-3 sm:p-3.5 rounded-xl flex items-start gap-3 backdrop-blur-md">
                     <svg
                       className="w-5 h-5 text-amber-400 shrink-0 mt-0.5"
                       fill="none"
@@ -1999,7 +2084,7 @@ export default function ReportsModal({
                       />
                     </svg>
                     <div className="flex-1">
-                      <h5 className="text-sm font-bold text-amber-300">Uncategorized Items in Suspense</h5>
+                      <h5 className="text-xs font-bold text-amber-300 uppercase tracking-wider">Uncategorized Items in Suspense</h5>
                       <p className="text-xs text-amber-200/80 mt-1">
                         There are {scheduleCReport.uncategorizedTxCount} transactions (
                         {formatMoney(scheduleCReport.uncategorizedExpenseAmount)}) awaiting categorization. For accurate
@@ -2012,7 +2097,7 @@ export default function ReportsModal({
                             onViewUncategorized();
                             onClose();
                           }}
-                          className="mt-2 text-xs font-semibold px-3 py-1 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border border-amber-500/40 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+                          className="mt-2 text-xs font-semibold px-2.5 py-1 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border border-amber-500/40 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
                         >
                           Resolve Uncategorized in Ledger →
                         </button>
@@ -2022,7 +2107,7 @@ export default function ReportsModal({
                 )}
 
                 {/* SCHEDULE C DETAILED BREAKDOWN */}
-                <div className="bg-black/40 border border-white/5 rounded-xl p-6 space-y-6">
+                <div className="bg-black/40 border border-white/5 rounded-xl p-4 sm:p-5 space-y-4">
                   {/* PART I: INCOME */}
                   <div>
                     <div className="border-b border-white/10 pb-2 mb-3 flex items-center justify-between">
@@ -2199,9 +2284,526 @@ export default function ReportsModal({
                       {formatMoney(scheduleCReport.netProfitOrLoss)}
                     </span>
                   </div>
+
+                  {/* PART III: FORM 1040-ES QUARTERLY ESTIMATED TAX & SCHEDULE SE */}
+                  <div className="pt-6 border-t-2 border-white/10 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="text-sm font-bold uppercase tracking-wider text-amber-400">
+                          IRS Form 1040-ES Quarterly Estimated Taxes & Schedule SE
+                        </h4>
+                        <p className="text-xs text-zinc-400 mt-0.5">
+                          Projected tax liabilities based on {scheduleCReport.year} Schedule C net income of {formatMoney(scheduleCReport.netProfitOrLoss)}
+                        </p>
+                      </div>
+                      <span className="text-[10px] font-mono bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded border border-amber-500/30">
+                        15.3% SE Tax + 15% Estimated Federal
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+                          Schedule SE Tax (15.3%)
+                        </span>
+                        <span className="text-lg font-bold font-mono text-white">
+                          {formatMoney(scheduleCReport.selfEmploymentTax || 0)}
+                        </span>
+                        <span className="text-[10px] text-zinc-500 block mt-1">Social Security & Medicare</span>
+                      </div>
+
+                      <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+                          50% SE Deduction
+                        </span>
+                        <span className="text-lg font-bold font-mono text-emerald-400">
+                          {formatMoney(scheduleCReport.deductibleSelfEmploymentTax || 0)}
+                        </span>
+                        <span className="text-[10px] text-zinc-500 block mt-1">Reduces AGI on 1040</span>
+                      </div>
+
+                      <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+                          Total Annual Estimated Tax
+                        </span>
+                        <span className="text-lg font-bold font-mono text-white">
+                          {formatMoney(scheduleCReport.totalEstimatedTax || 0)}
+                        </span>
+                        <span className="text-[10px] text-zinc-500 block mt-1">SE + Est Federal Income</span>
+                      </div>
+
+                      <div className="bg-zinc-950/60 border border-amber-500/30 rounded-xl p-3 bg-amber-500/5">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block mb-1">
+                          Estimated Quarterly Voucher
+                        </span>
+                        <span className="text-lg font-bold font-mono text-amber-300">
+                          {formatMoney(scheduleCReport.estimatedQuarterlyTax || 0)}
+                        </span>
+                        <span className="text-[10px] text-amber-400/70 block mt-1">Due per IRS quarter</span>
+                      </div>
+                    </div>
+
+                    {/* QUARTERLY DEADLINES */}
+                    {scheduleCReport.quarterlyDeadlines && scheduleCReport.quarterlyDeadlines.length > 0 && (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-1">
+                        {scheduleCReport.quarterlyDeadlines.map((dl) => (
+                          <div
+                            key={dl.quarter}
+                            className={`p-2.5 rounded-lg border text-xs flex justify-between items-center ${
+                              dl.isPast
+                                ? "bg-zinc-950/40 border-white/5 text-zinc-500"
+                                : "bg-zinc-900 border-amber-500/20 text-zinc-200"
+                            }`}
+                          >
+                            <div>
+                              <span className="font-bold text-amber-400 font-mono mr-1.5">{dl.quarter}</span>
+                              <span className="text-[11px] text-zinc-400">{dl.dueDate}</span>
+                            </div>
+                            <span className="font-mono font-bold">
+                              {formatMoney(dl.amountDue)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* PART IV: SOLOPRENEUR TAX DEDUCTION OPTIMIZERS (MILEAGE & HOME OFFICE) */}
+                  <div className="pt-6 border-t-2 border-white/10 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="text-sm font-bold uppercase tracking-wider text-emerald-400">
+                          Solopreneur Tax Deduction Optimizers
+                        </h4>
+                        <p className="text-xs text-zinc-400 mt-0.5">
+                          Interactive calculators for vehicle business mileage and home office deductions.
+                        </p>
+                      </div>
+                      <span className="text-[10px] font-mono bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30">
+                        Maximize Write-Offs
+                      </span>
+                    </div>
+
+                    {(() => {
+                      const mileageRate = selectedMileageRateYear === 2024 ? 0.67 : 0.70;
+                      const calculatedMileageDeduction = businessMiles * mileageRate;
+                      const line9Expense = scheduleCReport.expenseLines.find((l) =>
+                        l.lineNumber.toLowerCase().includes("line 9")
+                      );
+                      const actualVehicleExpenses = line9Expense ? line9Expense.deductibleAmount : 0;
+                      const mileageAdvantage = calculatedMileageDeduction - actualVehicleExpenses;
+
+                      const homeOfficeDeduction = Math.min(300, Math.max(0, homeOfficeSqFt)) * 5.0;
+                      const totalPotentialDeduction =
+                        (mileageAdvantage > 0 ? mileageAdvantage : 0) + homeOfficeDeduction;
+                      const estimatedTaxSavings = totalPotentialDeduction * 0.303; // ~15.3% SE tax + ~15% income tax
+
+                      return (
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {/* IRC § 162 VEHICLE MILEAGE CALCULATOR */}
+                            <div className="bg-zinc-900/60 border border-white/10 rounded-xl p-4 space-y-3">
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs font-bold uppercase tracking-wider text-zinc-200">
+                                  🚗 IRC § 162 Business Mileage
+                                </span>
+                                <span className="text-[10px] bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded font-mono">
+                                  ${mileageRate.toFixed(2)} / mile ({selectedMileageRateYear})
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="text-[11px] text-zinc-400 font-medium block mb-1">
+                                    Annual Business Miles
+                                  </label>
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    step="50"
+                                    placeholder="e.g. 5000"
+                                    value={businessMiles || ""}
+                                    onChange={(e) => setBusinessMiles(Math.max(0, parseFloat(e.target.value) || 0))}
+                                    className="text-xs"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[11px] text-zinc-400 font-medium block mb-1">
+                                    Tax Rate Year
+                                  </label>
+                                  <select
+                                    value={selectedMileageRateYear}
+                                    onChange={(e) => setSelectedMileageRateYear(Number(e.target.value))}
+                                    className="w-full bg-zinc-950 border border-white/10 rounded-lg px-2.5 py-2 text-xs font-mono text-white focus:outline-none focus:border-blue-500 cursor-pointer"
+                                  >
+                                    <option value={2026}>2026 ($0.70/mi)</option>
+                                    <option value={2025}>2025 ($0.70/mi)</option>
+                                    <option value={2024}>2024 ($0.67/mi)</option>
+                                  </select>
+                                </div>
+                              </div>
+
+                              <div className="bg-zinc-950/60 border border-white/5 rounded-lg p-3 space-y-2 text-xs">
+                                <div className="flex justify-between">
+                                  <span className="text-zinc-400">Standard Mileage Deduction:</span>
+                                  <span className="font-mono font-bold text-white">
+                                    {formatMoney(calculatedMileageDeduction)}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-zinc-400">Actual Vehicle Costs (Line 9):</span>
+                                  <span className="font-mono text-zinc-300">
+                                    {formatMoney(actualVehicleExpenses)}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between border-t border-white/10 pt-1.5">
+                                  <span className="font-semibold text-zinc-300">Mileage vs Actual Advantage:</span>
+                                  <span
+                                    className={`font-mono font-bold ${
+                                      mileageAdvantage >= 0 ? "text-emerald-400" : "text-amber-400"
+                                    }`}
+                                  >
+                                    {mileageAdvantage >= 0
+                                      ? `+${formatMoney(mileageAdvantage)} (Mileage better)`
+                                      : `${formatMoney(mileageAdvantage)} (Actual better)`}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* IRC § 280A SIMPLIFIED HOME OFFICE CALCULATOR */}
+                            <div className="bg-zinc-900/60 border border-white/10 rounded-xl p-4 space-y-3">
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs font-bold uppercase tracking-wider text-zinc-200">
+                                  🏠 IRC § 280A Simplified Home Office
+                                </span>
+                                <span className="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded font-mono">
+                                  $5.00 / sq ft (Max 300 sq ft)
+                                </span>
+                              </div>
+
+                              <div className="pt-1">
+                                <label className="text-[11px] text-zinc-400 font-medium block mb-1">
+                                  Dedicated Office Area (Square Feet, Max 300)
+                                </label>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  max="300"
+                                  step="10"
+                                  placeholder="e.g. 200"
+                                  value={homeOfficeSqFt || ""}
+                                  onChange={(e) => setHomeOfficeSqFt(Math.min(300, Math.max(0, parseFloat(e.target.value) || 0)))}
+                                  className="text-xs"
+                                />
+                              </div>
+
+                              <div className="bg-zinc-950/60 border border-white/5 rounded-lg p-3 space-y-2 text-xs">
+                                <div className="flex justify-between">
+                                  <span className="text-zinc-400">Calculated Line 30 Deduction:</span>
+                                  <span className="font-mono font-bold text-emerald-400">
+                                    {formatMoney(homeOfficeDeduction)}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-zinc-400">IRS Safe Harbor Cap:</span>
+                                  <span className="font-mono text-zinc-500">$1,500.00 / year</span>
+                                </div>
+                                <p className="text-[10px] text-zinc-400 pt-1 border-t border-white/10 leading-relaxed">
+                                  No receipts or utility apportionment required. Requires exclusive regular business use of the room.
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* TOTAL TAX SAVINGS BANNER */}
+                          {totalPotentialDeduction > 0 && (
+                            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                              <div>
+                                <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider">
+                                  Potential Additional Tax Write-Offs: {formatMoney(totalPotentialDeduction)}
+                                </span>
+                                <p className="text-xs text-emerald-400/80 mt-0.5">
+                                  Reduces both Self-Employment Tax (15.3%) and Federal Income Tax (~15% effective bracket).
+                                </p>
+                              </div>
+                              <div className="text-right shrink-0">
+                                <span className="text-[10px] uppercase font-bold text-zinc-400 block">
+                                  Estimated Cash Saved
+                                </span>
+                                <span className="text-lg font-black text-emerald-400">
+                                  ~{formatMoney(estimatedTaxSavings)}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
             ) : null}
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB 6: TRIAL BALANCE & DOUBLE-ENTRY LEDGER VERIFICATION                   */}
+        {/* ========================================================================= */}
+        {activeTab === "trial_balance" && (
+          <div className="space-y-4">
+            {/* EDUCATIONAL & GAAP BANNER */}
+            <div className="bg-blue-500/10 border border-blue-500/20 p-3 sm:p-3.5 rounded-xl flex items-start gap-3 backdrop-blur-md print:hidden">
+              <svg className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+              </svg>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <h5 className="text-xs font-bold uppercase tracking-wider text-blue-400">
+                    GAAP Trial Balance & Double-Entry Ledger Verification
+                  </h5>
+                  <span className="bg-blue-500/20 text-blue-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border border-blue-500/30">
+                    CPA-Ready
+                  </span>
+                </div>
+                <p className="text-xs text-blue-200/80 leading-relaxed">
+                  Under formal double-entry bookkeeping, every monetary inflow or outflow is balanced across two accounts: 
+                  the asset/source account (Bank, Card, Cash) and the offsetting nominal or real account (Expense, Revenue, Equipment, or Owner's Equity). 
+                  When total debits equal total credits (<span className="font-mono font-semibold text-blue-300">&Delta; = $0.00</span>), your general ledger is mathematically verified and ready for tax filing, external audit, or seamless export.
+                </p>
+              </div>
+            </div>
+
+            {isTrialBalanceLoading && !trialBalanceReport ? (
+              <div className="py-12 flex items-center justify-center text-zinc-400 flex-col">
+                <LoadingSpinner size="lg" color="text-blue-500" className="mb-3" />
+                <p className="text-sm">Calculating double-entry trial balance...</p>
+              </div>
+            ) : trialBalanceReport ? (
+              <div className="space-y-4">
+                {/* BALANCE INTEGRITY BANNER */}
+                <div
+                  className={`p-3 sm:p-3.5 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+                    trialBalanceReport.isBalanced
+                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                      : "bg-rose-500/10 border-rose-500/30 text-rose-300"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center text-base font-bold shrink-0 ${
+                        trialBalanceReport.isBalanced ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400"
+                      }`}
+                    >
+                      {trialBalanceReport.isBalanced ? "✓" : "⚠"}
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold tracking-tight uppercase">
+                        {trialBalanceReport.isBalanced
+                          ? "General Ledger is Mechanically Balanced"
+                          : "General Ledger Out of Balance Warning"}
+                      </h4>
+                      <p className="text-xs opacity-80 mt-0.5">
+                        {trialBalanceReport.isBalanced
+                          ? `Total Debits match Total Credits exactly across ${trialBalanceReport.accounts.length} active ledger accounts.`
+                          : `Total debits and credits do not match. Variance: ${formatMoney(trialBalanceReport.varianceCents / 100)}.`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-black/40 border border-white/10">
+                      Variance:{" "}
+                      <span className={trialBalanceReport.isBalanced ? "text-emerald-400 font-bold" : "text-rose-400 font-bold"}>
+                        {formatMoney(trialBalanceReport.varianceCents / 100)}
+                      </span>
+                    </span>
+                    <Button variant="secondary" size="sm" onClick={exportTrialBalanceCSV} className="text-xs">
+                      Export CSV
+                    </Button>
+                  </div>
+                </div>
+
+                {/* 4 SUMMARY METRIC CARDS */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+                  <div className="bg-zinc-900/60 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-0.5">
+                      Total Debits (Dr)
+                    </span>
+                    <span className="text-lg font-bold font-mono text-white">
+                      {formatMoney(trialBalanceReport.totalDebit)}
+                    </span>
+                    <span className="text-[10px] text-zinc-500 block mt-0.5">Left-hand entries</span>
+                  </div>
+
+                  <div className="bg-zinc-900/60 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-0.5">
+                      Total Credits (Cr)
+                    </span>
+                    <span className="text-lg font-bold font-mono text-white">
+                      {formatMoney(trialBalanceReport.totalCredit)}
+                    </span>
+                    <span className="text-[10px] text-zinc-500 block mt-0.5">Right-hand entries</span>
+                  </div>
+
+                  <div className="bg-zinc-900/60 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-0.5">
+                      Net Ledger Variance
+                    </span>
+                    <span
+                      className={`text-lg font-bold font-mono ${
+                        trialBalanceReport.isBalanced ? "text-emerald-400" : "text-rose-400"
+                      }`}
+                    >
+                      {formatMoney(trialBalanceReport.varianceCents / 100)}
+                    </span>
+                    <span className="text-[10px] text-zinc-500 block mt-0.5">
+                      {trialBalanceReport.isBalanced ? "Zero variance (balanced)" : "Needs reconciliation"}
+                    </span>
+                  </div>
+
+                  <div className="bg-zinc-900/60 border border-white/10 rounded-xl p-3 sm:p-3.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-0.5">
+                      Active Accounts
+                    </span>
+                    <span className="text-lg font-bold font-mono text-blue-400">
+                      {trialBalanceReport.accounts.length}
+                    </span>
+                    <span className="text-[10px] text-zinc-500 block mt-0.5">Chart of Accounts</span>
+                  </div>
+                </div>
+
+                {/* ACCOUNT TYPE FILTER PILLS */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mr-1.5">
+                    Filter Account Type:
+                  </span>
+                  {["ALL", "ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"].map((type) => {
+                    const count =
+                      type === "ALL"
+                        ? trialBalanceReport.accounts.length
+                        : trialBalanceReport.accounts.filter((a) => a.accountType.toUpperCase() === type).length;
+                    return (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => setTbTypeFilter(type)}
+                        className={`px-2 py-0.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 border ${
+                          tbTypeFilter === type
+                            ? "bg-blue-500/20 text-blue-300 border-blue-500/40 font-semibold"
+                            : "bg-white/5 text-zinc-400 border-white/10 hover:text-white hover:bg-white/10"
+                        }`}
+                      >
+                        {type}
+                        <span className="text-[10px] font-mono px-1.5 py-0.2 bg-black/40 rounded-full text-zinc-300">
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* TRIAL BALANCE TABLE */}
+                <div className="bg-zinc-900/80 border border-white/10 rounded-xl overflow-hidden shadow-2xl">
+                  <div className="overflow-x-auto max-h-[500px]">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="sticky top-0 bg-zinc-950/95 backdrop-blur-md text-zinc-400 border-b border-white/10 text-[10px] font-bold uppercase tracking-wider z-10">
+                        <tr>
+                          <th className="py-2 px-3 sm:px-3.5">Code</th>
+                          <th className="py-2 px-3 sm:px-3.5">Account Name</th>
+                          <th className="py-2 px-3 sm:px-3.5">Type</th>
+                          <th className="py-2 px-3 sm:px-3.5">Normal Balance</th>
+                          <th className="py-2 px-3 sm:px-3.5 text-right">Debit ($)</th>
+                          <th className="py-2 px-3 sm:px-3.5 text-right">Credit ($)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/5 font-mono">
+                        {trialBalanceReport.accounts
+                          .filter((acc) => tbTypeFilter === "ALL" || acc.accountType.toUpperCase() === tbTypeFilter)
+                          .map((acc) => {
+                            const isDebitNormal = acc.accountType === "ASSET" || acc.accountType === "EXPENSE";
+                            return (
+                              <tr key={acc.accountId || acc.accountCode} className="hover:bg-white/5 transition-colors">
+                                <td className="py-1.5 px-3 sm:px-3.5 font-bold text-zinc-300">{acc.accountCode}</td>
+                                <td className="py-1.5 px-3 sm:px-3.5 font-sans text-zinc-200 font-medium">
+                                  {acc.accountName}
+                                </td>
+                                <td className="py-1.5 px-3 sm:px-3.5 font-sans">
+                                  <span
+                                    className={`px-1.5 py-0.2 rounded text-[10px] font-semibold uppercase tracking-wider border ${
+                                      acc.accountType === "ASSET"
+                                        ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/20"
+                                        : acc.accountType === "EXPENSE"
+                                        ? "bg-amber-500/10 text-amber-300 border-amber-500/20"
+                                        : acc.accountType === "REVENUE"
+                                        ? "bg-cyan-500/10 text-cyan-300 border-cyan-500/20"
+                                        : acc.accountType === "EQUITY"
+                                        ? "bg-purple-500/10 text-purple-300 border-purple-500/20"
+                                        : "bg-rose-500/10 text-rose-300 border-rose-500/20"
+                                    }`}
+                                  >
+                                    {acc.accountType}
+                                  </span>
+                                </td>
+                                <td className="py-1.5 px-3 sm:px-3.5 font-sans text-[11px] text-zinc-400">
+                                  {isDebitNormal ? (
+                                    <span className="text-emerald-400/80">Debit (Dr)</span>
+                                  ) : (
+                                    <span className="text-cyan-400/80">Credit (Cr)</span>
+                                  )}
+                                </td>
+                                <td className="py-1.5 px-3 sm:px-3.5 text-right text-zinc-100">
+                                  {acc.netDebit > 0 ? (
+                                    <span className="font-semibold text-white">{formatMoney(acc.netDebit)}</span>
+                                  ) : (
+                                    <span className="text-zinc-600">-</span>
+                                  )}
+                                </td>
+                                <td className="py-1.5 px-3 sm:px-3.5 text-right text-zinc-100">
+                                  {acc.netCredit > 0 ? (
+                                    <span className="font-semibold text-white">{formatMoney(acc.netCredit)}</span>
+                                  ) : (
+                                    <span className="text-zinc-600">-</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+
+                        {trialBalanceReport.accounts.filter(
+                          (acc) => tbTypeFilter === "ALL" || acc.accountType.toUpperCase() === tbTypeFilter
+                        ).length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="py-6 text-center text-zinc-500 font-sans text-xs">
+                              No ledger activity found for account type "{tbTypeFilter}".
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                      <tfoot className="sticky bottom-0 bg-zinc-950 border-t-2 border-white/20 font-mono font-bold text-xs z-10">
+                        <tr>
+                          <td colSpan={4} className="py-2 px-3 sm:px-3.5 font-sans uppercase tracking-wider text-zinc-300 text-[11px]">
+                            Totals (All Accounts)
+                          </td>
+                          <td className="py-2 px-3 sm:px-3.5 text-right text-white">
+                            {formatMoney(trialBalanceReport.totalDebit)}
+                          </td>
+                          <td className="py-2 px-3 sm:px-3.5 text-right text-white">
+                            {formatMoney(trialBalanceReport.totalCredit)}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="py-12 flex items-center justify-center text-zinc-400 flex-col">
+                <svg className="w-12 h-12 mb-4 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+                </svg>
+                <p>Select date range and click Update Report to generate Trial Balance.</p>
+              </div>
+            )}
           </div>
         )}
       </div>

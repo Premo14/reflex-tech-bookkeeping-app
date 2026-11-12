@@ -112,22 +112,22 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
       title="Accounting Period Management" 
       maxWidth="xl"
     >
-      <div className="space-y-6">
+      <div className="space-y-4 text-xs">
         
         {/* STATUS BANNER */}
-        <div className={`p-4 rounded-xl flex items-center gap-4 ${currentClosedDate ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-amber-500/10 border border-amber-500/20'}`}>
-          <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${currentClosedDate ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+        <div className={`p-3.5 rounded-xl flex items-center gap-3.5 ${currentClosedDate ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-amber-500/10 border border-amber-500/20'}`}>
+          <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${currentClosedDate ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
             {currentClosedDate ? (
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
             ) : (
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" /></svg>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" /></svg>
             )}
           </div>
           <div>
-            <h3 className={`font-bold ${currentClosedDate ? 'text-emerald-400' : 'text-amber-400'}`}>
+            <h3 className={`text-xs font-bold ${currentClosedDate ? 'text-emerald-400' : 'text-amber-400'}`}>
               {currentClosedDate ? `Books Locked through ${formatDate(currentClosedDate)}` : "Books are completely OPEN"}
             </h3>
-            <p className="text-sm text-zinc-400 mt-1">
+            <p className="text-[11px] text-zinc-400 mt-0.5">
               {currentClosedDate 
                 ? "Transactions on or before this date cannot be modified, preventing accidental changes to past financial records."
                 : "No historical records are protected. It is highly recommended to lock past periods."}
@@ -136,19 +136,19 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
         </div>
 
         {error && (
-          <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-sm font-medium">
+          <div className="p-2.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-xs font-medium">
             {error}
           </div>
         )}
 
         {/* CONTROLS */}
-        <div className="bg-[#111] border border-white/5 p-5 rounded-2xl">
-          <h3 className="text-sm font-bold text-white mb-4">Change Closing Date</h3>
-          <p className="text-xs text-zinc-400 mb-4">
-            <strong className="text-amber-500/80">Strict Closing Rule:</strong> You cannot lock books for a period that contains unresolved items. All expenses and transactions on or before your chosen date must be explicitly linked and balanced, or moved to the "Ignored Items" queue.
+        <div className="bg-[#111] border border-white/5 p-4 rounded-xl">
+          <h3 className="text-xs font-bold text-white mb-2">Change Closing Date</h3>
+          <p className="text-[11px] text-zinc-400 mb-3 leading-relaxed">
+            <strong className="text-amber-400/90">Strict Closing Rule:</strong> You cannot lock books for a period that contains unresolved items. All expenses and transactions on or before your chosen date must be explicitly linked and balanced, or moved to the "Ignored Items" queue.
           </p>
           
-          <div className="flex flex-col sm:flex-row items-end gap-3">
+          <div className="flex flex-col sm:flex-row items-end gap-2.5">
             <div className="flex-1 w-full">
               <Input
                 type="date"
@@ -158,57 +158,57 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
               />
             </div>
             <div className="flex gap-2 w-full sm:w-auto mt-2 sm:mt-0">
-              <Button variant="primary" onClick={() => handleSave()} disabled={!canSave} isLoading={isSaving} className="flex-1 sm:flex-none">
+              <Button variant="primary" size="sm" onClick={() => handleSave()} disabled={!canSave} isLoading={isSaving} className="flex-1 sm:flex-none">
                 Save Date
               </Button>
               {booksClosedDate && (
-                <Button variant="danger" onClick={() => handleSave("")} isLoading={isSaving} className="flex-1 sm:flex-none" title="Clear date to completely unlock books">
+                <Button variant="danger" size="sm" onClick={() => handleSave("")} isLoading={isSaving} className="flex-1 sm:flex-none" title="Clear date to completely unlock books">
                   Unlock All
                 </Button>
               )}
             </div>
           </div>
-          <div className="mt-4 pt-4 border-t border-white/5">
-            <Button variant="secondary" size="sm" onClick={handleQuickClose} isLoading={isSaving} className="w-full justify-center">
+          <div className="mt-3 pt-3 border-t border-white/5">
+            <Button variant="secondary" size="sm" onClick={handleQuickClose} isLoading={isSaving} className="w-full justify-center text-xs">
               Quick Lock: End of Last Month
             </Button>
           </div>
 
           {/* PREFLIGHT CHECKLIST */}
           {preflight && booksClosedDate && (
-            <div className={`mt-5 p-4 rounded-xl border ${preflight.canClose ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
-              <h4 className={`text-sm font-bold mb-2 flex items-center gap-2 ${preflight.canClose ? 'text-emerald-400' : 'text-red-400'}`}>
+            <div className={`mt-4 p-3.5 rounded-xl border ${preflight.canClose ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
+              <h4 className={`text-xs font-bold mb-2 flex items-center gap-1.5 ${preflight.canClose ? 'text-emerald-400' : 'text-red-400'}`}>
                 {isLoadingPreflight ? (
                   <LoadingSpinner size="xs" />
                 ) : preflight.canClose ? (
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/></svg>
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/></svg>
                 ) : (
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
                 )}
                 {preflight.canClose ? "Ready to Lock" : "Action Required"}
               </h4>
-              <ul className="text-sm space-y-2 text-zinc-300">
+              <ul className="text-xs space-y-1.5 text-zinc-300">
                 {preflight.unlinkedTxCount > 0 && (
-                  <li className="flex items-start gap-2">
+                  <li className="flex items-start gap-1.5">
                     <span className="text-red-400 mt-0.5">•</span>
                     <span>{preflight.unlinkedTxCount} unlinked transactions found.</span>
                   </li>
                 )}
                 {preflight.unlinkedExpCount > 0 && (
-                  <li className="flex items-start gap-2">
+                  <li className="flex items-start gap-1.5">
                     <span className="text-red-400 mt-0.5">•</span>
                     <span>{preflight.unlinkedExpCount} unlinked expenses found.</span>
                   </li>
                 )}
                 {preflight.pendingCount > 0 && (
-                  <li className="flex items-start gap-2">
+                  <li className="flex items-start gap-1.5">
                     <span className="text-red-400 mt-0.5">•</span>
                     <span>{preflight.pendingCount} items in review queue.</span>
                   </li>
                 )}
                 {(preflight.uncategorizedTxCount > 0 || preflight.uncategorizedExpCount > 0) && (
-                  <li className="flex flex-col gap-2 pt-1 border-t border-amber-500/20 text-amber-300">
-                    <div className="flex items-start gap-2">
+                  <li className="flex flex-col gap-1.5 pt-1 border-t border-amber-500/20 text-amber-300">
+                    <div className="flex items-start gap-1.5">
                       <span className="mt-0.5">⚠️</span>
                       <span>
                         {preflight.uncategorizedTxCount > 0 && `${preflight.uncategorizedTxCount} transaction(s)`}
@@ -218,12 +218,12 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
                       </span>
                     </div>
                     {preflight.canClose && (
-                      <label className="flex items-center gap-2 cursor-pointer mt-1 bg-amber-500/10 border border-amber-500/30 p-2.5 rounded-lg select-none text-xs text-amber-200 hover:bg-amber-500/20 transition-colors">
+                      <label className="flex items-center gap-2 cursor-pointer mt-0.5 bg-amber-500/10 border border-amber-500/30 p-2 rounded-lg select-none text-[11px] text-amber-200 hover:bg-amber-500/20 transition-colors">
                         <input
                           type="checkbox"
                           checked={ackUncategorized}
                           onChange={e => setAckUncategorized(e.target.checked)}
-                          className="rounded border-zinc-700 bg-zinc-900 text-amber-500 focus:ring-amber-500/20 h-4 w-4"
+                          className="rounded border-zinc-700 bg-zinc-900 text-amber-500 focus:ring-amber-500/20 h-3.5 w-3.5"
                         />
                         <span>I acknowledge locking records with uncategorized suspense items.</span>
                       </label>
@@ -231,14 +231,14 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
                   </li>
                 )}
                 {preflight.canClose && (
-                  <li className="flex items-start gap-2">
+                  <li className="flex items-start gap-1.5">
                     <span className="text-emerald-400 mt-0.5">•</span>
                     <span>All items on or before {formatDate(booksClosedDate)} are resolved.</span>
                   </li>
                 )}
               </ul>
               {!preflight.canClose && (
-                <div className="mt-4 flex gap-2">
+                <div className="mt-3 flex gap-2">
                   <Button variant="secondary" size="sm" onClick={() => {
                     if (onViewItems) {
                       onViewItems(booksClosedDate);
@@ -255,29 +255,29 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
 
         {/* AUDIT LOG */}
         <div>
-          <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 pl-1">Audit History</h3>
-          <div className="bg-[#0a0a0a] border border-white/5 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
+          <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 pl-1">Audit History</h3>
+          <div className="bg-[#0a0a0a] border border-white/5 rounded-xl overflow-hidden max-h-40 overflow-y-auto">
             {auditLogs.length === 0 ? (
-              <div className="p-4 text-center text-sm text-zinc-500">No history available.</div>
+              <div className="p-3 text-center text-xs text-zinc-500">No history available.</div>
             ) : (
-              <table className="w-full text-left text-sm">
-                <thead className="bg-[#111] sticky top-0">
-                  <tr>
-                    <th className="p-3 text-zinc-400 font-medium">Date/Time</th>
-                    <th className="p-3 text-zinc-400 font-medium">Action</th>
-                    <th className="p-3 text-zinc-400 font-medium">Changes</th>
-                    <th className="p-3 text-zinc-400 font-medium hidden sm:table-cell">Reason</th>
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[#111] sticky top-0 border-b border-white/5">
+                  <tr className="text-[10px] text-zinc-400 uppercase font-semibold">
+                    <th className="py-2 px-3 font-medium">Date/Time</th>
+                    <th className="py-2 px-3 font-medium">Action</th>
+                    <th className="py-2 px-3 font-medium">Changes</th>
+                    <th className="py-2 px-3 font-medium hidden sm:table-cell">Reason</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {auditLogs.map(log => (
                     <tr key={log.id} className="hover:bg-white/[0.02]">
-                      <td className="p-3 text-zinc-300 whitespace-nowrap">{new Date(log.createdAt).toLocaleString()}</td>
-                      <td className={`p-3 font-semibold ${getActionColor(log.action)}`}>{log.action}</td>
-                      <td className="p-3 text-zinc-400">
+                      <td className="py-2 px-3 text-zinc-300 whitespace-nowrap text-[11px]">{new Date(log.createdAt).toLocaleString()}</td>
+                      <td className={`py-2 px-3 font-semibold ${getActionColor(log.action)}`}>{log.action}</td>
+                      <td className="py-2 px-3 text-zinc-400">
                         {log.previousDate || "OPEN"} <span className="text-zinc-600 mx-1">→</span> {log.newDate || "OPEN"}
                       </td>
-                      <td className="p-3 text-zinc-500 hidden sm:table-cell">{log.reason}</td>
+                      <td className="py-2 px-3 text-zinc-500 hidden sm:table-cell text-[11px]">{log.reason}</td>
                     </tr>
                   ))}
                 </tbody>

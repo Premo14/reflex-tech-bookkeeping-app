@@ -9,7 +9,7 @@ import (
 func TestEvaluateCondition(t *testing.T) {
 	tx := models.BankTransaction{
 		Description:     "Withdrawal Instant Issue AWS Cloud Services Seattle WA",
-		Amount:          -145.50,
+		Amount:          models.NewMoney(-145.50),
 		TransactionType: "DEBIT",
 	}
 
@@ -59,7 +59,7 @@ func TestEvaluateCondition(t *testing.T) {
 func TestEvaluateRule(t *testing.T) {
 	tx := models.BankTransaction{
 		Description:     "McDonald's Store #11778 Canton NY",
-		Amount:          -12.45,
+		Amount:          models.NewMoney(-12.45),
 		TransactionType: "DEBIT",
 	}
 

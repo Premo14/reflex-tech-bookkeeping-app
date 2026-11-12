@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflex-tech-bookkeeping-app-api/db"
+	"reflex-tech-bookkeeping-app-api/events"
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/utils"
 	"time"
@@ -120,21 +121,24 @@ func GetReviewQueue(c fiber.Ctx) error {
 		}
 	}
 
-	queryTx := db.DB.Where("review_status = ?", status)
-	queryExp := db.DB.Where("review_status = ?", status)
+	// Initialize base queries for transactions and expenses.
+	queryTx := db.DB
+	queryExp := db.DB
 
+	// PENDING means items needing review: allocation_status != 'BALANCED' AND
+	// review_status in {NULL, '', 'APPROVED'} — mirroring the counts logic exactly.
 	if status == "PENDING" {
-		if !hasClosed {
-			return c.JSON(fiber.Map{
-				"status":          "success",
-				"transactions":    []models.BankTransaction{},
-				"expenses":        []models.Expense{},
-				"booksClosedDate": closedRaw,
-			})
+		queryTx = queryTx.Where("(allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')")
+		queryExp = queryExp.Where("LOWER(COALESCE(tender, '')) != 'cash' AND (allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')")
+		if hasClosed {
+			endOfClosed := closedDate.Add(24 * time.Hour)
+			queryTx = queryTx.Where("date < ?", endOfClosed)
+			queryExp = queryExp.Where("timestamp < ?", endOfClosed)
 		}
-		endOfClosed := closedDate.Add(24 * time.Hour)
-		queryTx = queryTx.Where("date < ?", endOfClosed)
-		queryExp = queryExp.Where("timestamp < ?", endOfClosed)
+		// When no closed period: return all non-balanced items (no date filter)
+	} else {
+		queryTx = queryTx.Where("review_status = ?", status)
+		queryExp = queryExp.Where("review_status = ?", status)
 	}
 
 	orderTx := "date DESC"
@@ -421,14 +425,14 @@ func reopenBooksForAllowedItems(tx *gorm.DB, allowed []GroupItem, groupID string
 		return
 	}
 	for _, t := range txs {
-		others = append(others, GroupItem{Type: "transaction", ID: t.ID, Label: t.Description, Date: t.Date, Amount: t.Amount, ReviewStatus: t.ReviewStatus})
+		others = append(others, GroupItem{Type: "transaction", ID: t.ID, Label: t.Description, Date: t.Date, Amount: t.Amount.Dollars(), ReviewStatus: t.ReviewStatus})
 	}
 	var exps []models.Expense
 	if err = tx.Where("review_status = ? AND timestamp >= ?", "PENDING", endOfClosed).Find(&exps).Error; err != nil {
 		return
 	}
 	for _, e := range exps {
-		others = append(others, GroupItem{Type: "expense", ID: e.ID, Label: e.Vendor, Date: e.Timestamp, Amount: e.Amount, ReviewStatus: e.ReviewStatus})
+		others = append(others, GroupItem{Type: "expense", ID: e.ID, Label: e.Vendor, Date: e.Timestamp, Amount: e.Amount.Dollars(), ReviewStatus: e.ReviewStatus})
 	}
 	if len(others) > 0 {
 		otherTx, otherExp := splitItemIDs(others)
@@ -472,6 +476,10 @@ func BatchCategorizeItems(c fiber.Ctx) error {
 
 	if !catAccount.Active {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot assign an archived or inactive category."})
+	}
+
+	if len(req.ExpenseIDs) > 0 && catAccount.Type != "EXPENSE" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Expenses may only be categorized under EXPENSE accounts."})
 	}
 
 	groupID := fmt.Sprintf("BATCH_CAT_%d", time.Now().UnixNano())
@@ -576,6 +584,11 @@ func BatchCategorizeItems(c fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
+
+	utils.RunReconciliation()
+	events.Broadcast("TRANSACTIONS_UPDATED", nil)
+	events.Broadcast("RECONCILIATION_UPDATED", nil)
+	events.Broadcast("QUEUE_UPDATED", nil)
 
 	return c.JSON(fiber.Map{
 		"status":  "success",

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -60,9 +61,9 @@ func ExportTransactionsCSV(c fiber.Ctx) error {
 
 	if search != "" {
 		if val, err := strconv.ParseFloat(strings.TrimPrefix(search, "$"), 64); err == nil {
-			query = query.Where("description ILIKE ? OR ABS(amount) = ?", "%"+search+"%", math.Abs(val))
+			query = query.Where("description ILIKE ? OR notes ILIKE ? OR fit_id ILIKE ? OR ABS(amount) = ?", "%"+search+"%", "%"+search+"%", "%"+search+"%", math.Abs(val))
 		} else {
-			query = query.Where("description ILIKE ?", "%"+search+"%")
+			query = query.Where("description ILIKE ? OR notes ILIKE ? OR fit_id ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
 		}
 	}
 
@@ -106,7 +107,7 @@ func ExportTransactionsCSV(c fiber.Ctx) error {
 		}
 		allocStatus := tx.AllocationStatus
 		if allocStatus == "" {
-			if tx.Amount >= 0 {
+			if tx.Amount.Dollars() >= 0 {
 				allocStatus = "BALANCED"
 			} else {
 				allocStatus = "UNLINKED"
@@ -116,7 +117,7 @@ func ExportTransactionsCSV(c fiber.Ctx) error {
 		_ = writer.Write([]string{
 			dateStr,
 			sanitizeCSVCell(tx.Description),
-			fmt.Sprintf("%.2f", tx.Amount),
+			fmt.Sprintf("%.2f", tx.Amount.Dollars()),
 			sanitizeCSVCell(tx.TransactionType),
 			sanitizeCSVCell(bankCode),
 			sanitizeCSVCell(bankName),
@@ -159,9 +160,9 @@ func ExportExpensesCSV(c fiber.Ctx) error {
 
 	if search != "" {
 		if val, err := strconv.ParseFloat(strings.TrimPrefix(search, "$"), 64); err == nil {
-			query = query.Where("vendor ILIKE ? OR description ILIKE ? OR amount = ?", "%"+search+"%", "%"+search+"%", math.Abs(val))
+			query = query.Where("vendor ILIKE ? OR description ILIKE ? OR notes ILIKE ? OR amount = ?", "%"+search+"%", "%"+search+"%", "%"+search+"%", math.Abs(val))
 		} else {
-			query = query.Where("vendor ILIKE ? OR description ILIKE ?", "%"+search+"%", "%"+search+"%")
+			query = query.Where("vendor ILIKE ? OR description ILIKE ? OR notes ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
 		}
 	}
 
@@ -210,8 +211,8 @@ func ExportExpensesCSV(c fiber.Ctx) error {
 			dateStr,
 			sanitizeCSVCell(exp.Vendor),
 			sanitizeCSVCell(exp.Description),
-			fmt.Sprintf("%.2f", exp.Amount),
-			fmt.Sprintf("%.2f", exp.TaxAmount),
+			fmt.Sprintf("%.2f", exp.Amount.Dollars()),
+			fmt.Sprintf("%.2f", exp.TaxAmount.Dollars()),
 			sanitizeCSVCell(exp.Tender),
 			sanitizeCSVCell(catCode),
 			sanitizeCSVCell(catName),
@@ -285,13 +286,13 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 
 	// Part I: Income
 	_ = sw.Write([]string{"PART I: INCOME", "LINE NUMBER", "AMOUNT"})
-	_ = sw.Write([]string{"Gross receipts or sales", "Line 1", fmt.Sprintf("%.2f", report.GrossReceipts)})
-	_ = sw.Write([]string{"Returns and allowances", "Line 2", fmt.Sprintf("%.2f", report.ReturnsAndAllowances)})
-	_ = sw.Write([]string{"Net receipts (Line 1 - Line 2)", "Line 3", fmt.Sprintf("%.2f", report.NetReceipts)})
-	_ = sw.Write([]string{"Cost of goods sold", "Line 4", fmt.Sprintf("%.2f", report.CostOfGoodsSold)})
-	_ = sw.Write([]string{"Gross profit (Line 3 - Line 4)", "Line 5", fmt.Sprintf("%.2f", report.GrossProfit)})
-	_ = sw.Write([]string{"Other income (interest, credits, etc.)", "Line 6", fmt.Sprintf("%.2f", report.OtherIncome)})
-	_ = sw.Write([]string{"Gross income (Line 5 + Line 6)", "Line 7", fmt.Sprintf("%.2f", report.GrossIncome)})
+	_ = sw.Write([]string{"Gross receipts or sales", "Line 1", fmt.Sprintf("%.2f", report.GrossReceipts.Dollars())})
+	_ = sw.Write([]string{"Returns and allowances", "Line 2", fmt.Sprintf("%.2f", report.ReturnsAndAllowances.Dollars())})
+	_ = sw.Write([]string{"Net receipts (Line 1 - Line 2)", "Line 3", fmt.Sprintf("%.2f", report.NetReceipts.Dollars())})
+	_ = sw.Write([]string{"Cost of goods sold", "Line 4", fmt.Sprintf("%.2f", report.CostOfGoodsSold.Dollars())})
+	_ = sw.Write([]string{"Gross profit (Line 3 - Line 4)", "Line 5", fmt.Sprintf("%.2f", report.GrossProfit.Dollars())})
+	_ = sw.Write([]string{"Other income (interest, credits, etc.)", "Line 6", fmt.Sprintf("%.2f", report.OtherIncome.Dollars())})
+	_ = sw.Write([]string{"Gross income (Line 5 + Line 6)", "Line 7", fmt.Sprintf("%.2f", report.GrossIncome.Dollars())})
 	_ = sw.Write([]string{})
 
 	// Part II: Expenses
@@ -300,24 +301,42 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 		_ = sw.Write([]string{
 			l.LineName,
 			l.LineNumber,
-			fmt.Sprintf("%.2f", l.GrossAmount),
+			fmt.Sprintf("%.2f", l.GrossAmount.Dollars()),
 			fmt.Sprintf("%.0f%%", l.DeductiblePercent),
-			fmt.Sprintf("%.2f", l.DeductibleAmount),
+			fmt.Sprintf("%.2f", l.DeductibleAmount.Dollars()),
 		})
 	}
 	_ = sw.Write([]string{})
-	_ = sw.Write([]string{"TOTAL EXPENSES", "Line 28", fmt.Sprintf("%.2f", report.TotalExpensesGross), "", fmt.Sprintf("%.2f", report.TotalExpensesDeductible)})
-	_ = sw.Write([]string{"Nondeductible 50% Meals (IRS Limit)", "Line 24b Adj", fmt.Sprintf("%.2f", report.NondeductibleMeals), "", "0.00"})
-	_ = sw.Write([]string{"NET PROFIT OR (LOSS)", "Line 31", "", "", fmt.Sprintf("%.2f", report.NetProfitOrLoss)})
+	_ = sw.Write([]string{"TOTAL EXPENSES", "Line 28", fmt.Sprintf("%.2f", report.TotalExpensesGross.Dollars()), "", fmt.Sprintf("%.2f", report.TotalExpensesDeductible.Dollars())})
+	_ = sw.Write([]string{"Nondeductible 50% Meals (IRS Limit)", "Line 24b Adj", fmt.Sprintf("%.2f", report.NondeductibleMeals.Dollars()), "", "0.00"})
+	_ = sw.Write([]string{"NET PROFIT OR (LOSS)", "Line 31", "", "", fmt.Sprintf("%.2f", report.NetProfitOrLoss.Dollars())})
 
-	if report.UncategorizedExpenseAmount > 0 || report.UncategorizedIncomeAmount > 0 {
+	// Part III: Form 1040-ES Quarterly Estimates & Schedule SE
+	if report.NetProfitOrLoss.Dollars() >= 400.0 {
+		_ = sw.Write([]string{})
+		_ = sw.Write([]string{"ESTIMATED TAXES & SCHEDULE SE (FORM 1040-ES)", "TAX CODE", "AMOUNT", "NOTES"})
+		_ = sw.Write([]string{"Schedule SE Self-Employment Tax (15.3% on 92.35% net)", "Schedule SE", fmt.Sprintf("%.2f", report.SelfEmploymentTax.Dollars()), "Social Security + Medicare"})
+		_ = sw.Write([]string{"Deductible 50% SE Tax", "1040 Sch 1 Line 15", fmt.Sprintf("%.2f", report.DeductibleSelfEmploymentTax.Dollars()), "Above-the-line AGI deduction"})
+		_ = sw.Write([]string{"Estimated Federal Income Tax (~15% effective on net)", "1040 Est", fmt.Sprintf("%.2f", report.EstimatedIncomeTax.Dollars()), "Approximate federal income tax"})
+		_ = sw.Write([]string{"Total Estimated Annual Tax Liability", "Total 1040-ES", fmt.Sprintf("%.2f", report.TotalEstimatedTax.Dollars()), "SE Tax + Income Tax"})
+		_ = sw.Write([]string{"Quarterly Estimated Tax Payment", "Per Quarter", fmt.Sprintf("%.2f", report.EstimatedQuarterlyTax.Dollars()), "Payable quarterly to IRS"})
+		for _, qd := range report.QuarterlyDeadlines {
+			status := "Upcoming"
+			if qd.IsPast {
+				status = "Passed"
+			}
+			_ = sw.Write([]string{fmt.Sprintf("Quarterly Payment: %s (%s)", qd.Quarter, qd.Period), qd.DueDate, fmt.Sprintf("%.2f", qd.AmountDue.Dollars()), status})
+		}
+	}
+
+	if report.UncategorizedExpenseAmount.Dollars() > 0 || report.UncategorizedIncomeAmount.Dollars() > 0 {
 		_ = sw.Write([]string{})
 		_ = sw.Write([]string{"CAUTION / SUSPENSE ITEMS REQUIRING ATTENTION BEFORE TAX FILING"})
-		if report.UncategorizedExpenseAmount > 0 {
-			_ = sw.Write([]string{"Uncategorized Expenses", "Suspense 9999", fmt.Sprintf("%.2f", report.UncategorizedExpenseAmount)})
+		if report.UncategorizedExpenseAmount.Dollars() > 0 {
+			_ = sw.Write([]string{"Uncategorized Expenses", "Suspense 9999", fmt.Sprintf("%.2f", report.UncategorizedExpenseAmount.Dollars())})
 		}
-		if report.UncategorizedIncomeAmount > 0 {
-			_ = sw.Write([]string{"Uncategorized Deposits / Income", "Suspense 9998", fmt.Sprintf("%.2f", report.UncategorizedIncomeAmount)})
+		if report.UncategorizedIncomeAmount.Dollars() > 0 {
+			_ = sw.Write([]string{"Uncategorized Deposits / Income", "Suspense 9998", fmt.Sprintf("%.2f", report.UncategorizedIncomeAmount.Dollars())})
 		}
 	}
 	sw.Flush()
@@ -368,7 +387,7 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 			t.Date.Format("2006-01-02"),
 			"BANK_TRANSACTION",
 			sanitizeCSVCell(t.Description),
-			fmt.Sprintf("%.2f", t.Amount),
+			fmt.Sprintf("%.2f", t.Amount.Dollars()),
 			"0.00",
 			sanitizeCSVCell(catCode),
 			sanitizeCSVCell(catName),
@@ -402,8 +421,8 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 			e.Timestamp.Format("2006-01-02"),
 			"EXPENSE_RECEIPT",
 			sanitizeCSVCell(e.Vendor + " - " + e.Description),
-			fmt.Sprintf("%.2f", e.Amount),
-			fmt.Sprintf("%.2f", e.TaxAmount),
+			fmt.Sprintf("%.2f", e.Amount.Dollars()),
+			fmt.Sprintf("%.2f", e.TaxAmount.Dollars()),
 			sanitizeCSVCell(catCode),
 			sanitizeCSVCell(catName),
 			sanitizeCSVCell(schedLine),
@@ -449,7 +468,7 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 			fileData, readErr := os.ReadFile(filePath)
 			if readErr != nil {
 				// Note missing physical file in manifest
-				manifestBuf.WriteString(fmt.Sprintf("[MISSING] Expense ID %d (%s $%.2f) - %s (not found on disk)\n", e.ID, e.Vendor, e.Amount, filePath))
+				manifestBuf.WriteString(fmt.Sprintf("[MISSING] Expense ID %d (%s $%.2f) - %s (not found on disk)\n", e.ID, e.Vendor, e.Amount.Dollars(), filePath))
 				continue
 			}
 
@@ -463,9 +482,9 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 
 			var zipEntryName string
 			if len(e.Receipts) == 1 {
-				zipEntryName = fmt.Sprintf("Receipts/%s/REC_%d_%s_$%.2f%s", folderName, e.ID, cleanVendor, e.Amount, ext)
+				zipEntryName = fmt.Sprintf("Receipts/%s/REC_%d_%s_$%.2f%s", folderName, e.ID, cleanVendor, e.Amount.Dollars(), ext)
 			} else {
-				zipEntryName = fmt.Sprintf("Receipts/%s/REC_%d_pt%d_%s_$%.2f%s", folderName, e.ID, idx+1, cleanVendor, e.Amount, ext)
+				zipEntryName = fmt.Sprintf("Receipts/%s/REC_%d_pt%d_%s_$%.2f%s", folderName, e.ID, idx+1, cleanVendor, e.Amount.Dollars(), ext)
 			}
 
 			fReceipt, createErr := zw.Create(zipEntryName)
@@ -489,4 +508,144 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 	c.Set("Content-Type", "application/zip")
 	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipFilename))
 	return c.Send(zipBuf.Bytes())
+}
+
+// ExportTrialBalanceCSV exports the Trial Balance report as a formatted CSV for accountants and tax preparers.
+func ExportTrialBalanceCSV(c fiber.Ctx) error {
+	startDate := c.Query("startDate")
+	endDate := c.Query("endDate")
+
+	report, err := BuildTrialBalanceData(startDate, endDate)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to compile trial balance: " + err.Error(),
+		})
+	}
+
+	buf := new(bytes.Buffer)
+	buf.WriteString("\xEF\xBB\xBF") // UTF-8 BOM
+	writer := csv.NewWriter(buf)
+
+	_ = writer.Write([]string{
+		fmt.Sprintf("Trial Balance — Reflex Technologies LLC (%s to %s)", report.StartDate, report.EndDate),
+	})
+	_ = writer.Write([]string{})
+	_ = writer.Write([]string{
+		"Account Code",
+		"Account Name",
+		"Account Type",
+		"Debit ($)",
+		"Credit ($)",
+	})
+
+	for _, acc := range report.Accounts {
+		debitStr := ""
+		if acc.NetDebit.Cents > 0 {
+			debitStr = fmt.Sprintf("%.2f", acc.NetDebit.Dollars())
+		}
+		creditStr := ""
+		if acc.NetCredit.Cents > 0 {
+			creditStr = fmt.Sprintf("%.2f", acc.NetCredit.Dollars())
+		}
+
+		_ = writer.Write([]string{
+			sanitizeCSVCell(acc.AccountCode),
+			sanitizeCSVCell(acc.AccountName),
+			sanitizeCSVCell(acc.AccountType),
+			debitStr,
+			creditStr,
+		})
+	}
+
+	// Total Row
+	_ = writer.Write([]string{
+		"TOTAL",
+		"",
+		"",
+		fmt.Sprintf("%.2f", report.TotalDebit.Dollars()),
+		fmt.Sprintf("%.2f", report.TotalCredit.Dollars()),
+	})
+
+	balanceStatus := "BALANCED: Debits = Credits"
+	if !report.IsBalanced {
+		balanceStatus = fmt.Sprintf("OUT OF BALANCE: Variance $%.2f", float64(report.VarianceCents)/100.0)
+	}
+	_ = writer.Write([]string{"Status", balanceStatus, "", "", ""})
+
+	writer.Flush()
+
+	filename := fmt.Sprintf("Trial_Balance_%s.csv", time.Now().Format("2006-01-02"))
+	c.Set("Content-Type", "text/csv; charset=utf-8")
+	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	return c.Send(buf.Bytes())
+}
+
+// ExportSystemBackupJSON exports a complete, self-contained JSON backup of the entire company bookkeeping system.
+func ExportSystemBackupJSON(c fiber.Ctx) error {
+	var settings []models.AppSetting
+	var accounts []models.ChartAccount
+	var transactions []models.BankTransaction
+	var statements []models.BankStatement
+	var expenses []models.Expense
+	var receipts []models.Receipt
+	var links []models.ExpenseBankTransaction
+	var invoices []models.Invoice
+	var rules []models.BankRule
+	var auditLogs []models.ItemAuditLog
+
+	if db.DB != nil {
+		db.DB.Find(&settings)
+		db.DB.Order("code ASC").Find(&accounts)
+		db.DB.Order("date ASC, id ASC").Find(&transactions)
+		db.DB.Order("id ASC").Find(&statements)
+		db.DB.Order("timestamp ASC, id ASC").Find(&expenses)
+		db.DB.Order("id ASC").Find(&receipts)
+		db.DB.Order("id ASC").Find(&links)
+		db.DB.Order("id ASC").Find(&invoices)
+		db.DB.Order("priority ASC").Find(&rules)
+		db.DB.Order("id ASC").Find(&auditLogs)
+	}
+
+	backupData := fiber.Map{
+		"version":    "1.1.0",
+		"format":     "reflex_tech_bookkeeping_full_backup",
+		"company":    "Reflex Technologies LLC (Utica, NY)",
+		"exportedAt": time.Now().UTC().Format(time.RFC3339),
+		"counts": fiber.Map{
+			"settings":            len(settings),
+			"chartAccounts":       len(accounts),
+			"transactions":        len(transactions),
+			"statements":          len(statements),
+			"expenses":            len(expenses),
+			"receipts":            len(receipts),
+			"reconciliationLinks": len(links),
+			"invoices":            len(invoices),
+			"bankRules":           len(rules),
+			"auditLogs":           len(auditLogs),
+		},
+		"data": fiber.Map{
+			"settings":            settings,
+			"chartAccounts":       accounts,
+			"transactions":        transactions,
+			"statements":          statements,
+			"expenses":            expenses,
+			"receipts":            receipts,
+			"reconciliationLinks": links,
+			"invoices":            invoices,
+			"bankRules":           rules,
+			"auditLogs":           auditLogs,
+		},
+	}
+
+	raw, err := json.MarshalIndent(backupData, "", "  ")
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to serialize backup: " + err.Error(),
+		})
+	}
+
+	filename := fmt.Sprintf("reflex_backup_%s.json", time.Now().Format("2006-01-02_150405"))
+	c.Set("Content-Type", "application/json; charset=utf-8")
+	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	return c.Send(raw)
 }

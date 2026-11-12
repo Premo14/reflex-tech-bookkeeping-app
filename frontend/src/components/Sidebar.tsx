@@ -17,6 +17,7 @@ interface SidebarProps {
   onOpenSettings?: () => void;
   isQueueLoading?: boolean;
   isSettingsLoading?: boolean;
+  companyName?: string;
 }
 
 function formatDateMMDDYYYY(dateStr: string): string {
@@ -48,7 +49,6 @@ function getMonthRange(year: number, monthIndex: number) {
   const y = dt.getFullYear();
   const m = dt.getMonth();
   const mm = String(m + 1).padStart(2, "0");
-  // Day 0 of next month is the last day of this month (properly handles leap years for Feb)
   const lastDay = new Date(y, m + 1, 0).getDate();
   const dd = String(lastDay).padStart(2, "0");
   const startIso = `${y}-${mm}-01`;
@@ -73,13 +73,13 @@ export default function Sidebar({
   onOpenSettings,
   isQueueLoading = false,
   isSettingsLoading = false,
+  companyName = "Reflex Technologies LLC",
 }: SidebarProps) {
   const [activeFilter, setActiveFilter] = useState("OPEN_BOOKS");
   const [showCustom, setShowCustom] = useState(false);
 
   const now = useMemo(() => new Date(), []);
 
-  // Compute month ranges (with leap-year handling)
   const thisMonthRange = useMemo(() => getMonthRange(now.getFullYear(), now.getMonth()), [now]);
   const lastMonthRange = useMemo(() => {
     const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -94,7 +94,6 @@ export default function Sidebar({
     };
   }, [now]);
 
-  // Open Books range & subtitle
   const openStartDate = useMemo(() => (booksClosedDate ? addDays(booksClosedDate, 1) : ""), [booksClosedDate]);
   const openSubtitle = useMemo(() => {
     if (isSettingsLoading) return "loading...";
@@ -102,7 +101,6 @@ export default function Sidebar({
     return "past - present";
   }, [openStartDate, booksClosedDate, isSettingsLoading]);
 
-  // Closed Books range & subtitle
   const closedSubtitle = useMemo(() => {
     if (isSettingsLoading) return "loading...";
     if (booksClosedDate) {
@@ -111,7 +109,6 @@ export default function Sidebar({
     return "None (Books Open)";
   }, [booksClosedDate, isSettingsLoading]);
 
-  // Keep activeFilter in sync if dates change externally
   useEffect(() => {
     if (booksClosedDate) {
       const openStart = addDays(booksClosedDate, 1);
@@ -186,21 +183,21 @@ export default function Sidebar({
           setFilter(filterId);
           if (filterId !== "CUSTOM") setIsSidebarOpen(false);
         }}
-        className={`w-full flex items-center justify-between text-left py-2 px-4 rounded-xl transition-all duration-200 ${
+        className={`w-full flex items-center justify-between text-left py-1.5 px-3 rounded-lg transition-all duration-150 cursor-pointer ${
           isActive 
-            ? 'bg-emerald-500/10 text-emerald-400 font-bold border border-emerald-500/20 shadow-sm' 
+            ? 'bg-emerald-500/10 text-emerald-400 font-semibold border border-emerald-500/20 shadow-sm' 
             : 'text-zinc-400 font-medium hover:text-white hover:bg-white/5 border border-transparent'
         }`}
       >
         <div className="min-w-0 flex-1">
-          <span className="text-sm block truncate">{label}</span>
+          <span className="text-xs block truncate">{label}</span>
           {subtitle && (
-            <span className={`text-[11px] block truncate transition-colors mt-0.5 ${isActive ? 'text-emerald-400/80 font-normal' : 'text-zinc-400 font-normal'}`}>
+            <span className={`text-[10px] block truncate transition-colors ${isActive ? 'text-emerald-400/80 font-normal' : 'text-zinc-500 font-normal'}`}>
               {subtitle}
             </span>
           )}
         </div>
-        {isActive && <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0 ml-2" />}
+        {isActive && <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0 ml-1.5" />}
       </button>
     );
   };
@@ -216,81 +213,91 @@ export default function Sidebar({
       )}
 
       {/* SIDEBAR */}
-      <aside className={`fixed inset-y-0 left-0 z-50 w-72 bg-[#050505] border-r border-white/5 flex flex-col shadow-2xl transition-transform duration-300 ease-in-out md:relative md:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="p-8 border-b border-white/5 flex justify-between items-center bg-[#0a0a0a]">
-          <h1 className="text-2xl font-black tracking-tight text-white flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
-              <svg className="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#050505] border-r border-white/10 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        
+        {/* HEADER */}
+        <div className="p-3.5 border-b border-white/10 flex justify-between items-center bg-[#0a0a0a]">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center font-black text-emerald-400 text-xs shadow-sm">
+              R
             </div>
-            Bookkeeper
-          </h1>
+            <div>
+              <span className="text-xs font-bold tracking-tight text-white block">Reflex Bookkeeping</span>
+              <span className="text-[10px] text-zinc-400 block -mt-0.5 truncate max-w-[140px]">{companyName}</span>
+            </div>
+          </div>
           <button
-            className="md:hidden text-zinc-400 hover:text-white transition-colors"
+            className="md:hidden text-zinc-400 hover:text-white transition-colors p-1"
             onClick={() => setIsSidebarOpen(false)}
+            aria-label="Close sidebar"
           >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto py-6">
-          <div className="px-8 mb-3 flex items-center justify-between">
-            <h2 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Review Queue</h2>
+        {/* SCROLLABLE BODY */}
+        <div className="flex-1 overflow-y-auto py-4 custom-scrollbar">
+          
+          {/* REVIEW QUEUE SECTION */}
+          <div className="px-5 mb-2 flex items-center justify-between">
+            <h2 className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Review Queue</h2>
             {isQueueLoading && (
               <LoadingSpinner size="xs" color="text-zinc-500" />
             )}
           </div>
-          <div className="px-4 space-y-1 mb-8">
+          <div className="px-3 space-y-0.5 mb-5">
             <button
               onClick={() => onOpenReview && onOpenReview('PENDING')}
-              className="w-full flex items-center justify-between text-left py-2.5 px-4 rounded-xl transition-all duration-200 text-zinc-400 font-medium hover:text-white hover:bg-white/5 border border-transparent"
+              className="w-full flex items-center justify-between text-left py-1.5 px-3 rounded-lg transition-all duration-150 text-zinc-400 font-medium hover:text-white hover:bg-white/5 border border-transparent cursor-pointer"
             >
-              <span className="text-sm">Action Required</span>
+              <span className="text-xs">Action Required</span>
               {isQueueLoading ? (
-                <span className="px-2 py-0.5"><LoadingSpinner size="xs" color="text-amber-500" /></span>
+                <span className="px-1.5 py-0.5"><LoadingSpinner size="xs" color="text-amber-500" /></span>
               ) : pendingCount > 0 ? (
-                <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-500 text-[10px] font-bold border border-amber-500/20">{pendingCount}</span>
+                <span className="px-1.5 py-0.2 rounded-full bg-amber-500/10 text-amber-500 text-[10px] font-bold border border-amber-500/20">{pendingCount}</span>
               ) : null}
             </button>
             <button
               onClick={() => onOpenReview && onOpenReview('IGNORED')}
-              className="w-full flex items-center justify-between text-left py-2.5 px-4 rounded-xl transition-all duration-200 text-zinc-400 font-medium hover:text-white hover:bg-white/5 border border-transparent"
+              className="w-full flex items-center justify-between text-left py-1.5 px-3 rounded-lg transition-all duration-150 text-zinc-400 font-medium hover:text-white hover:bg-white/5 border border-transparent cursor-pointer"
             >
-              <span className="text-sm">Excluded Items</span>
+              <span className="text-xs">Excluded Items</span>
               {isQueueLoading ? (
-                <span className="px-2 py-0.5"><LoadingSpinner size="xs" color="text-purple-400" /></span>
+                <span className="px-1.5 py-0.5"><LoadingSpinner size="xs" color="text-purple-400" /></span>
               ) : excludedCount > 0 ? (
-                <span className="px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 text-[10px] font-bold border border-purple-500/20">{excludedCount}</span>
+                <span className="px-1.5 py-0.2 rounded-full bg-purple-500/10 text-purple-400 text-[10px] font-bold border border-purple-500/20">{excludedCount}</span>
               ) : null}
             </button>
             <button
               onClick={() => onOpenReview && onOpenReview('WARNINGS_IGNORED')}
-              className="w-full flex items-center justify-between text-left py-2.5 px-4 rounded-xl transition-all duration-200 text-zinc-400 font-medium hover:text-white hover:bg-white/5 border border-transparent"
+              className="w-full flex items-center justify-between text-left py-1.5 px-3 rounded-lg transition-all duration-150 text-zinc-400 font-medium hover:text-white hover:bg-white/5 border border-transparent cursor-pointer"
             >
-              <span className="text-sm">Warnings Ignored</span>
+              <span className="text-xs">Warnings Ignored</span>
               {isQueueLoading ? (
-                <span className="px-2 py-0.5"><LoadingSpinner size="xs" color="text-blue-400" /></span>
+                <span className="px-1.5 py-0.5"><LoadingSpinner size="xs" color="text-blue-400" /></span>
               ) : warningsIgnoredCount > 0 ? (
-                <span className="px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 text-[10px] font-bold border border-blue-500/20">{warningsIgnoredCount}</span>
+                <span className="px-1.5 py-0.2 rounded-full bg-blue-500/10 text-blue-400 text-[10px] font-bold border border-blue-500/20">{warningsIgnoredCount}</span>
               ) : null}
             </button>
             <button
               onClick={() => onOpenReview && onOpenReview('DELETED')}
-              className="w-full flex items-center justify-between text-left py-2.5 px-4 rounded-xl transition-all duration-200 text-zinc-400 font-medium hover:text-white hover:bg-white/5 border border-transparent"
+              className="w-full flex items-center justify-between text-left py-1.5 px-3 rounded-lg transition-all duration-150 text-zinc-400 font-medium hover:text-white hover:bg-white/5 border border-transparent cursor-pointer"
             >
-              <span className="text-sm">Deleted Items</span>
+              <span className="text-xs">Deleted Items</span>
               {isQueueLoading ? (
-                <span className="px-2 py-0.5"><LoadingSpinner size="xs" color="text-red-400" /></span>
+                <span className="px-1.5 py-0.5"><LoadingSpinner size="xs" color="text-red-400" /></span>
               ) : deletedCount > 0 ? (
-                <span className="px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 text-[10px] font-bold border border-red-500/20">{deletedCount}</span>
+                <span className="px-1.5 py-0.2 rounded-full bg-red-500/10 text-red-400 text-[10px] font-bold border border-red-500/20">{deletedCount}</span>
               ) : null}
             </button>
           </div>
 
-          <div className="px-8 mb-3">
-            <h2 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Filters</h2>
+          {/* FILTERS SECTION */}
+          <div className="px-5 mb-2">
+            <h2 className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Date Filters</h2>
           </div>
           
-          <div className="px-4 space-y-1">
+          <div className="px-3 space-y-0.5">
             <NavItem label="Open Books" filterId="OPEN_BOOKS" subtitle={openSubtitle} />
             <NavItem label="Closed Books" filterId="CLOSED_BOOKS" subtitle={closedSubtitle} />
             <NavItem label="This Month" filterId="THIS_MONTH" subtitle={thisMonthRange.label} />
@@ -300,26 +307,26 @@ export default function Sidebar({
           </div>
 
           {showCustom && (
-            <div className="mx-4 mt-4 p-4 bg-[#121212] border border-white/5 rounded-xl shadow-inner">
-              <div className="space-y-4">
+            <div className="mx-3 mt-3 p-3 bg-zinc-950 border border-white/10 rounded-lg shadow-inner">
+              <div className="space-y-3">
                 <div>
-                  <label htmlFor="sidebar-start-date" className="block text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5 cursor-pointer">Start Date</label>
+                  <label htmlFor="sidebar-start-date" className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1 cursor-pointer">Start Date</label>
                   <input
                     id="sidebar-start-date"
                     name="sidebarStartDate"
                     type="date"
-                    className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:border-emerald-500 transition-colors"
+                    className="w-full bg-black border border-white/10 rounded-md px-2.5 py-1.5 text-xs text-zinc-300 focus:outline-none focus:border-emerald-500 transition-colors"
                     value={startDate}
                     onChange={(e) => setStartDate(e.target.value)}
                   />
                 </div>
                 <div>
-                  <label htmlFor="sidebar-end-date" className="block text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5 cursor-pointer">End Date</label>
+                  <label htmlFor="sidebar-end-date" className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1 cursor-pointer">End Date</label>
                   <input
                     id="sidebar-end-date"
                     name="sidebarEndDate"
                     type="date"
-                    className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:border-emerald-500 transition-colors"
+                    className="w-full bg-black border border-white/10 rounded-md px-2.5 py-1.5 text-xs text-zinc-300 focus:outline-none focus:border-emerald-500 transition-colors"
                     value={endDate}
                     onChange={(e) => setEndDate(e.target.value)}
                   />
@@ -329,15 +336,23 @@ export default function Sidebar({
           )}
         </div>
 
-        {/* SETTINGS FOOTER */}
-        <div className="p-4 border-t border-white/5 bg-[#0a0a0a] shrink-0 space-y-1">
+        {/* SETTINGS FOOTER: COMPANY NAME & SETTINGS ICON INLINE */}
+        <div className="p-3 border-t border-white/10 bg-zinc-950/60 shrink-0 flex items-center justify-between text-xs">
+          <div className="min-w-0 pr-2">
+            <div className="font-semibold text-zinc-200 truncate text-xs">{companyName}</div>
+            <div className="text-[10px] text-emerald-400 flex items-center gap-1 font-mono">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              <span>{booksClosedDate ? `Closed thru ${formatDateMMDDYYYY(booksClosedDate)}` : "Books Open (2026)"}</span>
+            </div>
+          </div>
           <button
             type="button"
             onClick={onOpenSettings}
-            className="w-full flex items-center gap-3 py-2 px-4 rounded-xl text-zinc-400 font-medium hover:text-white hover:bg-white/5 transition-all duration-200 border border-transparent group cursor-pointer"
+            className="p-1.5 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white transition shrink-0 cursor-pointer border border-transparent hover:border-white/10"
+            title="Settings, Storage & Company Profile"
           >
             <svg
-              className="w-5 h-5 text-zinc-400 group-hover:text-white transition-colors"
+              className="w-4 h-4 text-zinc-400 group-hover:text-white transition-colors"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -355,7 +370,6 @@ export default function Sidebar({
                 d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
               />
             </svg>
-            <span className="text-sm font-medium">Settings</span>
           </button>
         </div>
       </aside>

@@ -3,7 +3,7 @@ import { Modal } from "./ui/Modal";
 import { Button } from "./ui/Button";
 import { Badge } from "./ui/Badge";
 import { Input } from "./ui/Input";
-import { updateSettings, browseHostDirectories } from "../services/api";
+import { updateSettings, browseHostDirectories, getSystemBackupDownloadUrl } from "../services/api";
 import BankRulesTab from "./BankRulesTab";
 
 interface AppSettingsModalProps {
@@ -43,6 +43,10 @@ export default function AppSettingsModal({
   const [browserDirs, setBrowserDirs] = useState<string[]>([]);
   const [isLoadingDirs, setIsLoadingDirs] = useState(false);
 
+  const [companyNameInput, setCompanyNameInput] = useState(settings["CompanyName"] || "Reflex Technologies LLC");
+  const [isSavingCompany, setIsSavingCompany] = useState(false);
+  const [companySaveStatus, setCompanySaveStatus] = useState<string | null>(null);
+
   const getNormalizedTarget = (input: string) => {
     let trimmed = input.trim().replace(/\/+$/, '');
     if (!trimmed || trimmed === '.' || trimmed === './document-data' || trimmed === 'document-data') {
@@ -68,10 +72,27 @@ export default function AppSettingsModal({
     if (isOpen) {
       setActiveTab(initialTab || 'storage');
       setFolderPath(settings["DocumentDropboxPath"] || "./document-data");
+      setCompanyNameInput(settings["CompanyName"] || "Reflex Technologies LLC");
+      setCompanySaveStatus(null);
       setStatusMessage(null);
       setShowBrowser(false);
     }
   }, [isOpen, settings, initialTab]);
+
+  const handleSaveCompany = async () => {
+    setIsSavingCompany(true);
+    try {
+      await updateSettings("CompanyName", companyNameInput.trim() || "Reflex Technologies LLC");
+      setCompanySaveStatus("Company name saved!");
+      refreshSettings();
+      setTimeout(() => setCompanySaveStatus(null), 3000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to update company name";
+      setCompanySaveStatus(msg);
+    } finally {
+      setIsSavingCompany(false);
+    }
+  };
 
   const handleOpenBrowser = async (startPath?: string) => {
     const p = startPath || (folderPath.startsWith('/') || folderPath.startsWith('home/') || folderPath.startsWith('Users/') ? folderPath.replace(/\/document-data$/, '') : hostHome);
@@ -147,15 +168,16 @@ export default function AppSettingsModal({
         </div>
       }
       maxWidth="4xl"
-      bodyClassName="p-5 overflow-y-auto flex-1 min-h-0 custom-scrollbar max-h-[85vh]"
+      bodyClassName="p-4 sm:p-5 overflow-y-auto flex-1 min-h-0 custom-scrollbar max-h-[85vh]"
       footer={
         activeTab === 'storage' ? (
-          <div className="flex justify-end w-full gap-2.5">
-            <Button variant="secondary" onClick={onClose}>
+          <div className="flex justify-end w-full gap-2">
+            <Button variant="secondary" size="sm" onClick={onClose}>
               Close
             </Button>
             <Button
               variant="primary"
+              size="sm"
               onClick={handleSave}
               disabled={isSaving || !isChanged}
             >
@@ -164,7 +186,7 @@ export default function AppSettingsModal({
           </div>
         ) : (
           <div className="flex justify-end w-full">
-            <Button variant="secondary" onClick={onClose}>
+            <Button variant="secondary" size="sm" onClick={onClose}>
               Close
             </Button>
           </div>
@@ -211,6 +233,42 @@ export default function AppSettingsModal({
           />
         ) : (
           <div className="space-y-4">
+            {/* Company Profile Card */}
+            <div className="p-4 rounded-xl bg-zinc-950 border border-white/10 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                  Company Profile & Legal Entity
+                </span>
+                {companySaveStatus && (
+                  <span className="text-[11px] font-semibold text-emerald-400">
+                    {companySaveStatus}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Set the registered company name displayed on your sidebar, client invoices, and Schedule C tax summaries.
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  type="text"
+                  value={companyNameInput}
+                  onChange={(e) => setCompanyNameInput(e.target.value)}
+                  placeholder="e.g. Reflex Technologies LLC"
+                  className="text-xs flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  onClick={handleSaveCompany}
+                  isLoading={isSavingCompany}
+                  className="shrink-0"
+                >
+                  Save Name
+                </Button>
+              </div>
+            </div>
+
             {/* Document Intake & Storage Card */}
         <div className="p-4 rounded-xl bg-zinc-950 border border-white/10 space-y-3.5">
           <div className="flex items-center justify-between">
@@ -459,6 +517,42 @@ export default function AppSettingsModal({
               <p className="font-bold text-zinc-200">USD ($)</p>
               <p className="text-zinc-500 text-[11px] leading-snug">Standard decimal precision</p>
             </div>
+          </div>
+        </div>
+
+        {/* Local Data Sovereignty & Full System Backup Card */}
+        <div className="p-3.5 rounded-xl bg-zinc-950 border border-white/10 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider block">
+                Local Data Sovereignty & Full Backup
+              </span>
+              <p className="text-[11px] text-zinc-400 mt-0.5">
+                Download a complete, self-contained JSON snapshot of your entire Reflex bookkeeping database.
+              </p>
+            </div>
+            <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border border-emerald-500/30">
+              100% Private
+            </span>
+          </div>
+
+          <div className="bg-zinc-900/80 border border-white/5 rounded-lg p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="text-xs text-zinc-400 space-y-0.5">
+              <span className="font-semibold text-zinc-200">Portable JSON Database Archive</span>
+              <p className="text-[11px] text-zinc-500">
+                Includes Chart of Accounts, Bank Transactions, Receipts, Invoices, Bank Rules & Audit Logs.
+              </p>
+            </div>
+            <a
+              href={getSystemBackupDownloadUrl()}
+              download
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer shrink-0 shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Download Backup
+            </a>
           </div>
         </div>
       </div>

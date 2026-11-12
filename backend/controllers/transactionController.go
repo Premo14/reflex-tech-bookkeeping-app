@@ -47,9 +47,9 @@ func GetTransactions(c fiber.Ctx) error {
 	search = strings.TrimSpace(search)
 	if search != "" {
 		if val, err := strconv.ParseFloat(strings.TrimPrefix(search, "$"), 64); err == nil {
-			query = query.Where("description ILIKE ? OR ABS(amount) = ?", "%"+search+"%", math.Abs(val))
+			query = query.Where("description ILIKE ? OR notes ILIKE ? OR fit_id ILIKE ? OR ABS(amount) = ?", "%"+search+"%", "%"+search+"%", "%"+search+"%", math.Abs(val))
 		} else {
-			query = query.Where("description ILIKE ?", "%"+search+"%")
+			query = query.Where("description ILIKE ? OR notes ILIKE ? OR fit_id ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
 		}
 	}
 
@@ -61,6 +61,8 @@ func GetTransactions(c fiber.Ctx) error {
 		query = query.Where("amount < 0 AND (allocation_status IS NULL OR allocation_status = '' OR allocation_status = 'UNLINKED')")
 	case "BALANCED":
 		query = query.Where("allocation_status = 'BALANCED' OR amount >= 0")
+	case "LINKED":
+		query = query.Where("allocation_status = 'BALANCED'")
 	case "PARTIALLY_ALLOCATED":
 		query = query.Where("allocation_status = 'PARTIALLY_ALLOCATED'")
 	case "OVER_ALLOCATED":
@@ -150,11 +152,40 @@ func GetTransaction(c fiber.Ctx) error {
 		Preload("ChartAccount").
 		Find(&suggestedExpenses)
 
+	// Load linked invoice (if this bank transaction is matched to an invoice payment)
+	var linkedInvoice *models.Invoice
+	var inv models.Invoice
+	if err := db.DB.Preload("CategoryAccount").Where("bank_transaction_id = ?", tx.ID).First(&inv).Error; err == nil {
+		linkedInvoice = &inv
+	}
+
+	// Load suggested invoices for incoming deposits that are not yet linked to an invoice
+	var suggestedInvoices []models.Invoice
+	if linkedInvoice == nil && (tx.Amount.Dollars() > 0 || tx.TransactionType == "DEP") {
+		var openInvoices []models.Invoice
+		db.DB.Preload("CategoryAccount").Where("status IN ('SENT', 'PARTIALLY_PAID', 'OVERDUE')").Find(&openInvoices)
+		txAmt := tx.Amount.Dollars()
+		descLower := strings.ToLower(tx.Description)
+		for _, oInv := range openInvoices {
+			invBal := oInv.BalanceDue.Dollars()
+			if invBal <= 0 {
+				invBal = oInv.TotalAmount.Dollars() - oInv.AmountPaid.Dollars()
+			}
+			isExactAmount := math.Abs(invBal-txAmt) < 0.005 || math.Abs(oInv.TotalAmount.Dollars()-txAmt) < 0.005
+			isNameMatch := strings.Contains(descLower, strings.ToLower(oInv.ClientName)) || (len(oInv.ClientName) > 2 && strings.Contains(descLower, strings.ToLower(oInv.ClientName)))
+			if isExactAmount || isNameMatch {
+				suggestedInvoices = append(suggestedInvoices, oInv)
+			}
+		}
+	}
+
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":            "success",
 		"transaction":       tx,
 		"confirmedExpenses": confirmedExpenses,
 		"suggestedExpenses": suggestedExpenses,
+		"linkedInvoice":     linkedInvoice,
+		"suggestedInvoices": suggestedInvoices,
 	})
 }
 
@@ -202,7 +233,7 @@ func CreateTransaction(c fiber.Ctx) error {
 	type createInput struct {
 		Date              *string `json:"date"`
 		Description       string  `json:"description"`
-		Amount            float64 `json:"amount"`
+		Amount            models.Money   `json:"amount"`
 		TransactionType   string  `json:"transactionType"`
 		ChartAccountID    *uint   `json:"chartAccountId"`
 		CategoryAccountID *uint   `json:"categoryAccountId"`
@@ -259,7 +290,7 @@ func CreateTransaction(c fiber.Ctx) error {
 	}
 
 	allocationStatus := "UNLINKED"
-	if input.Amount > 0 {
+	if input.Amount.Dollars() >= 0 {
 		allocationStatus = "BALANCED"
 	}
 
@@ -311,7 +342,7 @@ func UpdateTransaction(c fiber.Ctx) error {
 	type updateInput struct {
 		Date              *string  `json:"date"`
 		Description       *string  `json:"description"`
-		Amount            *float64 `json:"amount"`
+		Amount            *models.Money   `json:"amount"`
 		ChartAccountID    *uint    `json:"chartAccountId"`
 		CategoryAccountID *uint    `json:"categoryAccountId"`
 		Notes             *string  `json:"notes"`
@@ -335,7 +366,7 @@ func UpdateTransaction(c fiber.Ctx) error {
 
 	// For imported transactions, prevent tampering with statement data (amount, date, source account)
 	if !tx.IsManual {
-		if input.Amount != nil && *input.Amount != tx.Amount {
+		if input.Amount != nil && (*input.Amount).Dollars() != tx.Amount.Dollars() {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error": "Cannot modify amount of an imported bank statement transaction",
 			})

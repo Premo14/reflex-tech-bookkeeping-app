@@ -50,7 +50,7 @@ func ParseOfx(filePath string) {
 	var subType string
 	var startDate time.Time
 	var endDate time.Time
-	var endingBalance *float64
+	var endingBalance *models.Money
 	var balanceAsOf *time.Time
 	var transactions []ofxgo.Transaction
 
@@ -74,7 +74,8 @@ func ParseOfx(filePath string) {
 		startDate = stmtResp.BankTranList.DtStart.Time
 		endDate = stmtResp.BankTranList.DtEnd.Time
 		bal, _ := stmtResp.BalAmt.Float64()
-		endingBalance = &bal
+		b := models.NewMoney(bal)
+		endingBalance = &b
 		if !stmtResp.DtAsOf.Time.IsZero() {
 			t := stmtResp.DtAsOf.Time
 			balanceAsOf = &t
@@ -93,7 +94,8 @@ func ParseOfx(filePath string) {
 		startDate = ccStmtResp.BankTranList.DtStart.Time
 		endDate = ccStmtResp.BankTranList.DtEnd.Time
 		bal, _ := ccStmtResp.BalAmt.Float64()
-		endingBalance = &bal
+		b := models.NewMoney(bal)
+		endingBalance = &b
 		if !ccStmtResp.DtAsOf.Time.IsZero() {
 			t := ccStmtResp.DtAsOf.Time
 			balanceAsOf = &t
@@ -156,7 +158,7 @@ func ParseOfx(filePath string) {
 			ChartAccountID:  chartAccountID, // denormalized from the statement
 			Date:            date,
 			Description:     fullDesc,
-			Amount:          val,
+			Amount:          models.NewMoney(val),
 			TransactionType: fmt.Sprintf("%v", tx.TrnType),
 			FITID:           fitID,
 		}
@@ -166,7 +168,11 @@ func ParseOfx(filePath string) {
 		} else {
 			dbTx.ReviewStatus = "APPROVED"
 		}
-		dbTx.AllocationStatus = "UNLINKED"
+		if dbTx.Amount.Dollars() >= 0 {
+			dbTx.AllocationStatus = "BALANCED"
+		} else {
+			dbTx.AllocationStatus = "UNLINKED"
+		}
 
 		// Automatically evaluate active bank rules (auto-categorization, clean renaming, notes)
 		ApplyBankRulesToTransaction(&dbTx, db.DB)

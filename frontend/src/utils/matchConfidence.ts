@@ -82,8 +82,8 @@ export function computeMatchScore(
   // Cap between 40 and 100 for any item surfaced by reconciler
   const score = Math.min(100, Math.max(45, points));
 
-  let label: MatchScoreResult["label"] = "Suggested";
-  let badgeVariant: MatchScoreResult["badgeVariant"] = "info";
+  let label: MatchScoreResult["label"];
+  let badgeVariant: MatchScoreResult["badgeVariant"];
 
   if (score >= 95) {
     label = "Guaranteed Match";

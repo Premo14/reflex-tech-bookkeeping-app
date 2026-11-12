@@ -250,7 +250,7 @@ func ParseCsvStatement(filePath string) {
 		parsedTransactions = append(parsedTransactions, models.BankTransaction{
 			Date:            txDate,
 			Description:     desc,
-			Amount:          amount,
+			Amount:          models.NewMoney(amount),
 			TransactionType: txType,
 			FITID:           fitID,
 			ChartAccountID:  chartAccountID,
@@ -285,7 +285,11 @@ func ParseCsvStatement(filePath string) {
 		} else {
 			parsedTransactions[i].ReviewStatus = "APPROVED"
 		}
-		parsedTransactions[i].AllocationStatus = "UNLINKED"
+		if parsedTransactions[i].Amount.Dollars() >= 0 {
+			parsedTransactions[i].AllocationStatus = "BALANCED"
+		} else {
+			parsedTransactions[i].AllocationStatus = "UNLINKED"
+		}
 
 		// Automatically evaluate active bank rules (auto-categorization, clean renaming, notes)
 		ApplyBankRulesToTransaction(&parsedTransactions[i], db.DB)

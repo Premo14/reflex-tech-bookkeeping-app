@@ -262,17 +262,17 @@ func GetProfitLoss(c fiber.Ctx) error {
 
 	// Convert slice to a serializable format
 	type PLLine struct {
-		AccountCode string  `json:"accountCode"`
-		AccountName string  `json:"accountName"`
-		Total       float64 `json:"total"`
+		AccountCode string `json:"accountCode"`
+		AccountName string `json:"accountName"`
+		Total       models.Money  `json:"total"`
 	}
 	revLines := make([]PLLine, len(revenueLines))
 	for i, l := range revenueLines {
-		revLines[i] = PLLine{l.AccountCode, l.AccountName, roundCents(l.Total)}
+		revLines[i] = PLLine{l.AccountCode, l.AccountName, models.NewMoney(roundCents(l.Total))}
 	}
 	expLines := make([]PLLine, len(expenseLines))
 	for i, l := range expenseLines {
-		expLines[i] = PLLine{l.AccountCode, l.AccountName, roundCents(l.Total)}
+		expLines[i] = PLLine{l.AccountCode, l.AccountName, models.NewMoney(roundCents(l.Total))}
 	}
 
 	var salesTaxTotal amtResult
@@ -288,64 +288,78 @@ func GetProfitLoss(c fiber.Ctx) error {
 		"startDate":             startDate,
 		"endDate":               endDate,
 		"revenue":               revLines,
-		"totalRevenue":          roundCents(totalRevenue),
+		"totalRevenue":          models.NewMoney(roundCents(totalRevenue)),
 		"expenses":              expLines,
-		"totalExpenses":         roundCents(totalExpenses),
-		"netIncome":             netIncome,
-		"totalTax":              roundCents(salesTaxTotal.Total),
+		"totalExpenses":         models.NewMoney(roundCents(totalExpenses)),
+		"netIncome":             models.NewMoney(netIncome),
+		"totalTax":              models.NewMoney(roundCents(salesTaxTotal.Total)),
 		"uncategorizedTxCount":  uncategorizedTxCount,
 		"uncategorizedExpCount": uncategorizedExpCount,
 		"excludedTxCount":       exclTx.Count,
-		"excludedTxTotal":       roundCents(exclTx.Total),
+		"excludedTxTotal":       models.NewMoney(roundCents(exclTx.Total)),
 		"excludedExpCount":      exclExp.Count,
-		"excludedExpTotal":      roundCents(exclExp.Total),
+		"excludedExpTotal":      models.NewMoney(roundCents(exclExp.Total)),
 	})
 }
 
 type ScheduleCAccountDetail struct {
-	AccountID   uint    `json:"accountId"`
-	AccountCode string  `json:"accountCode"`
-	AccountName string  `json:"accountName"`
-	Total       float64 `json:"total"`
+	AccountID   uint  `json:"accountId"`
+	AccountCode string `json:"accountCode"`
+	AccountName string `json:"accountName"`
+	Total       models.Money  `json:"total"`
 }
 
 type ScheduleCExpenseLine struct {
 	LineNumber        string                   `json:"lineNumber"`
 	LineName          string                   `json:"lineName"`
-	GrossAmount       float64                  `json:"grossAmount"`
+	GrossAmount       models.Money                    `json:"grossAmount"`
 	DeductiblePercent float64                  `json:"deductiblePercent"`
-	DeductibleAmount  float64                  `json:"deductibleAmount"`
+	DeductibleAmount  models.Money                    `json:"deductibleAmount"`
 	Accounts          []ScheduleCAccountDetail `json:"accounts"`
 }
 
 type ScheduleCIncomeLine struct {
 	LineNumber string                   `json:"lineNumber"`
 	LineName   string                   `json:"lineName"`
-	Amount     float64                  `json:"amount"`
+	Amount     models.Money                    `json:"amount"`
 	Accounts   []ScheduleCAccountDetail `json:"accounts"`
+}
+
+type QuarterlyTaxDeadline struct {
+	Quarter   string       `json:"quarter"`   // "Q1", "Q2", "Q3", "Q4"
+	Period    string       `json:"period"`    // e.g. "Jan 1 – Mar 31"
+	DueDate   string       `json:"dueDate"`   // e.g. "April 15, 2026"
+	AmountDue models.Money `json:"amountDue"` // Estimated quarterly payment
+	IsPast    bool         `json:"isPast"`
 }
 
 type ScheduleCReportData struct {
 	StartDate                  string                 `json:"startDate"`
 	EndDate                    string                 `json:"endDate"`
 	Year                       int                    `json:"year"`
-	GrossReceipts              float64                `json:"grossReceipts"`
-	ReturnsAndAllowances       float64                `json:"returnsAndAllowances"`
-	NetReceipts                float64                `json:"netReceipts"`
-	CostOfGoodsSold            float64                `json:"costOfGoodsSold"`
-	GrossProfit                float64                `json:"grossProfit"`
-	OtherIncome                float64                `json:"otherIncome"`
-	GrossIncome                float64                `json:"grossIncome"`
+	GrossReceipts              models.Money                  `json:"grossReceipts"`
+	ReturnsAndAllowances       models.Money                  `json:"returnsAndAllowances"`
+	NetReceipts                models.Money                  `json:"netReceipts"`
+	CostOfGoodsSold            models.Money                  `json:"costOfGoodsSold"`
+	GrossProfit                models.Money                  `json:"grossProfit"`
+	OtherIncome                models.Money                  `json:"otherIncome"`
+	GrossIncome                models.Money                  `json:"grossIncome"`
 	IncomeLines                []ScheduleCIncomeLine  `json:"incomeLines"`
 	ExpenseLines               []ScheduleCExpenseLine `json:"expenseLines"`
-	TotalExpensesGross         float64                `json:"totalExpensesGross"`
-	TotalExpensesDeductible    float64                `json:"totalExpensesDeductible"`
-	NondeductibleMeals         float64                `json:"nondeductibleMeals"`
-	NetProfitOrLoss            float64                `json:"netProfitOrLoss"`
-	UncategorizedExpenseAmount float64                `json:"uncategorizedExpenseAmount"`
-	UncategorizedIncomeAmount  float64                `json:"uncategorizedIncomeAmount"`
+	TotalExpensesGross         models.Money                  `json:"totalExpensesGross"`
+	TotalExpensesDeductible    models.Money                  `json:"totalExpensesDeductible"`
+	NondeductibleMeals         models.Money                  `json:"nondeductibleMeals"`
+	NetProfitOrLoss            models.Money                  `json:"netProfitOrLoss"`
+	UncategorizedExpenseAmount models.Money                  `json:"uncategorizedExpenseAmount"`
+	UncategorizedIncomeAmount  models.Money                  `json:"uncategorizedIncomeAmount"`
 	UncategorizedTxCount       int64                  `json:"uncategorizedTxCount"`
 	UncategorizedExpCount      int64                  `json:"uncategorizedExpCount"`
+	SelfEmploymentTax           models.Money           `json:"selfEmploymentTax"`
+	DeductibleSelfEmploymentTax models.Money           `json:"deductibleSelfEmploymentTax"`
+	EstimatedIncomeTax          models.Money           `json:"estimatedIncomeTax"`
+	TotalEstimatedTax           models.Money           `json:"totalEstimatedTax"`
+	EstimatedQuarterlyTax       models.Money           `json:"estimatedQuarterlyTax"`
+	QuarterlyDeadlines          []QuarterlyTaxDeadline `json:"quarterlyDeadlines"`
 }
 
 var scheduleCLineOrder = map[string]int{
@@ -353,7 +367,7 @@ var scheduleCLineOrder = map[string]int{
 	"Line 13": 130, "Line 14": 140, "Line 15": 150, "Line 16a": 160, "Line 16b": 165,
 	"Line 17": 170, "Line 18": 180, "Line 19": 190, "Line 20a": 200, "Line 20b": 205,
 	"Line 21": 210, "Line 22": 220, "Line 23": 230, "Line 24a": 240, "Line 24b": 245,
-	"Line 25": 250, "Line 26": 260, "Line 27a": 270, "Suspense": 999,
+	"Line 25": 250, "Line 26": 260, "Line 27a": 270, "Line 30": 300, "Suspense": 999,
 }
 
 func resolveScheduleCLine(acc models.ChartAccount) (lineNum string, lineName string, dedPct float64) {
@@ -376,16 +390,36 @@ func resolveScheduleCLine(acc models.ChartAccount) (lineNum string, lineName str
 			return "Line 20b", "Rent or lease (other business property)", 100.0
 		case code == "5030" || strings.Contains(lower, "utilit"):
 			return "Line 25", "Utilities", 100.0
+		case strings.Contains(lower, "home office"):
+			return "Line 30", "Expenses for business use of your home", 100.0
 		case code == "5050" || strings.Contains(lower, "office"):
 			return "Line 18", "Office expense", 100.0
+		case code == "5060" || strings.Contains(lower, "suppl"):
+			return "Line 22", "Supplies", 100.0
+		case code == "5040" || strings.Contains(lower, "repair") || strings.Contains(lower, "maintenance"):
+			return "Line 21", "Repairs and maintenance", 100.0
 		case code == "5080" || strings.Contains(lower, "insur"):
 			return "Line 15", "Insurance (other than health)", 100.0
-		case code == "5110" || strings.Contains(lower, "profession") || strings.Contains(lower, "legal"):
+		case code == "5110" || strings.Contains(lower, "profession") || strings.Contains(lower, "legal") || strings.Contains(lower, "accounting"):
 			return "Line 17", "Legal and professional services", 100.0
 		case code == "5310" || strings.Contains(lower, "advertis") || strings.Contains(lower, "market"):
 			return "Line 8", "Advertising", 100.0
-		case code == "5410" || strings.Contains(lower, "travel"):
+		case code == "5410" || strings.Contains(lower, "travel") || strings.Contains(lower, "flight") || strings.Contains(lower, "hotel") || strings.Contains(lower, "lodging"):
 			return "Line 24a", "Travel", 100.0
+		case strings.HasPrefix(code, "55") || strings.Contains(lower, "vehicle") || strings.Contains(lower, "auto") || strings.Contains(lower, "car") || strings.Contains(lower, "truck") || strings.Contains(lower, "gas") || strings.Contains(lower, "mileage") || strings.Contains(lower, "parking") || strings.Contains(lower, "toll"):
+			return "Line 9", "Car and truck expenses", 100.0
+		case strings.HasPrefix(code, "56") || strings.Contains(lower, "tax") || strings.Contains(lower, "license") || strings.Contains(lower, "permit") || strings.Contains(lower, "registration"):
+			return "Line 23", "Taxes and licenses", 100.0
+		case strings.HasPrefix(code, "57") || strings.Contains(lower, "depreciation") || strings.Contains(lower, "amortization") || strings.Contains(lower, "sec 179") || strings.Contains(lower, "section 179"):
+			return "Line 13", "Depreciation and section 179 expense deduction", 100.0
+		case strings.Contains(lower, "contractor") || strings.Contains(lower, "subcontract") || strings.Contains(lower, "freelance"):
+			return "Line 11", "Contract labor", 100.0
+		case strings.Contains(lower, "commission"):
+			return "Line 10", "Commissions and fees", 100.0
+		case strings.Contains(lower, "interest") || strings.Contains(lower, "finance charge"):
+			return "Line 16b", "Other interest", 100.0
+		case strings.Contains(lower, "benefit") || strings.Contains(lower, "pension"):
+			return "Line 14", "Employee benefit programs", 100.0
 		default:
 			return "Line 27a", "Other expenses", 100.0
 		}
@@ -572,16 +606,16 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 			incomeLineMap[key] = &ScheduleCIncomeLine{
 				LineNumber: lineNum,
 				LineName:   lineName,
-				Amount:     0,
+				Amount:     models.NewMoney(0),
 				Accounts:   []ScheduleCAccountDetail{},
 			}
 		}
-		incomeLineMap[key].Amount += s.Total
+		incomeLineMap[key].Amount = incomeLineMap[key].Amount.Add(models.NewMoney(roundCents(s.Total)))
 		incomeLineMap[key].Accounts = append(incomeLineMap[key].Accounts, ScheduleCAccountDetail{
 			AccountID:   acc.ID,
 			AccountCode: acc.Code,
 			AccountName: acc.Name,
-			Total:       roundCents(s.Total),
+			Total:       models.NewMoney(roundCents(s.Total)),
 		})
 
 		switch treatment {
@@ -601,9 +635,9 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		incomeLineMap[key] = &ScheduleCIncomeLine{
 			LineNumber: "Suspense",
 			LineName:   "Uncategorized Income",
-			Amount:     uncatDeposits.Total,
+			Amount:     models.NewMoney(roundCents(uncatDeposits.Total)),
 			Accounts: []ScheduleCAccountDetail{
-				{AccountID: 0, AccountCode: "9998", AccountName: "Uncategorized Income / Suspense", Total: roundCents(uncatDeposits.Total)},
+				{AccountID: 0, AccountCode: "9998", AccountName: "Uncategorized Income / Suspense", Total: models.NewMoney(roundCents(uncatDeposits.Total))},
 			},
 		}
 		otherIncome += uncatDeposits.Total
@@ -611,7 +645,7 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 
 	var incomeLines []ScheduleCIncomeLine
 	for _, l := range incomeLineMap {
-		l.Amount = roundCents(l.Amount)
+		l.Amount = models.NewMoney(roundCents(l.Amount.Dollars()))
 		incomeLines = append(incomeLines, *l)
 	}
 	sort.Slice(incomeLines, func(i, j int) bool {
@@ -636,19 +670,19 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 			expenseLineMap[key] = &ScheduleCExpenseLine{
 				LineNumber:        lineNum,
 				LineName:          lineName,
-				GrossAmount:       0,
+				GrossAmount:       models.NewMoney(0),
 				DeductiblePercent: dedPct,
-				DeductibleAmount:  0,
+				DeductibleAmount:  models.NewMoney(0),
 				Accounts:          []ScheduleCAccountDetail{},
 			}
 		}
 		line := expenseLineMap[key]
-		line.GrossAmount += total
+		line.GrossAmount = line.GrossAmount.Add(models.NewMoney(roundCents(total)))
 		line.Accounts = append(line.Accounts, ScheduleCAccountDetail{
 			AccountID:   acc.ID,
 			AccountCode: acc.Code,
 			AccountName: acc.Name,
-			Total:       roundCents(total),
+			Total:       models.NewMoney(roundCents(total)),
 		})
 	}
 
@@ -657,11 +691,11 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		expenseLineMap[key] = &ScheduleCExpenseLine{
 			LineNumber:        "Suspense",
 			LineName:          "Uncategorized Expenses (Suspense 9999)",
-			GrossAmount:       totalUncatExp,
+			GrossAmount:       models.NewMoney(roundCents(totalUncatExp)),
 			DeductiblePercent: 100.0,
-			DeductibleAmount:  totalUncatExp,
+			DeductibleAmount:  models.NewMoney(roundCents(totalUncatExp)),
 			Accounts: []ScheduleCAccountDetail{
-				{AccountID: 0, AccountCode: "9999", AccountName: "Uncategorized Expenses / Suspense", Total: roundCents(totalUncatExp)},
+				{AccountID: 0, AccountCode: "9999", AccountName: "Uncategorized Expenses / Suspense", Total: models.NewMoney(roundCents(totalUncatExp))},
 			},
 		}
 	}
@@ -672,13 +706,13 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 	var nondeductibleMeals float64
 
 	for _, l := range expenseLineMap {
-		l.GrossAmount = roundCents(l.GrossAmount)
-		l.DeductibleAmount = roundCents(l.GrossAmount * (l.DeductiblePercent / 100.0))
-		totalGrossExp += l.GrossAmount
-		totalDedExp += l.DeductibleAmount
+		l.GrossAmount = models.NewMoney(roundCents(l.GrossAmount.Dollars()))
+		l.DeductibleAmount = models.NewMoney(roundCents(l.GrossAmount.Dollars() * (l.DeductiblePercent / 100.0)))
+		totalGrossExp += l.GrossAmount.Dollars()
+		totalDedExp += l.DeductibleAmount.Dollars()
 
 		if l.DeductiblePercent < 100.0 {
-			nondeductibleMeals += roundCents(l.GrossAmount - l.DeductibleAmount)
+			nondeductibleMeals += roundCents(l.GrossAmount.Dollars() - l.DeductibleAmount.Dollars())
 		}
 
 		sort.Slice(l.Accounts, func(i, j int) bool {
@@ -719,27 +753,90 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 	uncatExpQ = ApplyDateRange(uncatExpQ, "timestamp", startDate, endDate)
 	uncatExpQ.Count(&uncategorizedExpCount)
 
+	// IRS Self-Employment Tax (Schedule SE) & Form 1040-ES Quarterly Estimates
+	// Net profit is subject to SE tax if >= $400.
+	// Net SE earnings = 92.35% of Net Profit (Line 31).
+	// SE tax rate = 15.3% (12.4% Social Security up to wage cap + 2.9% Medicare with no cap).
+	// 50% of SE tax is deductible above-the-line on Form 1040 Schedule 1 (Line 15).
+	var seTax float64
+	var dedSETax float64
+	var estIncomeTax float64
+	var totalEstTax float64
+	var qtrTax float64
+
+	if netProfitOrLoss >= 400.0 {
+		netSEEarnings := netProfitOrLoss * 0.9235
+		// Cap Social Security at $176,100 for 2026/2025 wage limits
+		ssEarnings := math.Min(netSEEarnings, 176100.0)
+		seTax = roundCents((ssEarnings * 0.124) + (netSEEarnings * 0.029))
+		dedSETax = roundCents(seTax * 0.50)
+
+		// Effective income tax estimation for sole proprietor (~15% bracket on net profit after SE deduction)
+		taxableIncomeEstimate := math.Max(0, netProfitOrLoss-dedSETax)
+		estIncomeTax = roundCents(taxableIncomeEstimate * 0.15)
+
+		totalEstTax = roundCents(seTax + estIncomeTax)
+		qtrTax = roundCents(totalEstTax / 4.0)
+	}
+
+	deadlines := []QuarterlyTaxDeadline{
+		{
+			Quarter:   "Q1",
+			Period:    "Jan 1 – Mar 31",
+			DueDate:   fmt.Sprintf("April 15, %d", year),
+			AmountDue: models.NewMoney(qtrTax),
+			IsPast:    time.Now().After(time.Date(year, time.April, 15, 23, 59, 59, 0, time.Local)),
+		},
+		{
+			Quarter:   "Q2",
+			Period:    "Apr 1 – May 31",
+			DueDate:   fmt.Sprintf("June 15, %d", year),
+			AmountDue: models.NewMoney(qtrTax),
+			IsPast:    time.Now().After(time.Date(year, time.June, 15, 23, 59, 59, 0, time.Local)),
+		},
+		{
+			Quarter:   "Q3",
+			Period:    "Jun 1 – Aug 31",
+			DueDate:   fmt.Sprintf("September 15, %d", year),
+			AmountDue: models.NewMoney(qtrTax),
+			IsPast:    time.Now().After(time.Date(year, time.September, 15, 23, 59, 59, 0, time.Local)),
+		},
+		{
+			Quarter:   "Q4",
+			Period:    "Sep 1 – Dec 31",
+			DueDate:   fmt.Sprintf("January 15, %d", year+1),
+			AmountDue: models.NewMoney(qtrTax),
+			IsPast:    time.Now().After(time.Date(year+1, time.January, 15, 23, 59, 59, 0, time.Local)),
+		},
+	}
+
 	return &ScheduleCReportData{
-		StartDate:                  startDate,
-		EndDate:                    endDate,
-		Year:                       year,
-		GrossReceipts:              roundCents(grossReceipts),
-		ReturnsAndAllowances:       roundCents(returnsAndAllowances),
-		NetReceipts:                roundCents(netReceipts),
-		CostOfGoodsSold:            roundCents(cogs),
-		GrossProfit:                roundCents(grossProfit),
-		OtherIncome:                roundCents(otherIncome),
-		GrossIncome:                roundCents(grossIncome),
-		IncomeLines:                incomeLines,
-		ExpenseLines:               expenseLines,
-		TotalExpensesGross:         roundCents(totalGrossExp),
-		TotalExpensesDeductible:    roundCents(totalDedExp),
-		NondeductibleMeals:         roundCents(nondeductibleMeals),
-		NetProfitOrLoss:            roundCents(netProfitOrLoss),
-		UncategorizedExpenseAmount: roundCents(totalUncatExp),
-		UncategorizedIncomeAmount:  roundCents(uncatDeposits.Total),
-		UncategorizedTxCount:       uncategorizedTxCount,
-		UncategorizedExpCount:      uncategorizedExpCount,
+		StartDate:                   startDate,
+		EndDate:                     endDate,
+		Year:                        year,
+		GrossReceipts:               models.NewMoney(roundCents(grossReceipts)),
+		ReturnsAndAllowances:        models.NewMoney(roundCents(returnsAndAllowances)),
+		NetReceipts:                 models.NewMoney(roundCents(netReceipts)),
+		CostOfGoodsSold:             models.NewMoney(roundCents(cogs)),
+		GrossProfit:                 models.NewMoney(roundCents(grossProfit)),
+		OtherIncome:                 models.NewMoney(roundCents(otherIncome)),
+		GrossIncome:                 models.NewMoney(roundCents(grossIncome)),
+		IncomeLines:                 incomeLines,
+		ExpenseLines:                expenseLines,
+		TotalExpensesGross:          models.NewMoney(roundCents(totalGrossExp)),
+		TotalExpensesDeductible:     models.NewMoney(roundCents(totalDedExp)),
+		NondeductibleMeals:          models.NewMoney(roundCents(nondeductibleMeals)),
+		NetProfitOrLoss:             models.NewMoney(roundCents(netProfitOrLoss)),
+		UncategorizedExpenseAmount:  models.NewMoney(roundCents(totalUncatExp)),
+		UncategorizedIncomeAmount:   models.NewMoney(roundCents(uncatDeposits.Total)),
+		UncategorizedTxCount:        uncategorizedTxCount,
+		UncategorizedExpCount:       uncategorizedExpCount,
+		SelfEmploymentTax:           models.NewMoney(seTax),
+		DeductibleSelfEmploymentTax: models.NewMoney(dedSETax),
+		EstimatedIncomeTax:          models.NewMoney(estIncomeTax),
+		TotalEstimatedTax:           models.NewMoney(totalEstTax),
+		EstimatedQuarterlyTax:       models.NewMoney(qtrTax),
+		QuarterlyDeadlines:          deadlines,
 	}, nil
 }
 
@@ -800,24 +897,24 @@ func cleanVendorDescription(s string) string {
 
 // CashFlowPeriod holds monthly cash metrics
 type CashFlowPeriod struct {
-	Period           string  `json:"period"`           // e.g. "2026-08"
-	PeriodLabel      string  `json:"periodLabel"`      // e.g. "Aug 2026"
-	CashIn           float64 `json:"cashIn"`           // Total deposits (amount > 0)
-	CashOut          float64 `json:"cashOut"`          // Total debits (amount < 0)
-	NetCashFlow      float64 `json:"netCashFlow"`      // CashIn - CashOut
-	RunningCashTotal float64 `json:"runningCashTotal"` // Cumulative net cash flow
-	InflowCount      int64   `json:"inflowCount"`
-	OutflowCount     int64   `json:"outflowCount"`
+	Period           string `json:"period"`           // e.g. "2026-08"
+	PeriodLabel      string `json:"periodLabel"`      // e.g. "Aug 2026"
+	CashIn           models.Money  `json:"cashIn"`           // Total deposits (amount > 0)
+	CashOut          models.Money  `json:"cashOut"`          // Total debits (amount < 0)
+	NetCashFlow      models.Money  `json:"netCashFlow"`      // CashIn - CashOut
+	RunningCashTotal models.Money  `json:"runningCashTotal"` // Cumulative net cash flow
+	InflowCount      int64  `json:"inflowCount"`
+	OutflowCount     int64  `json:"outflowCount"`
 }
 
 type CashFlowReportData struct {
 	StartDate          string           `json:"startDate"`
 	EndDate            string           `json:"endDate"`
-	TotalCashIn        float64          `json:"totalCashIn"`
-	TotalCashOut       float64          `json:"totalCashOut"`
-	NetCashFlow        float64          `json:"netCashFlow"`
-	AvgMonthlyInflow   float64          `json:"avgMonthlyInflow"`
-	AvgMonthlyOutflow  float64          `json:"avgMonthlyOutflow"`
+	TotalCashIn        models.Money            `json:"totalCashIn"`
+	TotalCashOut       models.Money            `json:"totalCashOut"`
+	NetCashFlow        models.Money            `json:"netCashFlow"`
+	AvgMonthlyInflow   models.Money            `json:"avgMonthlyInflow"`
+	AvgMonthlyOutflow  models.Money            `json:"avgMonthlyOutflow"`
 	SavingsRatePercent float64          `json:"savingsRatePercent"`
 	Periods            []CashFlowPeriod `json:"periods"`
 }
@@ -858,11 +955,11 @@ func GetCashFlowSummary(c fiber.Ctx) error {
 			monthKeys = append(monthKeys, mKey)
 		}
 
-		if tx.Amount > 0 {
-			period.CashIn += tx.Amount
+		if tx.Amount.Dollars() > 0 {
+			period.CashIn = period.CashIn.Add(models.NewMoney(roundCents(tx.Amount.Dollars())))
 			period.InflowCount++
-		} else if tx.Amount < 0 {
-			period.CashOut += math.Abs(tx.Amount)
+		} else if tx.Amount.Dollars() < 0 {
+			period.CashOut = period.CashOut.Add(models.NewMoney(roundCents(math.Abs(tx.Amount.Dollars()))))
 			period.OutflowCount++
 		}
 	}
@@ -875,14 +972,14 @@ func GetCashFlowSummary(c fiber.Ctx) error {
 
 	for _, k := range monthKeys {
 		p := monthMap[k]
-		p.CashIn = roundCents(p.CashIn)
-		p.CashOut = roundCents(p.CashOut)
-		p.NetCashFlow = roundCents(p.CashIn - p.CashOut)
-		runningTotal += p.NetCashFlow
-		p.RunningCashTotal = roundCents(runningTotal)
+		p.CashIn = models.NewMoney(roundCents(p.CashIn.Dollars()))
+		p.CashOut = models.NewMoney(roundCents(p.CashOut.Dollars()))
+		p.NetCashFlow = models.NewMoney(roundCents(p.CashIn.Dollars() - p.CashOut.Dollars()))
+		runningTotal += p.NetCashFlow.Dollars()
+		p.RunningCashTotal = models.NewMoney(roundCents(runningTotal))
 
-		totalIn += p.CashIn
-		totalOut += p.CashOut
+		totalIn += p.CashIn.Dollars()
+		totalOut += p.CashOut.Dollars()
 		periods = append(periods, *p)
 	}
 
@@ -907,11 +1004,11 @@ func GetCashFlowSummary(c fiber.Ctx) error {
 		"report": CashFlowReportData{
 			StartDate:          startDate,
 			EndDate:            endDate,
-			TotalCashIn:        totalIn,
-			TotalCashOut:       totalOut,
-			NetCashFlow:        netCash,
-			AvgMonthlyInflow:   avgIn,
-			AvgMonthlyOutflow:  avgOut,
+			TotalCashIn:        models.NewMoney(totalIn),
+			TotalCashOut:       models.NewMoney(totalOut),
+			NetCashFlow:        models.NewMoney(netCash),
+			AvgMonthlyInflow:   models.NewMoney(roundCents(avgIn)),
+			AvgMonthlyOutflow:  models.NewMoney(roundCents(avgOut)),
 			SavingsRatePercent: savingsRate,
 			Periods:            periods,
 		},
@@ -920,23 +1017,26 @@ func GetCashFlowSummary(c fiber.Ctx) error {
 
 // VendorSpendItem represents aggregated spending per vendor
 type VendorSpendItem struct {
-	VendorName          string  `json:"vendorName"`
-	TotalSpend          float64 `json:"totalSpend"`
-	TransactionCount    int64   `json:"transactionCount"`
-	AverageSpend        float64 `json:"averageSpend"`
-	PercentOfTotal      float64 `json:"percentOfTotal"`
-	PrimaryCategoryCode string  `json:"primaryCategoryCode"`
-	PrimaryCategoryName string  `json:"primaryCategoryName"`
-	LastDate            string  `json:"lastDate"`
+	VendorName          string       `json:"vendorName"`
+	TotalSpend          models.Money `json:"totalSpend"`
+	TransactionCount    int64        `json:"transactionCount"`
+	AverageSpend        models.Money `json:"averageSpend"`
+	PercentOfTotal      float64      `json:"percentOfTotal"`
+	PrimaryCategoryCode string       `json:"primaryCategoryCode"`
+	PrimaryCategoryName string       `json:"primaryCategoryName"`
+	LastDate            string       `json:"lastDate"`
+	Requires1099        bool         `json:"requires1099"` // True if total annual spend >= $600 (IRS Form 1099-NEC threshold)
 }
 
 type VendorSpendReportData struct {
-	StartDate    string            `json:"startDate"`
-	EndDate      string            `json:"endDate"`
-	TotalSpend   float64           `json:"totalSpend"`
-	TotalVendors int               `json:"totalVendors"`
-	Top5Percent  float64           `json:"top5Percent"`
-	Vendors      []VendorSpendItem `json:"vendors"`
+	StartDate          string            `json:"startDate"`
+	EndDate            string            `json:"endDate"`
+	TotalSpend         models.Money      `json:"totalSpend"`
+	TotalVendors       int               `json:"totalVendors"`
+	Top5Percent        float64           `json:"top5Percent"`
+	Vendors            []VendorSpendItem `json:"vendors"`
+	ContractorsOver600 int               `json:"contractorsOver600"` // Number of vendors crossing $600 IRS 1099 threshold
+	Total1099Spend     models.Money      `json:"total1099Spend"`     // Total spend across all 1099-reportable vendors
 }
 
 // GetVendorSpendReport analyzes expense and debit spending grouped and ranked by payee/vendor.
@@ -1042,23 +1142,32 @@ func GetVendorSpendReport(c fiber.Ctx) error {
 
 		vendorList = append(vendorList, VendorSpendItem{
 			VendorName:          agg.VendorName,
-			TotalSpend:          totalSpend,
+			TotalSpend:          models.NewMoney(totalSpend),
 			TransactionCount:    agg.Count,
-			AverageSpend:        avgSpend,
+			AverageSpend:        models.NewMoney(avgSpend),
 			PercentOfTotal:      pct,
 			PrimaryCategoryCode: bestCatCode,
 			PrimaryCategoryName: bestCatName,
 			LastDate:            agg.MostRecent.Format("2006-01-02"),
+			Requires1099:        totalSpend >= 600.0,
 		})
 	}
 
 	sort.Slice(vendorList, func(i, j int) bool {
-		return vendorList[i].TotalSpend > vendorList[j].TotalSpend
+		return vendorList[i].TotalSpend.Dollars() > vendorList[j].TotalSpend.Dollars()
 	})
 
 	top5Spend := 0.0
-	for i := 0; i < len(vendorList) && i < 5; i++ {
-		top5Spend += vendorList[i].TotalSpend
+	contractorsOver600 := 0
+	total1099Spend := 0.0
+	for i, v := range vendorList {
+		if i < 5 {
+			top5Spend += v.TotalSpend.Dollars()
+		}
+		if v.Requires1099 {
+			contractorsOver600++
+			total1099Spend += v.TotalSpend.Dollars()
+		}
 	}
 	top5Pct := 0.0
 	if grandTotal > 0 {
@@ -1068,12 +1177,14 @@ func GetVendorSpendReport(c fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status": "success",
 		"report": VendorSpendReportData{
-			StartDate:    startDate,
-			EndDate:      endDate,
-			TotalSpend:   roundCents(grandTotal),
-			TotalVendors: len(vendorList),
-			Top5Percent:  top5Pct,
-			Vendors:      vendorList,
+			StartDate:          startDate,
+			EndDate:            endDate,
+			TotalSpend:         models.NewMoney(roundCents(grandTotal)),
+			TotalVendors:       len(vendorList),
+			Top5Percent:        top5Pct,
+			Vendors:            vendorList,
+			ContractorsOver600: contractorsOver600,
+			Total1099Spend:     models.NewMoney(roundCents(total1099Spend)),
 		},
 	})
 }
@@ -1086,9 +1197,9 @@ type ARAgingInvoiceItem struct {
 	ClientEmail   string  `json:"clientEmail"`
 	IssueDate     string  `json:"issueDate"`
 	DueDate       string  `json:"dueDate"`
-	TotalAmount   float64 `json:"totalAmount"`
-	AmountPaid    float64 `json:"amountPaid"`
-	BalanceDue    float64 `json:"balanceDue"`
+	TotalAmount   models.Money   `json:"totalAmount"`
+	AmountPaid    models.Money   `json:"amountPaid"`
+	BalanceDue    models.Money   `json:"balanceDue"`
 	DaysOverdue   int     `json:"daysOverdue"`
 	Status        string  `json:"status"`
 }
@@ -1149,12 +1260,12 @@ func GetARAgingReport(c fiber.Ctx) error {
 	var totalOverdue float64
 
 	for _, inv := range invoices {
-		receivableAmt := inv.BalanceDue
-		if receivableAmt <= 0 && inv.TotalAmount > inv.AmountPaid {
-			receivableAmt = roundCents(inv.TotalAmount - inv.AmountPaid)
+		receivableAmt := inv.BalanceDue.Dollars()
+		if receivableAmt <= 0 && inv.TotalAmount.Dollars() > inv.AmountPaid.Dollars() {
+			receivableAmt = roundCents(inv.TotalAmount.Dollars() - inv.AmountPaid.Dollars())
 		}
 		if receivableAmt <= 0 && inv.Status != "PAID" {
-			receivableAmt = inv.TotalAmount
+			receivableAmt = inv.TotalAmount.Dollars()
 		}
 
 		totalReceivables += receivableAmt
@@ -1171,9 +1282,9 @@ func GetARAgingReport(c fiber.Ctx) error {
 			ClientEmail:   inv.ClientEmail,
 			IssueDate:     inv.IssueDate.Format("2006-01-02"),
 			DueDate:       inv.DueDate.Format("2006-01-02"),
-			TotalAmount:   roundCents(inv.TotalAmount),
-			AmountPaid:    roundCents(inv.AmountPaid),
-			BalanceDue:    roundCents(receivableAmt),
+			TotalAmount:   models.NewMoney(roundCents(inv.TotalAmount.Dollars())),
+			AmountPaid:    models.NewMoney(roundCents(inv.AmountPaid.Dollars())),
+			BalanceDue:    models.NewMoney(roundCents(receivableAmt)),
 			DaysOverdue:   daysOverdue,
 			Status:        inv.Status,
 		}
@@ -1256,5 +1367,269 @@ func GetARAgingReport(c fiber.Ctx) error {
 			Buckets:          buckets,
 			Clients:          clients,
 		},
+	})
+}
+
+// TrialBalanceAccountLine represents an account row in the Trial Balance report
+type TrialBalanceAccountLine struct {
+	AccountID   uint         `json:"accountId"`
+	AccountCode string       `json:"accountCode"`
+	AccountName string       `json:"accountName"`
+	AccountType string       `json:"accountType"` // ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE
+	GrossDebit  models.Money `json:"grossDebit"`
+	GrossCredit models.Money `json:"grossCredit"`
+	NetDebit    models.Money `json:"netDebit"`
+	NetCredit   models.Money `json:"netCredit"`
+}
+
+// TrialBalanceReportData encapsulates the full Trial Balance report with double-entry balance verification
+type TrialBalanceReportData struct {
+	StartDate     string                    `json:"startDate"`
+	EndDate       string                    `json:"endDate"`
+	Accounts      []TrialBalanceAccountLine `json:"accounts"`
+	TotalDebit    models.Money              `json:"totalDebit"`
+	TotalCredit   models.Money              `json:"totalCredit"`
+	IsBalanced    bool                      `json:"isBalanced"`
+	VarianceCents int64                     `json:"varianceCents"`
+}
+
+// BuildTrialBalanceData compiles the complete Trial Balance across all ledger accounts.
+// Every transaction is represented as a balanced double-entry pair:
+//   - Bank debit/credit to source account (1xxx / 2xxx)
+//   - Offsetting debit/credit to destination category account (4xxx / 5xxx / 1xxx / 3xxx)
+func BuildTrialBalanceData(startDate, endDate string) (*TrialBalanceReportData, error) {
+	if db.DB == nil {
+		return &TrialBalanceReportData{
+			StartDate:  startDate,
+			EndDate:    endDate,
+			IsBalanced: true,
+		}, nil
+	}
+
+	var accounts []models.ChartAccount
+	if err := db.DB.Where("active = true").Order("code ASC").Find(&accounts).Error; err != nil {
+		return nil, err
+	}
+
+	type accAccumulator struct {
+		account     models.ChartAccount
+		debitCents  int64
+		creditCents int64
+	}
+
+	accMap := make(map[uint]*accAccumulator)
+	for i := range accounts {
+		accMap[accounts[i].ID] = &accAccumulator{account: accounts[i]}
+	}
+
+	// Find default cash/equity account for cash tender offsetting credit
+	var cashAccountID uint
+	for _, acc := range accounts {
+		if acc.Type == "ASSET" && (acc.Code == "1050" || strings.Contains(strings.ToLower(acc.Name), "cash")) {
+			cashAccountID = acc.ID
+			break
+		}
+	}
+	if cashAccountID == 0 {
+		// Fallback to checking (1010) or owner equity (3010)
+		for _, acc := range accounts {
+			if acc.Code == "1010" || acc.Code == "3010" {
+				cashAccountID = acc.ID
+				break
+			}
+		}
+	}
+
+	// Suspense accumulators for uncategorized entries
+	var suspenseIncDebit, suspenseIncCredit int64
+	var suspenseExpDebit, suspenseExpCredit int64
+
+	// 1. Process Bank Transactions
+	var txs []models.BankTransaction
+	txQ := db.DB.Model(&models.BankTransaction{}).Where("COALESCE(review_status, '') NOT IN ('IGNORED', 'DELETED')")
+	txQ = ApplyDateRange(txQ, "date", startDate, endDate)
+	if err := txQ.Find(&txs).Error; err != nil {
+		return nil, err
+	}
+
+	for _, tx := range txs {
+		amtCents := tx.Amount.Cents
+		if amtCents == 0 {
+			continue
+		}
+
+		// Source Bank Account
+		if tx.ChartAccountID != nil {
+			if bAcc, ok := accMap[*tx.ChartAccountID]; ok {
+				if amtCents > 0 {
+					// Deposit increases bank asset -> Debit
+					bAcc.debitCents += amtCents
+				} else {
+					// Disbursement decreases bank asset -> Credit
+					bAcc.creditCents += -amtCents
+				}
+			}
+		}
+
+		// Offsetting Category Account
+		if tx.CategoryAccountID != nil {
+			if cAcc, ok := accMap[*tx.CategoryAccountID]; ok {
+				if amtCents > 0 {
+					// Incoming revenue -> Credit
+					cAcc.creditCents += amtCents
+				} else {
+					// Expense / Draw / Capital Asset payment -> Debit
+					cAcc.debitCents += -amtCents
+				}
+			}
+		} else {
+			// Uncategorized suspense
+			if amtCents > 0 {
+				suspenseIncCredit += amtCents
+			} else {
+				suspenseExpDebit += -amtCents
+			}
+		}
+	}
+
+	// 2. Process Cash Expenses (paid in cash, never appeared on bank statements)
+	var cashExps []models.Expense
+	cashQ := db.DB.Model(&models.Expense{}).
+		Where("COALESCE(review_status, '') NOT IN ('IGNORED', 'DELETED')").
+		Where("LOWER(COALESCE(tender, '')) = 'cash' OR LOWER(COALESCE(tender, '')) = 'cash / paper'")
+	cashQ = ApplyDateRange(cashQ, "timestamp", startDate, endDate)
+	if err := cashQ.Find(&cashExps).Error; err == nil {
+		for _, e := range cashExps {
+			eCents := e.Amount.Cents
+			if eCents <= 0 {
+				continue
+			}
+
+			// Expense Category -> Debit
+			if e.ChartAccountID != nil {
+				if cAcc, ok := accMap[*e.ChartAccountID]; ok {
+					cAcc.debitCents += eCents
+				}
+			} else {
+				suspenseExpDebit += eCents
+			}
+
+			// Cash on Hand / Owner Capital -> Credit
+			if cashAccountID > 0 {
+				if cAcc, ok := accMap[cashAccountID]; ok {
+					cAcc.creditCents += eCents
+				}
+			}
+		}
+	}
+
+	// Build output lines
+	var lines []TrialBalanceAccountLine
+	var totalNetDebitCents int64
+	var totalNetCreditCents int64
+
+	for _, acc := range accounts {
+		accum := accMap[acc.ID]
+		gDebit := accum.debitCents
+		gCredit := accum.creditCents
+
+		// Only include accounts with activity or liquid anchor accounts
+		if gDebit == 0 && gCredit == 0 {
+			continue
+		}
+
+		var nDebitCents int64
+		var nCreditCents int64
+
+		if gDebit > gCredit {
+			nDebitCents = gDebit - gCredit
+		} else if gCredit > gDebit {
+			nCreditCents = gCredit - gDebit
+		}
+
+		totalNetDebitCents += nDebitCents
+		totalNetCreditCents += nCreditCents
+
+		lines = append(lines, TrialBalanceAccountLine{
+			AccountID:   acc.ID,
+			AccountCode: acc.Code,
+			AccountName: acc.Name,
+			AccountType: acc.Type,
+			GrossDebit:  models.Money{Cents: gDebit},
+			GrossCredit: models.Money{Cents: gCredit},
+			NetDebit:    models.Money{Cents: nDebitCents},
+			NetCredit:   models.Money{Cents: nCreditCents},
+		})
+	}
+
+	// Add Suspense rows if uncategorized activity exists
+	if suspenseIncCredit > 0 || suspenseIncDebit > 0 {
+		var nCredit int64
+		if suspenseIncCredit > suspenseIncDebit {
+			nCredit = suspenseIncCredit - suspenseIncDebit
+		}
+		totalNetCreditCents += nCredit
+		lines = append(lines, TrialBalanceAccountLine{
+			AccountCode: "9998",
+			AccountName: "Uncategorized Income (Suspense)",
+			AccountType: "REVENUE",
+			GrossDebit:  models.Money{Cents: suspenseIncDebit},
+			GrossCredit: models.Money{Cents: suspenseIncCredit},
+			NetDebit:    models.Money{Cents: 0},
+			NetCredit:   models.Money{Cents: nCredit},
+		})
+	}
+
+	if suspenseExpDebit > 0 || suspenseExpCredit > 0 {
+		var nDebit int64
+		if suspenseExpDebit > suspenseExpCredit {
+			nDebit = suspenseExpDebit - suspenseExpCredit
+		}
+		totalNetDebitCents += nDebit
+		lines = append(lines, TrialBalanceAccountLine{
+			AccountCode: "9999",
+			AccountName: "Uncategorized Expense (Suspense)",
+			AccountType: "EXPENSE",
+			GrossDebit:  models.Money{Cents: suspenseExpDebit},
+			GrossCredit: models.Money{Cents: suspenseExpCredit},
+			NetDebit:    models.Money{Cents: nDebit},
+			NetCredit:   models.Money{Cents: 0},
+		})
+	}
+
+	// Sort lines by Account Code ascending
+	sort.Slice(lines, func(i, j int) bool {
+		return lines[i].AccountCode < lines[j].AccountCode
+	})
+
+	variance := totalNetDebitCents - totalNetCreditCents
+	isBalanced := variance == 0
+
+	return &TrialBalanceReportData{
+		StartDate:     startDate,
+		EndDate:       endDate,
+		Accounts:      lines,
+		TotalDebit:    models.Money{Cents: totalNetDebitCents},
+		TotalCredit:   models.Money{Cents: totalNetCreditCents},
+		IsBalanced:    isBalanced,
+		VarianceCents: variance,
+	}, nil
+}
+
+// GetTrialBalance delivers the Trial Balance report API endpoint
+func GetTrialBalance(c fiber.Ctx) error {
+	startDate := c.Query("startDate")
+	endDate := c.Query("endDate")
+
+	report, err := BuildTrialBalanceData(startDate, endDate)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to compile trial balance: " + err.Error(),
+		})
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status": "success",
+		"report": report,
 	})
 }

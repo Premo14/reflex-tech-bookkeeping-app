@@ -133,46 +133,46 @@ export default function Header({
           </Button>
         </div>
       )}
-      <header className="p-6 md:p-8 pb-4 border-b border-white/5 flex flex-wrap md:items-end justify-between gap-6 shrink-0 bg-[#0a0a0a]">
-        <div className="flex flex-col gap-4">
+      <header className="px-4 sm:px-6 py-3 border-b border-white/10 flex flex-wrap items-center justify-between gap-3 shrink-0 bg-zinc-950/70">
+        <div className="flex items-center gap-3 flex-wrap">
           {/* Mobile Top Bar (Hamburger Menu) */}
           <div className="flex items-center md:hidden">
             <Button variant="ghost"
+              size="sm"
               onClick={() => setIsSidebarOpen(true)}
-              className="p-2 -ml-2 mr-3 text-zinc-400 hover:text-white focus:bg-zinc-800 rounded-lg transition-colors"
+              className="p-1.5 -ml-1 mr-2 text-zinc-400 hover:text-white rounded-lg transition-colors"
             >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
             </Button>
-            <h1 className="text-xl font-bold text-white tracking-tight">Ledger</h1>
+            <h1 className="text-sm font-bold text-white tracking-tight">Ledger</h1>
           </div>
 
-          <div>
-            <p className="text-xs font-bold text-zinc-400 mb-2 uppercase tracking-widest">Chart of Accounts</p>
-            <div className="flex items-center gap-2 sm:gap-3 flex-wrap sm:flex-nowrap">
-              <div className="relative flex-1 sm:flex-initial min-w-0" ref={dropdownRef}>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              <div className="relative" ref={dropdownRef}>
                 <button
                   type="button"
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className={`bg-[#121212] border ${isDropdownOpen ? 'border-emerald-500 ring-1 ring-emerald-500/20' : 'border-white/10 hover:border-white/20'} text-white rounded-xl px-4 py-2.5 font-bold transition-all shadow-sm flex items-center justify-between w-full sm:w-auto sm:min-w-[260px]`}
+                  className={`bg-zinc-900 border ${isDropdownOpen ? 'border-emerald-500 ring-1 ring-emerald-500/20' : 'border-white/10 hover:border-white/20'} text-white rounded-lg px-3 py-1.5 text-xs font-semibold transition-all shadow-sm flex items-center justify-between w-full sm:w-auto sm:min-w-[220px] cursor-pointer`}
                 >
                   <span className="min-w-0 flex items-center gap-2 overflow-hidden">
                     {isAccountsLoading && (
                       <LoadingSpinner size="xs" color="text-emerald-400" />
                     )}
-                    <span className="truncate max-w-[170px] sm:max-w-[260px]">{selectedText}</span>
+                    <span className="truncate max-w-[170px] sm:max-w-[220px]">{selectedText}</span>
                     {childCountForSelected > 0 && (
                       <span className="text-[10px] text-emerald-400/80 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.2 rounded font-normal shrink-0">
-                        +{childCountForSelected} sub
+                        +{childCountForSelected}
                       </span>
                     )}
                   </span>
-                  <svg className={`w-4 h-4 text-zinc-400 shrink-0 ml-3 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className={`w-3.5 h-3.5 text-zinc-400 shrink-0 ml-2 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path>
                   </svg>
                 </button>
 
                 {isDropdownOpen && (
-                  <div className="absolute top-full left-0 mt-2 min-w-full w-max max-w-[calc(100vw-32px)] bg-zinc-900 border border-white/10 rounded-xl shadow-2xl z-50 py-1.5 animate-in fade-in zoom-in-95 duration-200 overflow-hidden backdrop-blur-xl bg-zinc-900/95 max-h-[420px] overflow-y-auto custom-scrollbar flex flex-col">
+                  <div className="absolute top-full left-0 mt-1.5 min-w-full w-max max-w-[calc(100vw-32px)] bg-zinc-900 border border-white/10 rounded-xl shadow-2xl z-50 py-1.5 animate-in fade-in zoom-in-95 duration-150 overflow-hidden backdrop-blur-xl bg-zinc-900/95 max-h-[420px] overflow-y-auto custom-scrollbar flex flex-col">
                     {/* Quick Search */}
                     <div className="p-2 border-b border-white/5 bg-zinc-900/95 sticky top-0 z-10 shrink-0">
                       <div className="relative">
@@ -183,10 +183,10 @@ export default function Header({
                           placeholder="Filter accounts..."
                           value={accountSearch}
                           onChange={(e) => setAccountSearch(e.target.value)}
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-8 pr-7 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-md pl-7 pr-6 py-1 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
                           autoFocus
                         />
-                        <svg className="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-3.5 h-3.5 text-zinc-500 absolute left-2 top-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                         {accountSearch && (
@@ -202,7 +202,7 @@ export default function Header({
                     </div>
 
                     {isAccountsLoading && accounts.length === 0 ? (
-                      <div className="py-8 flex flex-col items-center justify-center space-y-2 text-zinc-400">
+                      <div className="py-6 flex flex-col items-center justify-center space-y-2 text-zinc-400">
                         <LoadingSpinner size="sm" color="text-emerald-500" />
                         <span className="text-xs">Loading accounts…</span>
                       </div>
@@ -211,7 +211,7 @@ export default function Header({
                         {!accountSearch && (
                           <button
                             onClick={() => { setActiveAccountId(null); setIsDropdownOpen(false); setAccountSearch(""); }}
-                            className={`w-full text-left px-4 py-2.5 text-sm transition-colors shrink-0 ${activeAccountId === null ? 'bg-emerald-500/10 text-emerald-400 font-bold' : 'text-zinc-300 hover:bg-white/5'}`}
+                            className={`w-full text-left px-3 py-2 text-xs transition-colors shrink-0 ${activeAccountId === null ? 'bg-emerald-500/10 text-emerald-400 font-bold' : 'text-zinc-300 hover:bg-white/5'}`}
                           >
                             All Accounts (Global View)
                           </button>
@@ -223,7 +223,7 @@ export default function Header({
 
                       return (
                         <div key={type}>
-                          <div className="px-4 py-1.5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest mt-2 flex items-center justify-between">
+                          <div className="px-3 py-1 text-[10px] font-bold text-zinc-400 uppercase tracking-widest mt-1.5 flex items-center justify-between">
                             <span>{type}</span>
                             <span className="text-[10px] text-zinc-400 font-normal">{hierarchy.length}</span>
                           </div>
@@ -231,21 +231,21 @@ export default function Header({
                             <button
                               key={acc.id}
                               onClick={() => { setActiveAccountId(acc.id); setIsDropdownOpen(false); setAccountSearch(""); }}
-                              className={`w-full text-left py-2 text-sm transition-colors ${activeAccountId === acc.id ? 'bg-emerald-500/10 text-emerald-400 font-bold' : 'text-zinc-300 hover:bg-white/5 hover:text-white'} whitespace-nowrap flex items-center gap-2`}
-                              style={{ paddingLeft: `${16 + depth * 14}px`, paddingRight: '16px' }}
+                              className={`w-full text-left py-1.5 text-xs transition-colors ${activeAccountId === acc.id ? 'bg-emerald-500/10 text-emerald-400 font-bold' : 'text-zinc-300 hover:bg-white/5 hover:text-white'} whitespace-nowrap flex items-center gap-2`}
+                              style={{ paddingLeft: `${14 + depth * 12}px`, paddingRight: '14px' }}
                             >
-                              {depth > 0 && <span className="text-zinc-400 select-none text-xs shrink-0">↳</span>}
-                              <span className={`text-xs font-mono shrink-0 ${activeAccountId === acc.id ? 'text-emerald-500/70' : depth > 0 ? 'text-zinc-400' : 'text-zinc-400'}`}>
+                              {depth > 0 && <span className="text-zinc-400 select-none text-[11px] shrink-0">↳</span>}
+                              <span className={`text-[11px] font-mono shrink-0 ${activeAccountId === acc.id ? 'text-emerald-500/70' : 'text-zinc-400'}`}>
                                  {acc.code}
                               </span>
-                              <span className="truncate max-w-[180px] sm:max-w-xs pr-2">{acc.name}</span>
+                              <span className="truncate max-w-[160px] sm:max-w-xs pr-2">{acc.name}</span>
                               {childCount > 0 && depth === 0 && (
-                                <span className="text-[10px] text-zinc-400 bg-white/5 border border-white/5 px-1.5 py-0.2 rounded ml-1 shrink-0 font-normal">
+                                <span className="text-[9px] text-zinc-400 bg-white/5 border border-white/5 px-1 py-0.2 rounded ml-1 shrink-0 font-normal">
                                   {childCount} sub
                                 </span>
                               )}
                               {!acc.active && (
-                                <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.2 rounded uppercase font-semibold ml-auto shrink-0">
+                                <span className="text-[9px] bg-red-500/20 text-red-400 px-1.5 py-0.2 rounded uppercase font-semibold ml-auto shrink-0">
                                   Inactive
                                 </span>
                               )}
@@ -260,8 +260,8 @@ export default function Header({
                 )}
               </div>
 
-              <Button variant="secondary" onClick={() => setShowAccountManager(true)} title="Manage Chart of Accounts" className="shrink-0">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+              <Button variant="secondary" size="sm" onClick={() => setShowAccountManager(true)} title="Manage Chart of Accounts" className="shrink-0">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
                 Manage
               </Button>
             </div>
@@ -269,30 +269,37 @@ export default function Header({
         </div>
 
         {/* Global Actions */}
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
           {onOpenInvoices && (
-            <Button variant="secondary" onClick={onOpenInvoices} title="Invoices & Receivables" className="!px-3 lg:!px-4">
-              <svg className="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <button
+              type="button"
+              onClick={onOpenInvoices}
+              title="Invoices & Client Receivables"
+              className="group text-left px-2.5 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 transition flex items-center gap-2 shrink-0 cursor-pointer"
+            >
+              <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              <span className="hidden lg:inline">Invoices</span>
-            </Button>
+              <span className="text-xs font-semibold text-indigo-200">Invoices</span>
+              <span className="text-indigo-400 group-hover:translate-x-0.5 transition-transform text-xs">→</span>
+            </button>
           )}
-          <Button variant="secondary" onClick={() => setShowReportsModal(true)} title="View Reports" className="!px-3 lg:!px-4">
-            <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
-            <span className="hidden lg:inline">Reports</span>
+          <Button variant="secondary" size="sm" onClick={() => setShowReportsModal(true)} title="View Reports">
+            <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+            <span>Reports</span>
           </Button>
-          <Button variant="secondary" onClick={() => setShowSettingsModal(true)} title="Lock Books" className="!px-3 lg:!px-4">
-            <svg className="w-4 h-4 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-            <span className="hidden lg:inline">Lock Books</span>
+          <Button variant="secondary" size="sm" onClick={() => setShowSettingsModal(true)} title="Lock Books">
+            <svg className="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+            <span>Lock Books</span>
           </Button>
-          <Button variant="info"
+          <Button variant="primary"
+            size="sm"
             onClick={() => setShowUploadModal(true)}
             title="Upload Files"
-            className="flex items-center justify-center gap-2 whitespace-nowrap bg-blue-600 hover:bg-blue-500 hover:-translate-y-0.5 text-white lg:!px-6 !px-3 py-2.5 rounded-xl text-sm font-bold transition-all shadow-[0_0_20px_rgba(37,99,235,0.2)]"
+            className="flex items-center justify-center gap-1.5 shadow-sm"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-            <span className="hidden lg:inline">Upload Files</span>
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+            <span>Upload Files</span>
           </Button>
         </div>
       </header>

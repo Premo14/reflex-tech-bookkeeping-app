@@ -95,7 +95,7 @@ func findTxByDateAndAmount(dateStr string, amount float64) *models.BankTransacti
 	var txs []models.BankTransaction
 	db.DB.Where("deleted_at IS NULL").Find(&txs)
 	for i := range txs {
-		if txs[i].Date.Format("2006-01-02") == dateStr && math.Abs(txs[i].Amount-amount) < 0.01 {
+		if txs[i].Date.Format("2006-01-02") == dateStr && math.Abs(txs[i].Amount.Dollars()-amount) < 0.01 {
 			return &txs[i]
 		}
 	}
@@ -166,8 +166,8 @@ func main() {
 			Timestamp:        mustDate(dateStr),
 			Vendor:           vendor,
 			Description:      desc,
-			Amount:           amount,
-			TaxAmount:        tax,
+			Amount:           models.NewMoney(amount),
+			TaxAmount:        models.NewMoney(tax),
 			CurrencyCode:     "USD",
 			Tender:           tender,
 			ChartAccountID:   catID,
@@ -254,7 +254,7 @@ func main() {
 				CategoryAccountID: &supplies.ID,
 				Date:             mustDate(dStr),
 				Description:      fmt.Sprintf("APPLE STORE INSTALLMENT %d OF 3", idx+1),
-				Amount:           -150.00,
+				Amount: models.NewMoney(-15000),
 				TransactionType:  "DEBIT",
 				FITID:            fmt.Sprintf("SEED-INSTALLMENT-%d", idx+1),
 				IsManual:         true,

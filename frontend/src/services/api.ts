@@ -32,6 +32,7 @@ import type {
   CashFlowReport,
   VendorSpendReport,
   ARAgingReport,
+  TrialBalanceReport,
 } from "../types/models";
 
 const API_BASE = "/api";
@@ -147,7 +148,7 @@ export async function getTransactions(filters: TransactionFilters = {}): Promise
   return { transactions: data.transactions || [], total: data.total || 0 };
 }
 
-// Returns confirmed and suggested expense links separately for the detail drawer.
+// Returns confirmed and suggested expense links separately for the detail drawer, plus linked invoice for deposits.
 export async function getTransactionDetail(id: number): Promise<TransactionDetailResponse> {
   const res = await fetch(`${API_BASE}/transactions/${id}`);
   if (!res.ok) throw new Error(`Response status: ${res.status}`);
@@ -156,6 +157,8 @@ export async function getTransactionDetail(id: number): Promise<TransactionDetai
     transaction: data.transaction,
     confirmedExpenses: data.confirmedExpenses || [],
     suggestedExpenses: data.suggestedExpenses || [],
+    linkedInvoice: data.linkedInvoice || null,
+    suggestedInvoices: data.suggestedInvoices || [],
   };
 }
 
@@ -467,6 +470,28 @@ export async function getARAgingReport(params?: { asOfDate?: string }): Promise<
   if (!res.ok) throw new Error(`Response status: ${res.status}`);
   const data = await res.json();
   return data.report;
+}
+
+export async function getTrialBalance(params?: { startDate?: string; endDate?: string }): Promise<TrialBalanceReport> {
+  const query = new URLSearchParams();
+  if (params?.startDate) query.append("startDate", params.startDate);
+  if (params?.endDate)   query.append("endDate", params.endDate);
+
+  const res = await fetch(`${API_BASE}/reports/trial-balance?${query.toString()}`);
+  if (!res.ok) throw new Error(`Response status: ${res.status}`);
+  const data = await res.json();
+  return data.report;
+}
+
+export function getTrialBalanceExportUrl(params?: { startDate?: string; endDate?: string }): string {
+  const query = new URLSearchParams();
+  if (params?.startDate) query.append("startDate", params.startDate);
+  if (params?.endDate)   query.append("endDate", params.endDate);
+  return `${API_BASE}/reports/trial-balance/export?${query.toString()}`;
+}
+
+export function getSystemBackupDownloadUrl(): string {
+  return `${API_BASE}/system/backup/export`;
 }
 
 

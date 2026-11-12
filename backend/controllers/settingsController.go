@@ -206,7 +206,7 @@ func computeClosePreflight(dateStr string) (ClosePreflight, error) {
 	for i, t := range txs {
 		track(t.Date)
 		if i < 5 {
-			pf.UnlinkedTxSamples = append(pf.UnlinkedTxSamples, GroupItem{"transaction", t.ID, t.Description, t.Date, t.Amount, t.ReviewStatus})
+			pf.UnlinkedTxSamples = append(pf.UnlinkedTxSamples, GroupItem{"transaction", t.ID, t.Description, t.Date, t.Amount.Dollars(), t.ReviewStatus})
 		}
 	}
 
@@ -217,7 +217,7 @@ func computeClosePreflight(dateStr string) (ClosePreflight, error) {
 	for i, e := range exps {
 		track(e.Timestamp)
 		if i < 5 {
-			pf.UnlinkedExpSamples = append(pf.UnlinkedExpSamples, GroupItem{"expense", e.ID, e.Vendor + " " + e.Description, e.Timestamp, e.Amount, e.ReviewStatus})
+			pf.UnlinkedExpSamples = append(pf.UnlinkedExpSamples, GroupItem{"expense", e.ID, e.Vendor + " " + e.Description, e.Timestamp, e.Amount.Dollars(), e.ReviewStatus})
 		}
 	}
 

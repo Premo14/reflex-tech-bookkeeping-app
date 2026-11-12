@@ -14,12 +14,12 @@ type Invoice struct {
 	IssueDate         time.Time        `gorm:"not null" json:"issueDate"`
 	DueDate           time.Time        `gorm:"not null" json:"dueDate"`
 	Items             string           `gorm:"type:text" json:"items"` // JSON encoded line items [{description, quantity, unitPrice, amount}]
-	Subtotal          float64          `gorm:"type:decimal(12,2);not null;default:0" json:"subtotal"`
-	TaxRate           float64          `gorm:"type:decimal(5,2);default:0" json:"taxRate"`
-	TaxAmount         float64          `gorm:"type:decimal(12,2);default:0" json:"taxAmount"`
-	TotalAmount       float64          `gorm:"type:decimal(12,2);not null;default:0" json:"totalAmount"`
-	AmountPaid        float64          `gorm:"type:decimal(12,2);not null;default:0" json:"amountPaid"`
-	BalanceDue        float64          `gorm:"type:decimal(12,2);not null;default:0" json:"balanceDue"`
+	Subtotal          Money     `gorm:"type:decimal(12,2);not null;default:0" json:"subtotal"`
+	TaxRate           float64   `gorm:"type:decimal(5,2);default:0" json:"taxRate"`
+	TaxAmount         Money     `gorm:"type:decimal(12,2);default:0" json:"taxAmount"`
+	TotalAmount       Money     `gorm:"type:decimal(12,2);not null;default:0" json:"totalAmount"`
+	AmountPaid        Money     `gorm:"type:decimal(12,2);not null;default:0" json:"amountPaid"`
+	BalanceDue        Money     `gorm:"type:decimal(12,2);not null;default:0" json:"balanceDue"`
 	Notes             string           `gorm:"type:text" json:"notes"`
 	PaymentTerms      string           `gorm:"size:100;default:'Net 30'" json:"paymentTerms"`
 	Status            string           `gorm:"size:30;not null;default:'DRAFT'" json:"status"` // DRAFT, SENT, PARTIALLY_PAID, PAID, OVERDUE, VOID
@@ -36,5 +36,5 @@ type InvoiceLineItem struct {
 	Description string  `json:"description"`
 	Quantity    float64 `json:"quantity"`
 	UnitPrice   float64 `json:"unitPrice"`
-	Amount      float64 `json:"amount"`
+	Amount      Money `json:"amount"`
 }

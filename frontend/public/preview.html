@@ -1,0 +1,1239 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reflex Bookkeeping — Complete Single-View Architecture & Popups Preview</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            zinc: {
+              850: '#1b1b1f',
+              900: '#131316',
+              950: '#09090b',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #050505;
+      color: #f4f4f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 9999px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+    @keyframes slideInRight {
+      from { transform: translateX(100%); }
+      to { transform: translateX(0); }
+    }
+    .animate-slide-in {
+      animation: slideInRight 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.98); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    .animate-fade-in {
+      animation: fadeIn 0.15s ease-out forwards;
+    }
+  </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden select-none">
+
+  <!-- ======================================================== -->
+  <!-- TOP INTERACTIVE FEATURE NAVIGATOR & VERIFICATION BANNER -->
+  <!-- ======================================================== -->
+  <div class="bg-gradient-to-r from-zinc-900 via-indigo-950/80 to-zinc-900 border-b border-white/10 px-4 py-2 flex items-center justify-between text-xs shrink-0 z-30">
+    <div class="flex items-center gap-3">
+      <span class="inline-flex items-center px-2 py-0.5 rounded-full font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 text-[10px] uppercase tracking-wider">
+        Complete Feature Preview
+      </span>
+      <span class="text-zinc-300">
+        All existing features and popups mapped into the single-view layout. Click any popup to inspect:
+      </span>
+      <!-- Direct Popup Launch Buttons -->
+      <div class="flex items-center gap-1.5 ml-2">
+        <button onclick="openModal('reports')" class="px-2.5 py-1 bg-white/5 hover:bg-white/10 text-zinc-200 rounded border border-white/10 transition flex items-center gap-1">
+          <span>📊</span> Reports (6 Tabs)
+        </button>
+        <button onclick="openModal('coa')" class="px-2.5 py-1 bg-white/5 hover:bg-white/10 text-zinc-200 rounded border border-white/10 transition flex items-center gap-1">
+          <span>📑</span> Chart of Accounts
+        </button>
+        <button onclick="openModal('rules')" class="px-2.5 py-1 bg-white/5 hover:bg-white/10 text-zinc-200 rounded border border-white/10 transition flex items-center gap-1">
+          <span>⚡</span> Bank Rules
+        </button>
+        <button onclick="openModal('lock')" class="px-2.5 py-1 bg-white/5 hover:bg-white/10 text-zinc-200 rounded border border-white/10 transition flex items-center gap-1">
+          <span>🔒</span> Lock Books
+        </button>
+        <button onclick="openModal('upload')" class="px-2.5 py-1 bg-white/5 hover:bg-white/10 text-zinc-200 rounded border border-white/10 transition flex items-center gap-1">
+          <span>📥</span> Upload / Scanners
+        </button>
+        <button onclick="openModal('queue')" class="px-2.5 py-1 bg-white/5 hover:bg-white/10 text-zinc-200 rounded border border-white/10 transition flex items-center gap-1">
+          <span>🔍</span> Review Queue
+        </button>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-[11px] text-emerald-400 font-mono">● 0 Production Files Modified</span>
+      <button onclick="resetAllDemoState()" class="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded text-[11px] border border-white/10 transition">
+        Reset Demo
+      </button>
+    </div>
+  </div>
+
+  <!-- MAIN APP CONTAINER -->
+  <div class="flex-1 flex overflow-hidden relative">
+
+    <!-- ========================================== -->
+    <!-- SIDEBAR: ACCOUNTS & QUEUES                 -->
+    <!-- ========================================== -->
+    <aside class="w-64 bg-zinc-950 border-r border-white/10 flex flex-col shrink-0">
+      <div class="p-4 border-b border-white/10 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center font-black text-emerald-400 text-sm">
+            R
+          </div>
+          <div>
+            <span class="font-bold tracking-tight text-white text-sm block">Reflex Bookkeeping</span>
+            <span class="text-[10px] text-zinc-400 block -mt-0.5">Reflex Technologies LLC</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-3 space-y-4 flex-1 overflow-y-auto custom-scrollbar">
+        <!-- Date Filter Range -->
+        <div>
+          <label class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1.5">Accounting Window</label>
+          <div class="space-y-1.5">
+            <input type="text" value="2026-01-01 to 2026-12-31" readonly class="w-full bg-zinc-900 border border-white/10 rounded-md px-2.5 py-1 text-xs text-zinc-300 font-mono">
+            <div class="flex items-center justify-between text-[10px] text-zinc-500">
+              <span>Full Year 2026</span>
+              <button onclick="openModal('lock')" class="text-indigo-400 hover:underline">Lock 2025</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Accounts Hierarchy -->
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Financial Accounts</span>
+            <button onclick="openModal('coa')" class="text-[10px] text-indigo-400 hover:underline font-medium">Manage COA</button>
+          </div>
+          <div class="space-y-1 text-xs">
+            <button class="w-full text-left px-2.5 py-2 rounded-lg bg-white/5 border border-white/10 text-white font-medium flex items-center justify-between group">
+              <span class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span>Operating (1010)</span>
+              </span>
+              <span class="font-mono text-zinc-300 font-bold">$14,850.20</span>
+            </button>
+            <button class="w-full text-left px-2.5 py-2 rounded-lg hover:bg-white/5 text-zinc-400 hover:text-white transition flex items-center justify-between">
+              <span class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-blue-400"></span>
+                <span>Credit Card (2020)</span>
+              </span>
+              <span class="font-mono text-zinc-400">-$642.10</span>
+            </button>
+            <button class="w-full text-left px-2.5 py-2 rounded-lg hover:bg-white/5 text-zinc-400 hover:text-white transition flex items-center justify-between">
+              <span class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                <span>Petty Cash (1030)</span>
+              </span>
+              <span class="font-mono text-zinc-400">$200.00</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Review Queue Sidebar Card -->
+        <div class="pt-2 border-t border-white/5">
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Audit & Review Queue</span>
+            <button onclick="openModal('queue')" class="text-[10px] text-indigo-400 hover:underline">View All</button>
+          </div>
+          <div class="space-y-1">
+            <button onclick="openModal('queue')" class="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 hover:bg-amber-500/20 transition">
+              <span>Items Needing Review</span>
+              <span class="font-bold font-mono px-1.5 py-0.2 rounded bg-amber-500/20">3</span>
+            </button>
+            <button onclick="openModal('queue')" class="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md bg-zinc-900 border border-white/5 text-xs text-zinc-400 hover:text-zinc-200 transition">
+              <span>Excluded from Books</span>
+              <span class="font-bold font-mono">1</span>
+            </button>
+            <button onclick="openModal('queue')" class="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md bg-zinc-900 border border-white/5 text-xs text-zinc-400 hover:text-zinc-200 transition">
+              <span>Deleted Archive</span>
+              <span class="font-bold font-mono">0</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-3 border-t border-white/10 bg-zinc-900/50 flex items-center justify-between text-xs">
+        <div>
+          <div class="font-medium text-zinc-200">Reflex Tech LLC</div>
+          <div class="text-[10px] text-emerald-400 font-mono">Utica, NY • 100% Private</div>
+        </div>
+        <button onclick="openModal('rules')" class="p-1.5 rounded-md hover:bg-white/10 text-zinc-400 hover:text-white" title="Settings & Backup">
+          ⚙️
+        </button>
+      </div>
+    </aside>
+
+    <!-- ========================================== -->
+    <!-- MAIN WORKSPACE: HEADER & DUAL LEDGER GRID  -->
+    <!-- ========================================== -->
+    <main class="flex-1 flex flex-col min-w-0 bg-[#0a0a0a] overflow-hidden">
+      
+      <!-- HEADER METRICS BAR -->
+      <header class="h-16 border-b border-white/10 px-6 flex items-center justify-between bg-zinc-950/70 shrink-0">
+        <div class="flex items-center gap-6">
+          <div>
+            <div class="text-[10px] text-zinc-400 uppercase font-bold tracking-wider">Business Revenue</div>
+            <div class="text-base font-bold font-mono text-emerald-400">$24,650.00</div>
+          </div>
+          <div>
+            <div class="text-[10px] text-zinc-400 uppercase font-bold tracking-wider">Deductible Expenses</div>
+            <div class="text-base font-bold font-mono text-zinc-200">$9,820.40</div>
+          </div>
+          <div>
+            <div class="text-[10px] text-zinc-400 uppercase font-bold tracking-wider">Estimated Net Profit</div>
+            <div class="text-base font-bold font-mono text-blue-400">$14,829.60</div>
+          </div>
+
+          <!-- FIRST-CLASS INVOICES A/R PILL -->
+          <div class="h-8 w-px bg-white/10 mx-1"></div>
+          <button onclick="setLeftTab('invoices')" class="group text-left px-3.5 py-1.5 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 transition flex items-center gap-3">
+            <div>
+              <div class="text-[10px] text-indigo-300 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                <span>📄 Invoices Awaiting Payment</span>
+                <span class="w-2 h-2 rounded-full bg-indigo-400 animate-pulse"></span>
+              </div>
+              <div class="text-sm font-bold font-mono text-indigo-200">
+                $1,850.00 <span class="text-xs font-normal text-indigo-400/80 font-sans">(1 overdue)</span>
+              </div>
+            </div>
+            <span class="text-indigo-400 group-hover:translate-x-0.5 transition-transform text-xs">→</span>
+          </button>
+        </div>
+
+        <!-- ACTION BUTTONS -->
+        <div class="flex items-center gap-2">
+          <button onclick="openModal('reports')" class="px-3.5 py-1.5 rounded-lg bg-zinc-900 border border-white/10 hover:bg-zinc-800 text-xs font-medium text-zinc-200 transition flex items-center gap-1.5">
+            <span>📊</span> Reports & Tax Pack
+          </button>
+          <button onclick="openModal('upload')" class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs shadow-lg shadow-emerald-950/40 transition flex items-center gap-1.5">
+            <span>+</span> Upload / Scan Slips
+          </button>
+        </div>
+      </header>
+
+      <!-- SEARCH & FILTER TOOLBAR -->
+      <div class="h-11 border-b border-white/10 px-6 flex items-center justify-between bg-zinc-950/40 text-xs shrink-0">
+        <div class="flex items-center gap-3">
+          <!-- Universal Multi-Field Search Input -->
+          <div class="relative w-72">
+            <input type="text" placeholder="Search vendor, description, notes, FITID..." class="w-full bg-zinc-900/90 border border-white/10 rounded-lg pl-8 pr-3 py-1 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-indigo-500/50">
+            <span class="absolute left-2.5 top-1.5 text-zinc-500 text-xs">🔍</span>
+          </div>
+
+          <!-- Status Filter Pills -->
+          <div class="flex items-center gap-1 bg-zinc-900/80 p-0.5 rounded-lg border border-white/10">
+            <button class="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white/10 text-white">ALL (62)</button>
+            <button class="px-2.5 py-1 rounded-md text-[11px] font-medium text-zinc-400 hover:text-zinc-200">MATCHED ✓ (3)</button>
+            <button class="px-2.5 py-1 rounded-md text-[11px] font-medium text-amber-400 hover:text-amber-300">NEEDS ATTENTION (3)</button>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 text-zinc-400 text-[11px]">
+          <span>Showing 2026 Fiscal Year</span>
+          <span>•</span>
+          <button onclick="openModal('rules')" class="text-indigo-400 hover:underline">Apply Bank Rules</button>
+        </div>
+      </div>
+
+      <!-- DUAL-COLUMN LEDGER VIEW -->
+      <div class="flex-1 flex min-h-0 overflow-hidden divide-x divide-white/10">
+
+        <!-- ========================================== -->
+        <!-- LEFT COLUMN: SOURCE DOCUMENTS & PAPERWORK -->
+        <!-- ========================================== -->
+        <section class="w-1/2 flex flex-col min-w-0 bg-[#09090b]">
+          <!-- Column Header with Segmented Pill Toggle -->
+          <div class="h-11 border-b border-white/10 px-4 flex items-center justify-between shrink-0 bg-zinc-950/40">
+            <div class="flex items-center gap-1 bg-zinc-900/90 p-0.5 rounded-lg border border-white/10">
+              <button id="tab-receipts" onclick="setLeftTab('receipts')" class="px-3 py-1 rounded-md text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-sm transition">
+                Receipts & Slips <span class="ml-1 opacity-75">(14)</span>
+              </button>
+              <button id="tab-invoices" onclick="setLeftTab('invoices')" class="px-3 py-1 rounded-md text-xs font-medium text-zinc-400 hover:text-zinc-200 transition">
+                Client Invoices <span class="ml-1 opacity-75">(2)</span>
+              </button>
+            </div>
+            
+            <button id="btn-add-left" onclick="handleAddLeft()" class="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition flex items-center gap-1">
+              <span>+ Add Manual Slip</span>
+            </button>
+          </div>
+
+          <!-- Left Column Content: Receipts View -->
+          <div id="view-receipts" class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2">
+            
+            <!-- Receipt 1: Matched Home Depot -->
+            <div onclick="openDrawer('receipt-homedepot')" class="p-3 rounded-xl bg-zinc-900/80 hover:bg-zinc-850 border border-white/10 cursor-pointer transition flex items-center justify-between group">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-zinc-800 border border-white/10 flex items-center justify-center text-xs font-bold text-zinc-400 group-hover:border-emerald-500/40 transition">
+                  HD
+                </div>
+                <div>
+                  <div class="font-semibold text-zinc-100 text-sm">The Home Depot #1204</div>
+                  <div class="text-xs text-zinc-400 flex items-center gap-2">
+                    <span>2026-03-12</span>
+                    <span>•</span>
+                    <span class="text-zinc-300">Repairs & Maintenance</span>
+                  </div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="font-mono font-bold text-sm text-zinc-100">$42.50</div>
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  Matched to Bank ✓
+                </span>
+              </div>
+            </div>
+
+            <!-- Receipt 2: Walmart (Split Expense Example) -->
+            <div onclick="openDrawer('receipt-walmart')" class="p-3 rounded-xl bg-zinc-900/80 hover:bg-zinc-850 border border-amber-500/30 cursor-pointer transition flex items-center justify-between group">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-zinc-800 border border-white/10 flex items-center justify-center text-xs font-bold text-zinc-400 group-hover:border-amber-500/40 transition">
+                  WM
+                </div>
+                <div>
+                  <div class="font-semibold text-zinc-100 text-sm flex items-center gap-1.5">
+                    <span>Walmart Supercenter #3334</span>
+                    <span class="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">SPLIT</span>
+                  </div>
+                  <div class="text-xs text-zinc-400 flex items-center gap-2">
+                    <span>2026-03-05</span>
+                    <span>•</span>
+                    <span class="text-zinc-300">Supplies ($35.20) + Personal ($20.00)</span>
+                  </div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="font-mono font-bold text-sm text-zinc-100">$55.20</div>
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                  Split Allocated ✓
+                </span>
+              </div>
+            </div>
+
+            <!-- Receipt 3: Staples (Ready to Match) -->
+            <div onclick="openDrawer('receipt-staples')" class="p-3 rounded-xl bg-zinc-900/80 hover:bg-zinc-850 border border-white/10 cursor-pointer transition flex items-center justify-between group">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-zinc-800 border border-white/10 flex items-center justify-center text-xs font-bold text-zinc-400 group-hover:border-amber-500/40 transition">
+                  ST
+                </div>
+                <div>
+                  <div class="font-semibold text-zinc-100 text-sm">Staples #0412</div>
+                  <div class="text-xs text-zinc-400 flex items-center gap-2">
+                    <span>2026-03-08</span>
+                    <span>•</span>
+                    <span class="text-zinc-300">Office Supplies</span>
+                  </div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="font-mono font-bold text-sm text-zinc-100">$30.00</div>
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-zinc-800 text-zinc-400 border border-zinc-700">
+                  Ready to Match
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Left Column Content: Invoices View (Toggled) -->
+          <div id="view-invoices" class="hidden flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2">
+            <!-- Invoice 1: INV-2026-002 (Acme Corp - Awaiting Match) -->
+            <div id="inv-card-acme" onclick="openDrawer('deposit-acme')" class="p-3.5 rounded-xl bg-indigo-950/30 hover:bg-indigo-950/50 border border-indigo-500/40 cursor-pointer transition flex items-center justify-between group shadow-sm">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-xs font-bold text-indigo-300">
+                  📄
+                </div>
+                <div>
+                  <div class="flex items-center gap-2">
+                    <span class="font-bold text-white text-sm">INV-2026-002</span>
+                    <span class="text-xs text-zinc-300 font-medium">• Acme Corporation</span>
+                  </div>
+                  <div class="text-xs text-zinc-400 flex items-center gap-2 mt-0.5">
+                    <span>Issued: Mar 01, 2026</span>
+                    <span>•</span>
+                    <span class="text-amber-400 font-medium">Due Mar 15 (Overdue)</span>
+                  </div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="font-mono font-bold text-base text-white">$1,850.00</div>
+                <span id="inv-status-badge" class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse">
+                  Deposit Waiting to Match
+                </span>
+              </div>
+            </div>
+
+            <!-- Invoice 2: INV-2026-001 (TechStart - Already Paid & Matched) -->
+            <div class="p-3.5 rounded-xl bg-zinc-900/80 hover:bg-zinc-850 border border-white/10 cursor-pointer transition flex items-center justify-between group">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-zinc-800 border border-white/10 flex items-center justify-center text-xs font-bold text-zinc-400">
+                  📄
+                </div>
+                <div>
+                  <div class="flex items-center gap-2">
+                    <span class="font-bold text-zinc-200 text-sm">INV-2026-001</span>
+                    <span class="text-xs text-zinc-300 font-medium">• TechStart Labs</span>
+                  </div>
+                  <div class="text-xs text-zinc-400 flex items-center gap-2 mt-0.5">
+                    <span>Issued: Feb 10, 2026</span>
+                    <span>•</span>
+                    <span class="text-emerald-400">Paid in Full Mar 02</span>
+                  </div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="font-mono font-bold text-sm text-zinc-300">$3,200.00</div>
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  Paid & Reconciled ✓
+                </span>
+              </div>
+            </div>
+
+            <!-- Create Invoice Quick Action -->
+            <button onclick="openModal('create-invoice')" class="w-full p-3.5 border-2 border-dashed border-indigo-500/30 hover:border-indigo-500/60 rounded-xl text-center cursor-pointer transition text-xs font-semibold text-indigo-300 bg-indigo-500/5">
+              + Create New Client Invoice (Line items, tax, PDF export)
+            </button>
+          </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- RIGHT COLUMN: BANK TRANSACTIONS (ACTUALS) -->
+        <!-- ========================================== -->
+        <section class="w-1/2 flex flex-col min-w-0 bg-[#070709]">
+          <div class="h-11 border-b border-white/10 px-4 flex items-center justify-between shrink-0 bg-zinc-950/40">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold text-zinc-200 uppercase tracking-wider">Bank Activity</span>
+              <span class="text-[11px] text-zinc-500">(Checking 1010)</span>
+            </div>
+            
+            <button onclick="openModal('create-tx')" class="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition flex items-center gap-1">
+              <span>+ Add Manual Transaction</span>
+            </button>
+          </div>
+
+          <div class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2">
+
+            <!-- Transaction 1: DEPOSIT FROM ACME CORP -->
+            <div id="tx-card-acme" onclick="openDrawer('deposit-acme')" class="p-3 rounded-xl bg-zinc-900/90 hover:bg-zinc-850 border border-indigo-500/40 cursor-pointer transition flex items-center justify-between group shadow-sm">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center font-bold text-emerald-400 text-xs">
+                  +$
+                </div>
+                <div>
+                  <div class="font-semibold text-zinc-100 text-sm flex items-center gap-2">
+                    <span>WIRE TRANSFER ACME CORP</span>
+                    <span id="tx-acme-badge" class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                      📄 Matches INV-2026-002
+                    </span>
+                  </div>
+                  <div class="text-xs text-zinc-400 flex items-center gap-2 mt-0.5">
+                    <span>2026-03-14</span>
+                    <span>•</span>
+                    <span class="text-zinc-400 font-mono text-[11px]">FITID: 98124912</span>
+                  </div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="font-mono font-bold text-base text-emerald-400">+$1,850.00</div>
+                <span id="tx-acme-status" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                  Ready to Match
+                </span>
+              </div>
+            </div>
+
+            <!-- Transaction 2: Home Depot Debit -->
+            <div onclick="openDrawer('receipt-homedepot')" class="p-3 rounded-xl bg-zinc-900/80 hover:bg-zinc-850 border border-white/10 cursor-pointer transition flex items-center justify-between group">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-zinc-800 border border-white/10 flex items-center justify-center font-bold text-zinc-400 text-xs">
+                  -$
+                </div>
+                <div>
+                  <div class="font-semibold text-zinc-100 text-sm flex items-center gap-2">
+                    <span>HOME DEPOT #1204 UTICA NY</span>
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                      🧾 Receipt attached
+                    </span>
+                  </div>
+                  <div class="text-xs text-zinc-400 flex items-center gap-2 mt-0.5">
+                    <span>2026-03-12</span>
+                    <span>•</span>
+                    <span class="text-zinc-300">Repairs & Maintenance</span>
+                  </div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="font-mono font-bold text-sm text-zinc-200">-$42.50</div>
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  Matched ✓
+                </span>
+              </div>
+            </div>
+
+            <!-- Transaction 3: McDonald's (Minor debit) -->
+            <div onclick="openDrawer('debit-mcdonalds')" class="p-3 rounded-xl bg-zinc-900/80 hover:bg-zinc-850 border border-white/10 cursor-pointer transition flex items-center justify-between group">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-zinc-800 border border-white/10 flex items-center justify-center font-bold text-zinc-400 text-xs">
+                  -$
+                </div>
+                <div>
+                  <div class="font-semibold text-zinc-100 text-sm flex items-center gap-2">
+                    <span>MCDONALDS F3491 UTICA NY</span>
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-normal bg-zinc-800 text-zinc-400 border border-zinc-700">
+                      Card debit &lt;$25
+                    </span>
+                  </div>
+                  <div class="text-xs text-zinc-400 flex items-center gap-2 mt-0.5">
+                    <span>2026-03-10</span>
+                    <span>•</span>
+                    <span class="text-zinc-300">Meals & Entertainment</span>
+                  </div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="font-mono font-bold text-sm text-zinc-200">-$3.88</div>
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-800 text-zinc-300 border border-zinc-700">
+                  Confirmed ✓
+                </span>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+      </div>
+    </main>
+
+    <!-- ======================================================== -->
+    <!-- 1. UNIVERSAL RELATIONSHIP DETAIL DRAWER (SLIDE-OVER)    -->
+    <!-- ======================================================== -->
+    <div id="drawer-backdrop" onclick="closeDrawer()" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity"></div>
+    
+    <div id="drawer" class="hidden fixed inset-y-0 right-0 w-[740px] bg-zinc-950 border-l border-white/10 shadow-2xl z-50 flex flex-col animate-slide-in">
+      
+      <!-- Drawer Header -->
+      <div class="h-14 border-b border-white/10 px-6 flex items-center justify-between shrink-0 bg-zinc-900/70">
+        <div class="flex items-center gap-3">
+          <span id="drawer-badge" class="px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+            Deposit & Invoice Relationship
+          </span>
+          <span id="drawer-title" class="font-bold text-sm text-white">Wire Deposit: Acme Corp</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick="openModal('exclude')" class="px-2 py-1 rounded text-xs text-red-400 hover:bg-red-500/10 transition border border-red-500/20">
+            Exclude from Books
+          </button>
+          <button onclick="closeDrawer()" class="text-zinc-400 hover:text-white p-1 rounded-md hover:bg-white/10 transition text-sm">
+            ✕
+          </button>
+        </div>
+      </div>
+
+      <!-- Drawer Content -->
+      <div class="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
+
+        <!-- RELATIONSHIP STATUS BANNER -->
+        <div id="drawer-status-banner" class="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <span class="text-xl">🔗</span>
+            <div>
+              <div id="banner-headline" class="text-xs font-bold text-indigo-200">Suggested Match Found (100% Amount Match)</div>
+              <div id="banner-subtext" class="text-[11px] text-indigo-300/80">Incoming bank wire matches unpaid client invoice INV-2026-002</div>
+            </div>
+          </div>
+          <button id="btn-match-action" onclick="performMatch()" class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition shadow-lg shadow-emerald-950/40">
+            1-Click Match & Mark Paid
+          </button>
+        </div>
+
+        <!-- 2-COLUMN DETAILS BRIDGE -->
+        <div class="grid grid-cols-2 gap-4">
+          
+          <!-- LEFT CARD: THE SOURCE DOCUMENT (INVOICE OR RECEIPT) -->
+          <div class="bg-zinc-900/80 border border-white/10 rounded-xl p-4 space-y-3">
+            <div class="flex items-center justify-between pb-2 border-b border-white/5">
+              <span class="text-xs font-bold text-zinc-400 uppercase tracking-wider">Source Document</span>
+              <span id="card-doc-type" class="text-[10px] font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">Client Invoice</span>
+            </div>
+            
+            <div>
+              <div id="doc-title" class="font-bold text-white text-sm">INV-2026-002</div>
+              <div id="doc-client" class="text-xs text-zinc-300">Acme Corporation</div>
+              <div id="doc-email" class="text-[11px] text-zinc-500">billing@acme.org</div>
+            </div>
+
+            <div class="space-y-1.5 pt-2 border-t border-white/5 text-xs">
+              <div class="flex justify-between text-zinc-400">
+                <span>Issue Date:</span>
+                <span class="text-zinc-200">2026-03-01</span>
+              </div>
+              <div class="flex justify-between text-zinc-400">
+                <span>Payment Terms:</span>
+                <span class="text-zinc-200">Net 15</span>
+              </div>
+              <div class="flex justify-between text-zinc-400">
+                <span>Line Items:</span>
+                <span class="text-zinc-200">Web Development (37 hrs)</span>
+              </div>
+            </div>
+
+            <div class="pt-2 border-t border-white/10 flex justify-between items-center">
+              <span class="text-xs font-semibold text-zinc-400">Total Invoice Due:</span>
+              <span id="doc-amount" class="text-base font-bold font-mono text-white">$1,850.00</span>
+            </div>
+
+            <button onclick="openModal('split')" class="w-full text-center py-1.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-xs text-zinc-300 transition">
+              ✂️ Split Line Items / Categories
+            </button>
+          </div>
+
+          <!-- RIGHT CARD: THE BANK TRANSACTION -->
+          <div class="bg-zinc-900/80 border border-white/10 rounded-xl p-4 space-y-3">
+            <div class="flex items-center justify-between pb-2 border-b border-white/5">
+              <span class="text-xs font-bold text-zinc-400 uppercase tracking-wider">Bank Activity</span>
+              <span class="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">Checking 1010</span>
+            </div>
+
+            <div>
+              <div class="font-bold text-white text-sm">WIRE TRANSFER ACME CORP</div>
+              <div class="text-xs text-zinc-400">FITID: 98124912</div>
+            </div>
+
+            <div class="space-y-1.5 pt-2 border-t border-white/5 text-xs">
+              <div class="flex justify-between text-zinc-400">
+                <span>Settled Date:</span>
+                <span class="text-zinc-200">2026-03-14</span>
+              </div>
+              <div class="flex justify-between text-zinc-400">
+                <span>Revenue Account:</span>
+                <span class="text-emerald-400 font-medium">4010 Consulting Revenue</span>
+              </div>
+              <div class="flex justify-between text-zinc-400">
+                <span>Status:</span>
+                <span id="bank-status-text" class="text-amber-400 font-medium">Unlinked Deposit</span>
+              </div>
+            </div>
+
+            <div class="pt-2 border-t border-white/10 flex justify-between items-center">
+              <span class="text-xs font-semibold text-zinc-400">Deposit Amount:</span>
+              <span class="text-base font-bold font-mono text-emerald-400">+$1,850.00</span>
+            </div>
+
+            <button onclick="openModal('rules')" class="w-full text-center py-1.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-xs text-zinc-300 transition">
+              ⚡ Create Rule for this Merchant
+            </button>
+          </div>
+
+        </div>
+
+        <!-- RECEIPT IMAGE ZOOM / ROTATE SECTION (FOR PHYSICAL SLIPS) -->
+        <div id="drawer-image-section" class="border border-white/10 rounded-xl p-4 bg-zinc-900/50 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-zinc-300">Physical Receipt Inspection</span>
+            <div class="flex items-center gap-1.5">
+              <button class="px-2 py-0.5 rounded bg-zinc-800 text-xs hover:bg-zinc-700">Zoom In (+)</button>
+              <button class="px-2 py-0.5 rounded bg-zinc-800 text-xs hover:bg-zinc-700">Zoom Out (-)</button>
+              <button class="px-2 py-0.5 rounded bg-zinc-800 text-xs hover:bg-zinc-700">Rotate (R)</button>
+              <button class="px-2 py-0.5 rounded bg-zinc-800 text-xs hover:bg-zinc-700">Reset (0)</button>
+            </div>
+          </div>
+          <div class="h-36 bg-zinc-950 rounded-lg border border-white/5 flex items-center justify-center text-zinc-500 text-xs font-mono">
+            [High-Resolution Scanned Receipt Preview: seed_receipt_198.png]
+          </div>
+        </div>
+
+        <!-- AUDIT & CPA COMPLIANCE NOTE -->
+        <div class="p-3.5 rounded-xl bg-white/5 border border-white/10 text-xs text-zinc-400 flex items-center gap-3">
+          <span class="text-xl">🛡️</span>
+          <span>
+            <strong>ItemAuditLog:</strong> Full cryptographic audit trail. Matching this deposit records timestamps, auto-reconciles A/R, and balances the trial balance with integer-cent accuracy.
+          </span>
+        </div>
+
+      </div>
+
+      <!-- Drawer Footer -->
+      <div class="h-14 border-t border-white/10 px-6 flex items-center justify-between shrink-0 bg-zinc-900/50">
+        <button onclick="closeDrawer()" class="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200 transition">
+          Close Drawer (Esc)
+        </button>
+        <div class="flex items-center gap-2 text-xs text-zinc-400">
+          <button class="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">← Prev Item</button>
+          <button class="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">Next Item →</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ======================================================== -->
+  <!-- 2. REPORTS & TAX PACK MODAL (ALL 6 TABS)                 -->
+  <!-- ======================================================== -->
+  <div id="modal-reports" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-white/10 rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl animate-fade-in overflow-hidden">
+      <!-- Modal Header -->
+      <div class="h-14 border-b border-white/10 px-6 flex items-center justify-between shrink-0 bg-zinc-950/80">
+        <div class="flex items-center gap-3">
+          <span class="text-lg">📊</span>
+          <span class="font-bold text-sm text-white">Financial Reports & CPA Tax Pack</span>
+        </div>
+        <button onclick="closeModal('reports')" class="text-zinc-400 hover:text-white p-1 rounded-md text-sm">✕</button>
+      </div>
+
+      <!-- Tab Strip (All 6 Tabs) -->
+      <div class="flex items-center px-6 border-b border-white/10 bg-zinc-950/40 text-xs shrink-0 overflow-x-auto">
+        <button id="rtab-pl" onclick="setReportTab('pl')" class="px-4 py-3 font-semibold text-emerald-400 border-b-2 border-emerald-400">1. Profit & Loss</button>
+        <button id="rtab-cash" onclick="setReportTab('cash')" class="px-4 py-3 font-medium text-zinc-400 hover:text-zinc-200">2. Cash Flow Runway</button>
+        <button id="rtab-1099" onclick="setReportTab('1099')" class="px-4 py-3 font-medium text-zinc-400 hover:text-zinc-200">3. Vendor Spend & 1099</button>
+        <button id="rtab-ar" onclick="setReportTab('ar')" class="px-4 py-3 font-medium text-zinc-400 hover:text-zinc-200">4. A/R Aging (Invoices)</button>
+        <button id="rtab-schedc" onclick="setReportTab('schedc')" class="px-4 py-3 font-medium text-zinc-400 hover:text-zinc-200">5. Schedule C & 1040-ES</button>
+        <button id="rtab-trial" onclick="setReportTab('trial')" class="px-4 py-3 font-medium text-zinc-400 hover:text-zinc-200">6. GAAP Trial Balance</button>
+      </div>
+
+      <!-- Reports Body Content -->
+      <div class="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-4">
+        <!-- Tab 1: P&L -->
+        <div id="rcontent-pl" class="space-y-4">
+          <div class="grid grid-cols-3 gap-4">
+            <div class="p-4 rounded-xl bg-zinc-950 border border-white/10">
+              <span class="text-xs text-zinc-400 font-bold uppercase">Total Revenue</span>
+              <div class="text-xl font-bold font-mono text-emerald-400 mt-1">$24,650.00</div>
+            </div>
+            <div class="p-4 rounded-xl bg-zinc-950 border border-white/10">
+              <span class="text-xs text-zinc-400 font-bold uppercase">Operating Expenses</span>
+              <div class="text-xl font-bold font-mono text-zinc-200 mt-1">$9,820.40</div>
+            </div>
+            <div class="p-4 rounded-xl bg-zinc-950 border border-white/10">
+              <span class="text-xs text-zinc-400 font-bold uppercase">Net Profit Margin</span>
+              <div class="text-xl font-bold font-mono text-blue-400 mt-1">60.16%</div>
+            </div>
+          </div>
+          <div class="p-4 rounded-xl bg-zinc-950 border border-white/10 text-xs font-mono space-y-2">
+            <div class="flex justify-between border-b border-white/5 pb-1"><span>4010 Consulting Revenue</span><span class="text-emerald-400">$24,650.00</span></div>
+            <div class="flex justify-between border-b border-white/5 pb-1"><span>5050 Office Supplies</span><span>$1,420.10</span></div>
+            <div class="flex justify-between border-b border-white/5 pb-1"><span>5090 Meals & Entertainment</span><span>$842.30</span></div>
+            <div class="flex justify-between border-b border-white/5 pb-1"><span>5410 Travel & Lodging</span><span>$2,140.00</span></div>
+            <div class="flex justify-between font-bold text-white pt-1"><span>NET OPERATING INCOME</span><span class="text-blue-400">$14,829.60</span></div>
+          </div>
+        </div>
+
+        <!-- Tab 4: AR Aging -->
+        <div id="rcontent-ar" class="hidden space-y-3">
+          <div class="grid grid-cols-4 gap-3 text-xs">
+            <div class="p-3 rounded-lg bg-zinc-950 border border-white/10"><span>Current (0-30 days)</span><div class="text-base font-bold font-mono text-emerald-400">$0.00</div></div>
+            <div class="p-3 rounded-lg bg-zinc-950 border border-amber-500/20"><span>31-60 days</span><div class="text-base font-bold font-mono text-amber-400">$1,850.00</div></div>
+            <div class="p-3 rounded-lg bg-zinc-950 border border-white/10"><span>61-90 days</span><div class="text-base font-bold font-mono">$0.00</div></div>
+            <div class="p-3 rounded-lg bg-zinc-950 border border-white/10"><span>90+ days</span><div class="text-base font-bold font-mono">$0.00</div></div>
+          </div>
+          <div class="p-3 bg-zinc-950 rounded-xl border border-white/10 text-xs">
+            <table class="w-full text-left font-mono">
+              <thead class="text-zinc-500 border-b border-white/10 pb-2">
+                <tr><th>Client</th><th>Invoice</th><th>Due Date</th><th class="text-right">Balance Due</th></tr>
+              </thead>
+              <tbody class="divide-y divide-white/5">
+                <tr><td class="py-2">Acme Corporation</td><td>INV-2026-002</td><td>2026-03-15</td><td class="text-right font-bold text-amber-400">$1,850.00</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Tab 5: Sched C -->
+        <div id="rcontent-schedc" class="hidden space-y-3">
+          <div class="p-4 rounded-xl bg-zinc-950 border border-white/10 space-y-2">
+            <div class="flex justify-between items-center pb-2 border-b border-white/10">
+              <span class="text-sm font-bold text-white">IRS Schedule C Line Mappings (Lines 1–31)</span>
+              <button class="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold">1-Click CPA Tax Pack (.ZIP)</button>
+            </div>
+            <div class="text-xs text-zinc-400 space-y-1">
+              <div>• Form 1040-ES Estimated Q1 Tax Due: <strong class="text-white font-mono">$1,120.00</strong> (Due April 15)</div>
+              <div>• Schedule SE Self-Employment Tax: <strong class="text-white font-mono">$2,095.40</strong></div>
+              <div>• IRC § 162 Mileage Comparator: 1,420 business miles logged ($951.40 standard deduction)</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 6: Trial Balance -->
+        <div id="rcontent-trial" class="hidden space-y-3">
+          <div class="p-4 rounded-xl bg-zinc-950 border border-white/10 flex items-center justify-between">
+            <div>
+              <span class="text-xs font-bold text-emerald-400 uppercase tracking-wider">GAAP Mechanical Balance: VERIFIED ✓</span>
+              <div class="text-sm text-zinc-300">Total Debits: $34,470.40 ≡ Total Credits: $34,470.40 (Variance: $0.00)</div>
+            </div>
+            <button class="px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded border border-white/10 font-medium">Export Trial Balance CSV</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="h-14 border-t border-white/10 px-6 flex items-center justify-between shrink-0 bg-zinc-950/80">
+        <button onclick="closeModal('reports')" class="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200">Close</button>
+        <button class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold">Download Full CPA Tax Pack (.zip)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================== -->
+  <!-- 3. CHART OF ACCOUNTS MANAGER MODAL (COA)                 -->
+  <!-- ======================================================== -->
+  <div id="modal-coa" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-white/10 rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl animate-fade-in overflow-hidden">
+      <div class="h-14 border-b border-white/10 px-6 flex items-center justify-between shrink-0 bg-zinc-950">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">📑</span>
+          <span class="font-bold text-sm text-white">Chart of Accounts Management</span>
+        </div>
+        <button onclick="closeModal('coa')" class="text-zinc-400 hover:text-white p-1 rounded-md text-sm">✕</button>
+      </div>
+      <div class="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-4">
+        <div class="flex items-center justify-between">
+          <span class="text-xs text-zinc-400">Hierarchical GAAP accounts with relational guards for active rules & invoices</span>
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold">+ New Account</button>
+        </div>
+        <div class="space-y-2 text-xs font-mono">
+          <div class="p-3 bg-zinc-950 rounded-lg border border-white/5 flex items-center justify-between">
+            <span><strong>1010</strong> • Operating Checking Account (ASSET)</span>
+            <span class="text-emerald-400 font-bold">$14,850.20</span>
+          </div>
+          <div class="p-3 bg-zinc-950 rounded-lg border border-white/5 flex items-center justify-between">
+            <span><strong>2020</strong> • Business Credit Card (LIABILITY)</span>
+            <span class="text-zinc-400 font-bold">-$642.10</span>
+          </div>
+          <div class="p-3 bg-zinc-950 rounded-lg border border-white/5 flex items-center justify-between">
+            <span><strong>4010</strong> • Consulting Revenue (REVENUE)</span>
+            <span class="text-emerald-400 font-bold">$24,650.00</span>
+          </div>
+          <div class="p-3 bg-zinc-950 rounded-lg border border-white/5 flex items-center justify-between">
+            <span><strong>5050</strong> • Office Supplies & Software (EXPENSE)</span>
+            <span class="text-zinc-300 font-bold">$1,420.10</span>
+          </div>
+        </div>
+      </div>
+      <div class="h-14 border-t border-white/10 px-6 flex items-center justify-between shrink-0 bg-zinc-950">
+        <button onclick="closeModal('coa')" class="px-4 py-2 rounded-lg bg-zinc-800 text-xs text-zinc-200">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================== -->
+  <!-- 4. BANK AUTOMATION RULES & BACKUP MODAL                  -->
+  <!-- ======================================================== -->
+  <div id="modal-rules" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-white/10 rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl animate-fade-in overflow-hidden">
+      <div class="h-14 border-b border-white/10 px-6 flex items-center justify-between shrink-0 bg-zinc-950">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">⚡</span>
+          <span class="font-bold text-sm text-white">Bank Automation Rules & Private Data Sovereignty</span>
+        </div>
+        <button onclick="closeModal('rules')" class="text-zinc-400 hover:text-white p-1 rounded-md text-sm">✕</button>
+      </div>
+      <div class="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-4">
+        <!-- 1-Click Backup Card -->
+        <div class="p-4 rounded-xl bg-zinc-950 border border-emerald-500/30 flex items-center justify-between">
+          <div>
+            <div class="font-bold text-white text-xs">Local Data Sovereignty: 100% Private JSON Backup</div>
+            <div class="text-[11px] text-zinc-400">Export complete ledger, receipts, invoices, bank rules, and audit logs.</div>
+          </div>
+          <button class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">1-Click Full JSON Backup</button>
+        </div>
+
+        <!-- Bank Rules List -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-zinc-300">Active Automation Rules (3)</span>
+            <button class="text-xs text-indigo-400 font-bold hover:underline">+ Add Rule</button>
+          </div>
+          <div class="p-3 bg-zinc-950 rounded-lg border border-white/5 flex items-center justify-between text-xs font-mono">
+            <div>
+              <strong class="text-white">Rule 1: McDonald's Meals</strong>
+              <div class="text-zinc-400 text-[11px]">If description contains 'MCDONALDS' → Categorize as 5090 Meals</div>
+            </div>
+            <span class="text-emerald-400">ACTIVE ✓</span>
+          </div>
+          <div class="p-3 bg-zinc-950 rounded-lg border border-white/5 flex items-center justify-between text-xs font-mono">
+            <div>
+              <strong class="text-white">Rule 2: Home Depot Repairs</strong>
+              <div class="text-zinc-400 text-[11px]">If description contains 'HOME DEPOT' → Categorize as 5060 Repairs</div>
+            </div>
+            <span class="text-emerald-400">ACTIVE ✓</span>
+          </div>
+        </div>
+      </div>
+      <div class="h-14 border-t border-white/10 px-6 flex items-center justify-between shrink-0 bg-zinc-950">
+        <button onclick="closeModal('rules')" class="px-4 py-2 rounded-lg bg-zinc-800 text-xs text-zinc-200">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================== -->
+  <!-- 5. PERIOD LOCKING / CLOSED-PERIOD MODAL                  -->
+  <!-- ======================================================== -->
+  <div id="modal-lock" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-white/10 rounded-2xl w-full max-w-md shadow-2xl animate-fade-in p-6 space-y-4">
+      <div class="flex items-center gap-3">
+        <span class="text-2xl">🔒</span>
+        <div>
+          <h3 class="font-bold text-white text-sm">Accounting Period Management</h3>
+          <p class="text-xs text-zinc-400">Prevent historical book tampering after tax filing</p>
+        </div>
+      </div>
+      <div class="p-3.5 rounded-xl bg-zinc-950 border border-white/10 space-y-3">
+        <label class="text-xs font-semibold text-zinc-300 block">Closing Date (Books Locked Up To):</label>
+        <input type="date" value="2025-12-31" class="w-full bg-zinc-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-white">
+        <p class="text-[11px] text-zinc-400 leading-relaxed">
+          All transactions, expenses, splits, and invoices on or before this date are frozen to guarantee tax filing integrity.
+        </p>
+      </div>
+      <div class="flex justify-end gap-2">
+        <button onclick="closeModal('lock')" class="px-4 py-2 rounded-lg bg-zinc-800 text-xs text-zinc-200">Cancel</button>
+        <button onclick="closeModal('lock')" class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold">Lock Books</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================== -->
+  <!-- 6. UPLOAD & SAMBA SCANNER INGESTION MODAL                -->
+  <!-- ======================================================== -->
+  <div id="modal-upload" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-white/10 rounded-2xl w-full max-w-lg shadow-2xl animate-fade-in p-6 space-y-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <span class="text-xl">📥</span>
+          <span class="font-bold text-sm text-white">Upload Financial Documents</span>
+        </div>
+        <button onclick="closeModal('upload')" class="text-zinc-400 hover:text-white text-sm">✕</button>
+      </div>
+      <!-- Drag & Drop Zone -->
+      <div class="border-2 border-dashed border-white/15 hover:border-emerald-500/40 rounded-xl p-8 text-center cursor-pointer transition bg-zinc-950/50 space-y-2">
+        <div class="text-3xl">📁</div>
+        <div class="text-xs font-semibold text-zinc-200">Drag & Drop Bank Statements (.OFX, .QFX, .CSV) or Receipts (.PNG, .JPG, .PDF, .HEIC)</div>
+        <div class="text-[11px] text-zinc-500">Fast local OCR extraction with Ollama vision</div>
+      </div>
+      <!-- Samba Network Scanner Ingestion -->
+      <div class="p-3.5 bg-zinc-950 rounded-xl border border-white/10 flex items-center justify-between text-xs">
+        <div>
+          <span class="font-bold text-zinc-200 block">LAN Samba Scanner Inbox (`/mnt/inbox`)</span>
+          <span class="text-[11px] text-zinc-400">Hardware scanner auto-drop is active on port 445</span>
+        </div>
+        <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">LISTENING</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================== -->
+  <!-- 7. SPLIT EXPENSE MODAL (EXACT INTEGER-CENT ARITHMETIC)   -->
+  <!-- ======================================================== -->
+  <div id="modal-split" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-white/10 rounded-2xl w-full max-w-lg shadow-2xl animate-fade-in p-6 space-y-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">✂️</span>
+          <span class="font-bold text-sm text-white">Split Purchase / Co-Mingled Receipt</span>
+        </div>
+        <button onclick="closeModal('split')" class="text-zinc-400 hover:text-white text-sm">✕</button>
+      </div>
+      <div class="p-3 bg-zinc-950 rounded-xl border border-white/10 flex items-center justify-between text-xs">
+        <span>Receipt Total: <strong>Walmart #3334</strong></span>
+        <span class="font-mono font-bold text-sm text-white">$55.20</span>
+      </div>
+      <div class="space-y-2 text-xs">
+        <div class="p-2.5 rounded-lg bg-zinc-950 border border-white/5 flex items-center justify-between">
+          <span>Line 1: Office Supplies (5050)</span>
+          <span class="font-mono text-zinc-200">$35.20</span>
+        </div>
+        <div class="p-2.5 rounded-lg bg-zinc-950 border border-white/5 flex items-center justify-between">
+          <span>Line 2: Owner's Personal Draw (3110)</span>
+          <span class="font-mono text-zinc-200">$20.00</span>
+        </div>
+      </div>
+      <div class="flex justify-between items-center pt-2 text-xs font-mono text-emerald-400">
+        <span>Total Allocated: $55.20</span>
+        <span>Remaining: $0.00 (Balanced ✓)</span>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeModal('split')" class="px-4 py-2 rounded-lg bg-zinc-800 text-xs text-zinc-200">Cancel</button>
+        <button onclick="closeModal('split')" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">Save Split</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================== -->
+  <!-- 8. EXCLUDE ITEM MODAL (AUDIT COMPLIANT)                  -->
+  <!-- ======================================================== -->
+  <div id="modal-exclude" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-white/10 rounded-2xl w-full max-w-md shadow-2xl animate-fade-in p-6 space-y-4">
+      <div class="flex items-center gap-2.5">
+        <span class="text-xl">🛡️</span>
+        <span class="font-bold text-sm text-white">Exclude from Financial Books</span>
+      </div>
+      <p class="text-xs text-zinc-400">
+        Excluding removes this item from your Schedule C tax calculation and Trial Balance while preserving audit history.
+      </p>
+      <div class="space-y-2 text-xs">
+        <label class="block text-zinc-300 font-semibold">Exclusion Reason:</label>
+        <select class="w-full bg-zinc-950 border border-white/10 rounded-lg px-3 py-2 text-xs text-zinc-200">
+          <option>Personal Expense (Non-Deductible)</option>
+          <option>Duplicate Transaction / Statement Overlap</option>
+          <option>Transfer Between Internal Accounts</option>
+          <option>Other / Disputed Charge</option>
+        </select>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeModal('exclude')" class="px-4 py-2 rounded-lg bg-zinc-800 text-xs text-zinc-200">Cancel</button>
+        <button onclick="closeModal('exclude')" class="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold">Confirm Exclusion</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================== -->
+  <!-- 9. REVIEW QUEUE MODAL                                    -->
+  <!-- ======================================================== -->
+  <div id="modal-queue" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-white/10 rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl animate-fade-in overflow-hidden">
+      <div class="h-14 border-b border-white/10 px-6 flex items-center justify-between shrink-0 bg-zinc-950">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">🔍</span>
+          <span class="font-bold text-sm text-white">Audit & Review Queue Management</span>
+        </div>
+        <button onclick="closeModal('queue')" class="text-zinc-400 hover:text-white p-1 rounded-md text-sm">✕</button>
+      </div>
+      <div class="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-3">
+        <div class="p-3 bg-zinc-950 rounded-xl border border-white/10 flex items-center justify-between text-xs">
+          <div>
+            <div class="font-bold text-white">Staples #0412 ($30.00)</div>
+            <div class="text-[11px] text-zinc-400">Scanned receipt awaiting bank transaction match</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="closeModal('queue'); openDrawer('receipt-staples')" class="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs">Review in Drawer</button>
+            <button class="px-2 py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white text-xs">Dismiss</button>
+          </div>
+        </div>
+      </div>
+      <div class="h-14 border-t border-white/10 px-6 flex items-center justify-between shrink-0 bg-zinc-950">
+        <button onclick="closeModal('queue')" class="px-4 py-2 rounded-lg bg-zinc-800 text-xs text-zinc-200">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================== -->
+  <!-- 10. CREATE INVOICE FORM MODAL                            -->
+  <!-- ======================================================== -->
+  <div id="modal-create-invoice" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl animate-fade-in p-6 space-y-4">
+      <div class="flex items-center justify-between pb-2 border-b border-white/10">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">📄</span>
+          <span class="font-bold text-sm text-white">Create New Client Invoice</span>
+        </div>
+        <button onclick="closeModal('create-invoice')" class="text-zinc-400 hover:text-white text-sm">✕</button>
+      </div>
+      <div class="grid grid-cols-2 gap-3 text-xs">
+        <div>
+          <label class="text-zinc-400 block mb-1">Client Name</label>
+          <input type="text" placeholder="e.g. Acme Corporation" class="w-full bg-zinc-950 border border-white/10 rounded-lg px-3 py-2 text-white">
+        </div>
+        <div>
+          <label class="text-zinc-400 block mb-1">Client Email</label>
+          <input type="email" placeholder="billing@acme.org" class="w-full bg-zinc-950 border border-white/10 rounded-lg px-3 py-2 text-white">
+        </div>
+        <div>
+          <label class="text-zinc-400 block mb-1">Issue Date</label>
+          <input type="date" value="2026-03-15" class="w-full bg-zinc-950 border border-white/10 rounded-lg px-3 py-2 text-white">
+        </div>
+        <div>
+          <label class="text-zinc-400 block mb-1">Payment Terms</label>
+          <select class="w-full bg-zinc-950 border border-white/10 rounded-lg px-3 py-2 text-white">
+            <option>Due on Receipt</option>
+            <option selected>Net 15</option>
+            <option>Net 30</option>
+          </select>
+        </div>
+      </div>
+      <div class="p-3 bg-zinc-950 rounded-xl border border-white/10 space-y-2 text-xs">
+        <span class="font-bold text-zinc-300 block">Line Items</span>
+        <div class="flex gap-2">
+          <input type="text" value="Custom Software Development" class="flex-1 bg-zinc-900 border border-white/10 rounded px-2 py-1 text-white">
+          <input type="number" value="20" class="w-16 bg-zinc-900 border border-white/10 rounded px-2 py-1 text-white text-right">
+          <input type="number" value="100.00" class="w-24 bg-zinc-900 border border-white/10 rounded px-2 py-1 text-white text-right">
+          <span class="font-mono font-bold text-white self-center">$2,000.00</span>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeModal('create-invoice')" class="px-4 py-2 rounded-lg bg-zinc-800 text-xs text-zinc-200">Cancel</button>
+        <button onclick="closeModal('create-invoice')" class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold">Generate Invoice</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- INTERACTIVE JAVASCRIPT CONTROLLERS -->
+  <script>
+    // Tab Controller for Left Column
+    function setLeftTab(tab) {
+      const tabReceipts = document.getElementById('tab-receipts');
+      const tabInvoices = document.getElementById('tab-invoices');
+      const viewReceipts = document.getElementById('view-receipts');
+      const viewInvoices = document.getElementById('view-invoices');
+      const btnAddLeft = document.getElementById('btn-add-left');
+
+      if (tab === 'receipts') {
+        tabReceipts.className = "px-3 py-1 rounded-md text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-sm transition";
+        tabInvoices.className = "px-3 py-1 rounded-md text-xs font-medium text-zinc-400 hover:text-zinc-200 transition";
+        viewReceipts.classList.remove('hidden');
+        viewInvoices.classList.add('hidden');
+        btnAddLeft.innerHTML = "<span>+ Add Manual Slip</span>";
+        btnAddLeft.onclick = handleAddLeft;
+      } else {
+        tabInvoices.className = "px-3 py-1 rounded-md text-xs font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 shadow-sm transition";
+        tabReceipts.className = "px-3 py-1 rounded-md text-xs font-medium text-zinc-400 hover:text-zinc-200 transition";
+        viewInvoices.classList.remove('hidden');
+        viewReceipts.classList.add('hidden');
+        btnAddLeft.innerHTML = "<span>+ New Client Invoice</span>";
+        btnAddLeft.onclick = () => openModal('create-invoice');
+      }
+    }
+
+    function handleAddLeft() {
+      alert("Opens Create Expense Slip form (vendor, amount, date, category).");
+    }
+
+    // Modal Controller
+    function openModal(id) {
+      document.getElementById('modal-' + id).classList.remove('hidden');
+    }
+
+    function closeModal(id) {
+      document.getElementById('modal-' + id).classList.add('hidden');
+    }
+
+    // Reports Tabs Controller
+    function setReportTab(tabId) {
+      const tabs = ['pl', 'cash', '1099', 'ar', 'schedc', 'trial'];
+      tabs.forEach(t => {
+        const btn = document.getElementById('rtab-' + t);
+        const content = document.getElementById('rcontent-' + t);
+        if (t === tabId) {
+          if (btn) btn.className = "px-4 py-3 font-semibold text-emerald-400 border-b-2 border-emerald-400";
+          if (content) content.classList.remove('hidden');
+        } else {
+          if (btn) btn.className = "px-4 py-3 font-medium text-zinc-400 hover:text-zinc-200";
+          if (content) content.classList.add('hidden');
+        }
+      });
+    }
+
+    // Universal Drawer Controller
+    function openDrawer(scenario) {
+      document.getElementById('drawer-backdrop').classList.remove('hidden');
+      document.getElementById('drawer').classList.remove('hidden');
+    }
+
+    function closeDrawer() {
+      document.getElementById('drawer-backdrop').classList.add('hidden');
+      document.getElementById('drawer').classList.add('hidden');
+    }
+
+    // 1-Click Match & Reconcile Execution
+    function performMatch() {
+      const banner = document.getElementById('drawer-status-banner');
+      banner.className = "p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-500/30 flex items-center justify-between";
+      document.getElementById('banner-headline').textContent = "Matched & Reconciled ✓";
+      document.getElementById('banner-headline').className = "text-xs font-bold text-emerald-200";
+      document.getElementById('banner-subtext').textContent = "Bank deposit $1,850.00 is linked to Invoice INV-2026-002";
+      document.getElementById('banner-subtext').className = "text-[11px] text-emerald-300/80";
+      
+      const btn = document.getElementById('btn-match-action');
+      btn.textContent = "Unlink Pair";
+      btn.className = "px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold text-xs transition border border-white/10";
+      btn.onclick = resetAllDemoState;
+
+      document.getElementById('bank-status-text').textContent = "Matched to INV-2026-002 ✓";
+      document.getElementById('bank-status-text').className = "text-emerald-400 font-medium";
+
+      const txBadge = document.getElementById('tx-acme-badge');
+      txBadge.textContent = "📄 Linked: INV-2026-002 (Acme Corp)";
+      txBadge.className = "inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
+
+      const txStatus = document.getElementById('tx-acme-status');
+      txStatus.textContent = "Matched ✓";
+      txStatus.className = "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+
+      const invBadge = document.getElementById('inv-status-badge');
+      if (invBadge) {
+        invBadge.textContent = "Paid & Reconciled ✓";
+        invBadge.className = "inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+      }
+    }
+
+    function resetAllDemoState() {
+      const banner = document.getElementById('drawer-status-banner');
+      banner.className = "p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 flex items-center justify-between";
+      document.getElementById('banner-headline').textContent = "Suggested Match Found (100% Amount Match)";
+      document.getElementById('banner-headline').className = "text-xs font-bold text-indigo-200";
+      document.getElementById('banner-subtext').textContent = "Incoming bank wire matches unpaid client invoice INV-2026-002";
+      document.getElementById('banner-subtext').className = "text-[11px] text-indigo-300/80";
+
+      const btn = document.getElementById('btn-match-action');
+      btn.textContent = "1-Click Match & Mark Paid";
+      btn.className = "px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition shadow-lg shadow-emerald-950/40";
+      btn.onclick = performMatch;
+
+      document.getElementById('bank-status-text').textContent = "Unlinked Deposit";
+      document.getElementById('bank-status-text').className = "text-amber-400 font-medium";
+
+      const txBadge = document.getElementById('tx-acme-badge');
+      txBadge.textContent = "📄 Matches INV-2026-002";
+      txBadge.className = "inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30";
+
+      const txStatus = document.getElementById('tx-acme-status');
+      txStatus.textContent = "Ready to Match";
+      txStatus.className = "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20";
+
+      const invBadge = document.getElementById('inv-status-badge');
+      if (invBadge) {
+        invBadge.textContent = "Deposit Waiting to Match";
+        invBadge.className = "inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse";
+      }
+    }
+
+    // Keyboard Hotkey Support
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeDrawer();
+        const modals = ['reports', 'coa', 'rules', 'lock', 'upload', 'split', 'exclude', 'queue', 'create-invoice'];
+        modals.forEach(m => closeModal(m));
+      }
+    });
+  </script>
+</body>
+</html>

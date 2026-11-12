@@ -175,11 +175,13 @@ export interface CreateTransactionInput {
   notes?: string;              // optional notes
 }
 
-// Returned by GET /transactions/:id — separates confirmed from suggested expense links
+// Returned by GET /transactions/:id — separates confirmed from suggested expense links, plus linked invoice for deposits
 export interface TransactionDetailResponse {
   transaction: BankTransaction;
   confirmedExpenses: Expense[];
   suggestedExpenses: Expense[];
+  linkedInvoice?: Invoice | null;
+  suggestedInvoices?: Invoice[];
 }
 
 // Returned by GET /expenses/:id — separates confirmed from suggested transaction links
@@ -345,6 +347,14 @@ export interface ScheduleCIncomeLine {
   accounts: ScheduleCAccountDetail[];
 }
 
+export interface QuarterlyTaxDeadline {
+  quarter: string;
+  period: string;
+  dueDate: string;
+  amountDue: number;
+  isPast: boolean;
+}
+
 export interface ScheduleCReport {
   startDate: string;
   endDate: string;
@@ -366,6 +376,12 @@ export interface ScheduleCReport {
   uncategorizedIncomeAmount: number;
   uncategorizedTxCount: number;
   uncategorizedExpCount: number;
+  selfEmploymentTax?: number;
+  deductibleSelfEmploymentTax?: number;
+  estimatedIncomeTax?: number;
+  totalEstimatedTax?: number;
+  estimatedQuarterlyTax?: number;
+  quarterlyDeadlines?: QuarterlyTaxDeadline[];
 }
 
 export interface InvoiceLineItem {
@@ -473,6 +489,7 @@ export interface VendorSpendItem {
   primaryCategoryCode: string;
   primaryCategoryName: string;
   lastDate: string;
+  requires1099?: boolean;
 }
 
 export interface VendorSpendReport {
@@ -482,6 +499,8 @@ export interface VendorSpendReport {
   totalVendors: number;
   top5Percent: number;
   vendors: VendorSpendItem[];
+  contractorsOver600?: number;
+  total1099Spend?: number;
 }
 
 export interface ARAgingInvoiceItem {
@@ -520,4 +539,25 @@ export interface ARAgingReport {
   invoiceCount: number;
   buckets: ARAgingBucket[];
   clients: ARClientSummary[] | null;
+}
+
+export interface TrialBalanceAccountLine {
+  accountId: number;
+  accountCode: string;
+  accountName: string;
+  accountType: 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
+  grossDebit: number;
+  grossCredit: number;
+  netDebit: number;
+  netCredit: number;
+}
+
+export interface TrialBalanceReport {
+  startDate: string;
+  endDate: string;
+  accounts: TrialBalanceAccountLine[];
+  totalDebit: number;
+  totalCredit: number;
+  isBalanced: boolean;
+  varianceCents: number;
 }

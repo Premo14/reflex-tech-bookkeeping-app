@@ -7,6 +7,7 @@ import (
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/utils"
 	"fmt"
+	"sync"
 	"time"
 	"strconv"
 	"strings"
@@ -15,6 +16,52 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// ReconciliationTriggerResponse returns the status of the reconciliation run.
+type ReconciliationTriggerResponse struct {
+	Status      string `json:"status"`
+	RunStatus   string `json:"runStatus"`
+	PreviousRun string `json:"previousRun,omitempty"`
+}
+
+var (
+	reconciliationLastRun time.Time
+	reconciliationMutex   sync.Mutex
+	reconciliationRunning bool
+)
+
+// TriggerReconciliation runs the matching/reconciliation engine on demand.
+func TriggerReconciliation(c fiber.Ctx) error {
+	reconciliationMutex.Lock()
+	running := reconciliationRunning
+	reconciliationRunning = true
+	reconciliationMutex.Unlock()
+
+	if running {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"status": "success",
+			"runStatus": "running",
+			"message": "Reconciliation is already running. Please wait and try again.",
+		})
+	}
+
+	go func() {
+		utils.RunReconciliation()
+		reconciliationMutex.Lock()
+		reconciliationLastRun = time.Now()
+		reconciliationRunning = false
+		reconciliationMutex.Unlock()
+		BroadcastEvent("TRANSACTIONS_UPDATED", nil)
+		BroadcastEvent("EXPENSES_UPDATED", nil)
+	}()
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status":     "success",
+		"runStatus":  "started",
+		"message":    "Reconciliation has been queued.",
+		"previousRun": reconciliationLastRun.Format(time.RFC3339),
+	})
+}
 
 // GetFlaggedItems fetches all UNLINKED BankTransactions and all orphaned Expenses.
 //
@@ -102,7 +149,7 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 	}
 
 	// Guard: deposits
-	if txToLink.Amount > 0 {
+	if txToLink.Amount.Dollars() > 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot link an expense to a deposit/income transaction."})
 	}
 
@@ -136,12 +183,12 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 	}
 
 	if !req.Force {
-		txAmount := math.Abs(txToLink.Amount)
+		txAmount := math.Abs(txToLink.Amount.Dollars())
 
 		// Determine split orientation:
 		// - 1:N split: One transaction split across multiple expenses (txLinkCount > 0 or expense is smaller than tx)
 		// - N:1 split: Multiple transactions funding one expense (expLinkCount > 0 or tx is smaller than expense)
-		is1toN := txLinkCount > 0 || (expLinkCount == 0 && expenseToLink.Amount <= txAmount+0.01)
+		is1toN := txLinkCount > 0 || (expLinkCount == 0 && expenseToLink.Amount.Dollars() <= txAmount+0.01)
 
 		if is1toN {
 			// Guard: over-allocation of the transaction.
@@ -151,7 +198,7 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 				Where("ebt.bank_transaction_id = ? AND ebt.status = 'confirmed'", req.TransactionID).
 				Select("COALESCE(SUM(expenses.amount), 0)").Scan(&currentlyLinkedSum)
 
-			if currentlyLinkedSum+expenseToLink.Amount > txAmount+0.01 { // allow 1 cent floating point rounding
+			if currentlyLinkedSum+expenseToLink.Amount.Dollars() > txAmount+0.01 { // allow 1 cent floating point rounding
 				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 					"error":   "OVER_ALLOCATED",
 					"message": "This link would over-allocate the transaction. The transaction amount is less than the sum of the linked expenses.",
@@ -165,7 +212,7 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 				Where("ebt.expense_id = ? AND ebt.status = 'confirmed'", req.ExpenseID).
 				Select("COALESCE(SUM(ABS(bank_transactions.amount)), 0)").Scan(&currentlyLinkedTxSum)
 
-			if currentlyLinkedTxSum+txAmount > expenseToLink.Amount+0.01 { // allow 1 cent floating point rounding
+			if currentlyLinkedTxSum+txAmount > expenseToLink.Amount.Dollars()+0.01 { // allow 1 cent floating point rounding
 				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 					"error":   "OVER_ALLOCATED",
 					"message": "This link would over-allocate the expense. The expense amount is less than the sum of the linked bank transactions.",
@@ -600,7 +647,7 @@ func CreateAndLink(c fiber.Ctx) error {
 			if utils.IsCashTender(req.Tender) {
 				return errors.New("NO_CASH_LINKS")
 			}
-			if existingTx.Amount > 0 {
+			if existingTx.Amount.Dollars() > 0 {
 				return errors.New("NO_DEPOSIT_LINKS")
 			}
 
@@ -610,7 +657,7 @@ func CreateAndLink(c fiber.Ctx) error {
 				Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
 				Where("ebt.bank_transaction_id = ? AND ebt.status = 'confirmed'", req.TargetID).
 				Select("COALESCE(SUM(expenses.amount), 0)").Scan(&linkedSum)
-			if !req.Force && linkedSum+req.Amount > math.Abs(existingTx.Amount)+0.01 {
+			if !req.Force && linkedSum+req.Amount > math.Abs(existingTx.Amount.Dollars())+0.01 {
 				return errors.New("OVER_ALLOCATED")
 			}
 
@@ -618,7 +665,7 @@ func CreateAndLink(c fiber.Ctx) error {
 				Timestamp:            req.Timestamp,
 				Vendor:               req.Vendor,
 				Description:          req.Description,
-				Amount:               math.Abs(req.Amount),
+				Amount:               models.NewMoney(roundCents(math.Abs(req.Amount))),
 				Tender:               utils.NormalizeTender(req.Tender),
 				ChartAccountID:       req.ChartAccountID,
 				Notes:            req.Notes,
@@ -715,7 +762,7 @@ func CreateAndLink(c fiber.Ctx) error {
 			bankTx := models.BankTransaction{
 				Date:              req.Date,
 				Description:       req.Description,
-				Amount:            txAmt,
+				Amount:            models.NewMoney(roundCents(txAmt)),
 				TransactionType:   txType,
 				ChartAccountID:    req.ChartAccountID,
 				CategoryAccountID: effectiveCatID,
@@ -733,7 +780,7 @@ func CreateAndLink(c fiber.Ctx) error {
 				Where("ebt.expense_id = ? AND ebt.status = 'confirmed'", existingExp.ID).
 				Select("COALESCE(SUM(ABS(bank_transactions.amount)), 0)").Scan(&linkedTxSum)
 
-			if !req.Force && (linkedTxSum + math.Abs(bankTx.Amount)) > existingExp.Amount+0.01 {
+			if !req.Force && (linkedTxSum + math.Abs(bankTx.Amount.Dollars())) > existingExp.Amount.Dollars()+0.01 {
 				return errors.New("OVER_ALLOCATED_EXPENSE")
 			}
 

@@ -336,18 +336,18 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
       onClose={onClose} 
       title={<div className="flex items-center gap-2"><svg className="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>Chart of Accounts</div>}
       maxWidth="4xl"
-      bodyClassName="p-4 md:p-6 overflow-y-auto md:overflow-hidden flex-1 min-h-0 flex flex-col"
+      bodyClassName="p-3.5 sm:p-4 md:p-5 overflow-y-auto md:overflow-hidden flex-1 min-h-0 flex flex-col"
     >
 
-        <div className="flex-1 min-h-0 flex flex-col md:flex-row gap-8 overflow-hidden">
+        <div className="flex-1 min-h-0 flex flex-col md:flex-row gap-4 md:gap-5 overflow-hidden">
           
           {/* LEFT: List of Accounts */}
-          <div className={`flex-1 overflow-y-auto pr-3 space-y-6 custom-scrollbar min-h-0 max-h-[calc(90vh-140px)] ${(isCreating || editingId) ? 'hidden md:block' : 'block'}`}>
+          <div className={`flex-1 overflow-y-auto pr-3 space-y-4 custom-scrollbar min-h-0 max-h-[calc(90vh-140px)] ${(isCreating || editingId) ? 'hidden md:block' : 'block'}`}>
             <div className="flex justify-between items-center">
-              <h3 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider">Existing Accounts</h3>
+              <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Existing Accounts</h3>
               <button 
                 onClick={handleCreateNew}
-                className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 bg-emerald-500/10 px-2.5 py-1 rounded-md transition-colors border border-emerald-500/20"
+                className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded-md transition-colors border border-emerald-500/20"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
                 New Account
@@ -361,16 +361,16 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                 placeholder="Search accounts by name or code..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-8 pr-7 py-2 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-8 pr-7 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
               />
-              <svg className="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery("")}
-                  className="text-zinc-500 hover:text-white absolute right-2.5 top-2 text-xs p-0.5"
+                  className="text-zinc-500 hover:text-white absolute right-2.5 top-1.5 text-xs p-0.5"
                 >
                   ✕
                 </button>
@@ -378,7 +378,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
             </div>
 
             {error && !isCreating && !editingId && (
-              <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-sm">
+              <div className="p-2.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-xs">
                 {error}
               </div>
             )}
@@ -393,25 +393,25 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
               const meta = TYPE_METADATA[type] || { label: type, desc: "" };
               
               return (
-                <div key={type} className="space-y-2">
-                  <div className="border-b border-zinc-800 pb-1.5 flex items-baseline justify-between gap-2">
+                <div key={type} className="space-y-1.5">
+                  <div className="border-b border-zinc-800 pb-1 flex items-baseline justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <h4 className="text-xs font-bold text-zinc-300 uppercase tracking-wider">{meta.label}</h4>
+                      <h4 className="text-[11px] font-bold text-zinc-300 uppercase tracking-wider">{meta.label}</h4>
                       <span className="text-[10px] text-zinc-400 bg-white/5 border border-white/5 px-1.5 py-0.2 rounded font-mono font-normal">
                         {typeAccounts.length}
                       </span>
                     </div>
-                    <span className="text-[11px] text-zinc-400 font-normal truncate">{meta.desc}</span>
+                    <span className="text-[10px] text-zinc-500 font-normal truncate">{meta.desc}</span>
                   </div>
-                  <div className="space-y-1.5">
+                  <div className="space-y-1">
                     {typeAccounts.sort((a,b) => a.code.localeCompare(b.code)).map(acc => {
                       const accSubClass = getSubClassForAccount(acc.type, acc.code);
                       return (
-                        <div key={acc.id} className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${editingId === acc.id ? 'bg-zinc-800 border-emerald-500/50' : 'bg-zinc-950 border-zinc-800/50 hover:border-zinc-700'}`}>
+                        <div key={acc.id} className={`flex items-center justify-between p-2 sm:p-2.5 rounded-lg border transition-colors ${editingId === acc.id ? 'bg-zinc-800 border-emerald-500/50' : 'bg-zinc-950 border-zinc-800/50 hover:border-zinc-700'}`}>
                           <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-sm font-mono text-emerald-400 font-medium">{acc.code}</span>
-                              <span className="text-sm font-semibold text-zinc-200 truncate">{acc.name}</span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs font-mono text-emerald-400 font-semibold">{acc.code}</span>
+                              <span className="text-xs font-semibold text-zinc-200 truncate">{acc.name}</span>
                               {accSubClass && (
                                 <span className="text-[10px] bg-zinc-800/90 text-zinc-300 border border-zinc-700/60 px-1.5 py-0.2 rounded font-medium truncate max-w-35" title={accSubClass.description}>
                                   {accSubClass.name}
@@ -441,25 +441,25 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                                 </span>
                               )}
                             </div>
-                            <div className="text-xs text-zinc-400 truncate mt-0.5">
+                            <div className="text-[11px] text-zinc-400 truncate mt-0.5">
                               {acc.description ? (
                                 <span>{acc.description}</span>
                               ) : (
-                                <span className="text-zinc-500 italic text-[11px]">No description</span>
+                                <span className="text-zinc-500 italic text-[10px]">No description</span>
                               )}
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 ml-4 shrink-0">
+                          <div className="flex items-center gap-1 ml-3 shrink-0">
                             <button onClick={() => handleEdit(acc)} className="text-zinc-400 hover:text-white p-1 transition-colors" title="Edit">
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                             </button>
                             {acc.isDefault ? (
                               <span className="text-zinc-600 p-1 cursor-not-allowed" title="Default accounts cannot be deleted (toggle Active to hide)">
-                                <svg className="w-4 h-4 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                <svg className="w-3.5 h-3.5 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                               </span>
                             ) : (
                               <button onClick={() => handleDelete(acc.id, acc.code)} className="text-zinc-400 hover:text-red-400 p-1 transition-colors" title="Delete">
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                               </button>
                             )}
                           </div>
@@ -475,7 +475,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
           {/* RIGHT: Edit/Create Form */}
           <div className={`md:w-84 shrink-0 flex flex-col justify-center my-auto max-h-[calc(90vh-140px)] min-w-0 max-w-full ${(isCreating || editingId) ? 'block flex-1' : 'hidden md:flex'}`}>
             {(isCreating || editingId) ? (
-              <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 shadow-xl flex flex-col max-h-full overflow-hidden min-w-0">
+              <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 shadow-xl flex flex-col max-h-full overflow-hidden min-w-0">
                 <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-800/80 shrink-0">
                   <div className="flex items-center gap-2">
                     <button 
@@ -485,8 +485,8 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                     >
                       ← Back
                     </button>
-                    <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                      <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                    <h3 className="text-xs font-semibold text-white flex items-center gap-1.5 uppercase tracking-wider">
+                      <svg className="w-3.5 h-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                       {isCreating ? "Create Account" : isEditingDefault ? "Edit Default Account" : "Edit Custom Account"}
                     </h3>
                   </div>
@@ -498,7 +498,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                   </div>
                 )}
 
-                <div className="space-y-2.5 overflow-y-auto overflow-x-hidden pr-1.5 custom-scrollbar flex-1 min-h-0 min-w-0">
+                <div className="space-y-2 overflow-y-auto overflow-x-hidden pr-1 custom-scrollbar flex-1 min-h-0 min-w-0">
                   <div>
                     <div className="flex items-center justify-between mb-0.5">
                       <label className={labelCls}>Type</label>
@@ -548,7 +548,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                       </span>
                     </div>
                     <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-950 overflow-hidden focus-within:border-emerald-500 transition-colors">
-                      <div className="bg-zinc-900 px-3 py-1.5 text-sm font-mono font-bold text-emerald-400 border-r border-zinc-800 select-none flex items-center gap-1 shrink-0" title={`Fixed 2-digit prefix for ${currentSubClass.name}`}>
+                      <div className="bg-zinc-900 px-2.5 py-1 text-xs font-mono font-bold text-emerald-400 border-r border-zinc-800 select-none flex items-center gap-1 shrink-0" title={`Fixed 2-digit prefix for ${currentSubClass.name}`}>
                         <span>{currentPrefix}</span>
                       </div>
                       <input 
@@ -556,7 +556,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                         inputMode="numeric"
                         pattern="[0-9]*"
                         maxLength={2}
-                        className="w-full bg-transparent px-3 py-1.5 text-sm font-mono text-white placeholder-zinc-600 focus:outline-none" 
+                        className="w-full bg-transparent px-2.5 py-1 text-xs font-mono text-white placeholder-zinc-600 focus:outline-none" 
                         placeholder="e.g. 10" 
                         value={suffixCode} 
                         onChange={handleSuffixChange} 
@@ -611,7 +611,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                         </option>
                       ))}
                     </Select>
-                    <p className="text-[10px] text-zinc-500 mt-1">
+                    <p className="text-[10px] text-zinc-500 mt-0.5">
                       Links this account directly to Form 1040 Schedule C for 1-click tax prep & export.
                     </p>
                   </div>
@@ -619,7 +619,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                   <div>
                     <label className={labelCls}>Description (Optional)</label>
                     <textarea 
-                      className={`${inputCls} resize-none h-14`} 
+                      className={`${inputCls} resize-none h-12`} 
                       placeholder="e.g. Operating checking account or notes"
                       value={formData.description || ""} 
                       onChange={e => setFormData({ ...formData, description: e.target.value })} 
@@ -628,11 +628,11 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
 
                   {!isCreating && (
                     <div 
-                      className="flex items-center gap-2.5 pt-0.5 cursor-pointer group w-fit"
+                      className="flex items-center gap-2 pt-0.5 cursor-pointer group w-fit"
                       onClick={() => setFormData({ ...formData, active: !formData.active })}
                     >
-                      <div className={`w-4 h-4 rounded-md flex items-center justify-center border transition-all duration-200 ${formData.active ? 'bg-emerald-500 border-emerald-500 text-black shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 border-white/10 text-transparent group-hover:border-white/20'}`}>
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
+                      <div className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition-all duration-200 ${formData.active ? 'bg-emerald-500 border-emerald-500 text-black shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 border-white/10 text-transparent group-hover:border-white/20'}`}>
+                        <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
                       </div>
                       <span className="text-xs font-medium text-zinc-300 group-hover:text-white transition-colors select-none">Account is Active</span>
                     </div>
@@ -640,15 +640,18 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                 </div>
 
                 {/* Sticky Pinned Buttons */}
-                <div className="mt-3 pt-3 border-t border-zinc-800 flex gap-2.5 shrink-0 bg-zinc-950">
-                  <Button variant="secondary" onClick={handleCancel} className="flex-1 py-1.5 text-xs">Cancel</Button>
-                  <button 
+                <div className="mt-2.5 pt-2.5 border-t border-zinc-800 flex gap-2 shrink-0 bg-zinc-950">
+                  <Button variant="secondary" size="sm" onClick={handleCancel} className="flex-1">Cancel</Button>
+                  <Button 
+                    variant="primary" 
+                    size="sm"
                     onClick={handleSave} 
                     disabled={isSaving} 
-                    className="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50"
+                    isLoading={isSaving}
+                    className="flex-1"
                   >
-                    {isSaving ? 'Saving…' : 'Save'}
-                  </button>
+                    Save
+                  </Button>
                 </div>
               </div>
             ) : (
