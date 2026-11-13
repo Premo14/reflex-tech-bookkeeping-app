@@ -174,7 +174,13 @@ export default function InvoiceList({
                   {inv.paymentTerms && (
                     <>
                       <span>•</span>
-                      <span className="text-zinc-500">{inv.paymentTerms}</span>
+                      <span 
+                        className="text-zinc-500 cursor-help underline decoration-dotted decoration-zinc-600 hover:text-zinc-300 transition-colors" 
+                        title={`Payment terms: ${inv.paymentTerms} (${inv.paymentTerms === 'Net 30' ? 'Full balance due within 30 days of invoice date' : inv.paymentTerms === 'Net 15' ? 'Due within 15 days' : inv.paymentTerms === 'Net 60' ? 'Due within 60 days' : 'Due upon invoice credit terms'})`}
+                        data-tooltip={`Payment terms: ${inv.paymentTerms} (${inv.paymentTerms === 'Net 30' ? 'Due in 30 days' : 'Credit terms'})`}
+                      >
+                        {inv.paymentTerms}
+                      </span>
                     </>
                   )}
                 </div>

@@ -1130,7 +1130,13 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
             </div>
             <div>
               <span className="text-zinc-500 block text-[10px] uppercase font-bold">Terms</span>
-              <span className="text-zinc-200 font-medium">{invoice.paymentTerms || "Net 30"}</span>
+              <span 
+                className="text-zinc-200 font-medium cursor-help underline decoration-dotted decoration-zinc-600 hover:text-white transition-colors"
+                title={invoice.paymentTerms === 'Net 30' ? 'Net 30: Full invoice balance is due within 30 days of the issue date' : `Payment terms: ${invoice.paymentTerms || 'Net 30'}`}
+                data-tooltip={invoice.paymentTerms === 'Net 30' ? 'Net 30: Due within 30 days of issue' : `Payment terms: ${invoice.paymentTerms || 'Net 30'}`}
+              >
+                {invoice.paymentTerms || "Net 30"}
+              </span>
             </div>
           </div>
 

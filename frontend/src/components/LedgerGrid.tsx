@@ -556,36 +556,40 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
         <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-2 gap-px bg-white/5 relative">
           {/* SOURCE DOCUMENTS COLUMN (RECEIPTS & CLIENT INVOICES) */}
           <div className={`flex-col bg-[#0a0a0a] min-h-0 ${mobileTab === 'expenses' || mobileTab === 'invoices' ? 'flex' : 'hidden lg:flex'}`}>
-            <div className="px-3 sm:px-5 py-2.5 flex justify-between items-center gap-2 bg-[#121212] border-b border-white/5 shrink-0 min-w-0 overflow-hidden">
+            <div className="px-2.5 sm:px-4 py-2 flex justify-between items-center gap-2 bg-[#121212] border-b border-white/5 shrink-0 min-w-0">
               {/* Mobile / Tablet Header Label */}
               <div className="lg:hidden flex items-center gap-2 font-bold text-xs text-white shrink-0 min-w-0">
                 {(mobileTab === 'invoices' || sourceDocTab === "invoices") ? (
                   <>
                     <svg className="w-3.5 h-3.5 text-indigo-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                    <span className="truncate">Client Invoices ({invoices.length})</span>
+                    <span className="truncate">Invoices ({invoices.length})</span>
                   </>
                 ) : (
                   <>
                     <svg className="w-3.5 h-3.5 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                    <span className="truncate">Receipts & Slips ({expenses.length})</span>
+                    <span className="truncate">Receipts ({expenses.length})</span>
                   </>
                 )}
               </div>
 
-              {/* Desktop Segmented Tab Switcher */}
+              {/* Desktop Dynamic Segmented Tab Switcher (Collapses to icons on narrower columns, expands to text on larger screens) */}
               <div className="hidden lg:flex items-center gap-1 bg-zinc-950/80 p-0.5 rounded-lg border border-white/10 shrink-0">
                 <button
                   type="button"
                   onClick={() => { setSourceDocTab("receipts"); setMobileTab("expenses"); }}
-                  className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
+                  data-tooltip="Receipts & Expense Slips"
+                  title="Receipts & Expense Slips"
+                  aria-label="Receipts & Expense Slips"
+                  className={`px-2 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 cursor-pointer ${
                     (mobileTab === 'invoices' ? false : sourceDocTab === "receipts")
                       ? "bg-zinc-800 text-white shadow-sm border border-white/10"
                       : "text-zinc-400 hover:text-zinc-200"
                   }`}
                 >
                   <svg className="w-3.5 h-3.5 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                  <span>Receipts & Slips</span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/10 text-zinc-300">
+                  <span className="hidden 2xl:inline">Receipts & Slips</span>
+                  <span className="hidden xl:inline 2xl:hidden">Receipts</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/10 text-zinc-300 font-mono">
                     {expenses.length}
                   </span>
                   {isExpLoading && <LoadingSpinner size="xs" color="text-emerald-400" className="ml-0.5" />}
@@ -593,15 +597,19 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
                 <button
                   type="button"
                   onClick={() => { setSourceDocTab("invoices"); setMobileTab("invoices"); }}
-                  className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
+                  data-tooltip="Client Invoices & Receivables"
+                  title="Client Invoices & Receivables"
+                  aria-label="Client Invoices & Receivables"
+                  className={`px-2 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 cursor-pointer ${
                     (mobileTab === 'invoices' || sourceDocTab === "invoices")
                       ? "bg-zinc-800 text-white shadow-sm border border-white/10"
                       : "text-zinc-400 hover:text-zinc-200"
                   }`}
                 >
                   <svg className="w-3.5 h-3.5 text-indigo-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                  <span>Client Invoices</span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/10 text-zinc-300">
+                  <span className="hidden 2xl:inline">Client Invoices</span>
+                  <span className="hidden xl:inline 2xl:hidden">Invoices</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/10 text-zinc-300 font-mono">
                     {invoices.length}
                   </span>
                   {isInvLoading && <LoadingSpinner size="xs" color="text-indigo-400" className="ml-0.5" />}
@@ -628,7 +636,7 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
                     </Select>
                   </div>
                   {onOpenInvoices && (
-                    <Button variant="secondary" onClick={onOpenInvoices} title="Create Client Invoice" className="p-1.5! shrink-0" size="sm">
+                    <Button variant="secondary" onClick={onOpenInvoices} title="Create Client Invoice (+)" className="p-1.5! shrink-0" size="sm">
                       <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
                     </Button>
                   )}
@@ -652,8 +660,8 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
                       <option value="OVER_ALLOCATED">Over-Allocated</option>
                     </Select>
                   </div>
-                  <Button variant="secondary" onClick={handleOpenAddExpense} title="Add Expense" className="p-1.5! shrink-0" size="sm">
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
+                  <Button variant="secondary" onClick={handleOpenAddExpense} title="Add Manual Expense (+)" className="p-1.5! shrink-0" size="sm">
+                    <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
                   </Button>
                 </div>
               )}
@@ -665,7 +673,7 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
                 isInvLoading && invoices.length === 0 ? (
                   <div className="py-16 flex flex-col items-center justify-center space-y-3">
                     <LoadingSpinner size="lg" color="text-indigo-500" />
-                    <span className="text-xs text-zinc-400">Loading client invoices…</span>
+                    <span className="text-xs text-zinc-400">Loading invoices…</span>
                   </div>
                 ) : (
                   <div className={isInvLoading ? "opacity-60 transition-opacity" : "transition-opacity"}>

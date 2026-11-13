@@ -611,7 +611,7 @@ export default function InvoicingModal({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
               <div>
                 <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider block mb-1">
                   Invoice Number
@@ -625,12 +625,61 @@ export default function InvoicingModal({
 
               <div>
                 <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider block mb-1">
+                  Payment Terms
+                </label>
+                <Select
+                  value={paymentTerms}
+                  onChange={(e) => {
+                    const terms = e.target.value;
+                    setPaymentTerms(terms);
+                    if (issueDate) {
+                      const base = new Date(issueDate);
+                      if (!isNaN(base.getTime())) {
+                        let days = 30;
+                        if (terms === "Due Upon Receipt") days = 0;
+                        else if (terms === "Net 15") days = 15;
+                        else if (terms === "Net 30") days = 30;
+                        else if (terms === "Net 60") days = 60;
+                        else if (terms === "Net 90") days = 90;
+                        const due = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+                        setDueDate(due.toISOString().split("T")[0]);
+                      }
+                    }
+                  }}
+                  className="w-full text-xs"
+                >
+                  <option value="Net 30">Net 30 (Due in 30 days)</option>
+                  <option value="Due Upon Receipt">Due Upon Receipt (Immediate)</option>
+                  <option value="Net 15">Net 15 (Due in 15 days)</option>
+                  <option value="Net 60">Net 60 (Due in 60 days)</option>
+                  <option value="Net 90">Net 90 (Due in 90 days)</option>
+                </Select>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider block mb-1">
                   Issue Date
                 </label>
                 <Input
                   type="date"
                   value={issueDate}
-                  onChange={(e) => setIssueDate(e.target.value)}
+                  onChange={(e) => {
+                    const newIssue = e.target.value;
+                    setIssueDate(newIssue);
+                    if (newIssue) {
+                      const base = new Date(newIssue);
+                      if (!isNaN(base.getTime())) {
+                        let days = 30;
+                        if (paymentTerms === "Due Upon Receipt") days = 0;
+                        else if (paymentTerms === "Net 15") days = 15;
+                        else if (paymentTerms === "Net 30") days = 30;
+                        else if (paymentTerms === "Net 60") days = 60;
+                        else if (paymentTerms === "Net 90") days = 90;
+                        const due = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+                        setDueDate(due.toISOString().split("T")[0]);
+                      }
+                    }
+                  }}
                 />
               </div>
 
