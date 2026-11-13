@@ -138,3 +138,21 @@ When auditing each module, compare Reflex against the big three competitors:
 2. **Merchant Fee Auto-Splits** (vs QuickBooks): When a \$1,000 deposit arrives for a \$1,030 invoice due to Stripe fees, auto-allocate \$30 to `5030 Bank & Merchant Fees` with 1 click.
 3. **Recurring Expense & Rule Preview** (vs QuickBooks): Let users preview which historical transactions match a rule before saving it.
 4. **Mobile Polish** (vs Wave): Guarantee that every modal, drawer, and ledger view functions seamlessly on phone screens (390px) with zero horizontal scroll leaks.
+
+
+---
+
+## 5. Automation Architecture & SDLC Completeness Matrix
+
+A critical component of the audit is evaluating whether workflows are automated in the background or forced into manual user actions. Bookkeeping software lives or dies by its background intelligence:
+
+| Automation Domain | Current State in Reflex | QuickBooks Online | Wave / FreshBooks | Target Reflex Architecture |
+| :--- | :--- | :--- | :--- | :--- |
+| **Outflow Reconciliation** (Receipts $\leftrightarrow$ Debits) | **Automated** (`RunReconciliation`): 3-pass matching, subset-sum for splits, auto-balancing. | Automated rule execution & candidate suggestions. | Basic manual match with suggested list. | **Gold Standard**: Keep private local matching with exact integer cents. |
+| **Inflow Reconciliation** (Invoices $\leftrightarrow$ Deposits) | ❌ **100% Manual**: `reconciler.go:61` skips deposits (`tx.Amount >= 0`). Candidate scoring only runs on drawer click. | Automated matching against open invoices by customer and amount. | Basic invoice matching. | **CRITICAL GAP**: Add background `RunInvoiceReconciliation()` that automatically links deposits and marks invoices `PAID`. |
+| **Merchant Fee Splitting** (Stripe / Square net deposits) | ❌ **Fails to Match**: Net deposit ($971) fails exact match on gross invoice ($1,000). | Supports "Resolve Difference" fee allocation line. | Requires manual transaction split or manual fee entry. | **CRITICAL GAP**: Automated fee recognition: match deposit if $Amt = Total - (Total \times 2.9\% + \$0.30)$, auto-split difference to `5030 Merchant Fees`. |
+| **Multi-Invoice Settlement** (1 deposit for 2+ invoices) | ❌ **Blocked by Schema**: `invoice.BankTransactionID` is a 1-to-1 foreign key. | Supports batch payment application across multiple invoices. | Supports batch payment per customer. | **ARCHITECTURAL PROPOSAL**: Migrate to join table or invoice payment ledger allowing 1-to-many and many-to-1 settlements. |
+| **Overdue Status Sweeper** | ⚠️ **Passive Only**: Status evaluated only when `GetInvoices` query runs. | Nightly scheduled sweep + automated reminder emails. | Daily sweep + overdue notices. | Add scheduled/event-driven sweeper so overdue counts, badges, and A/R reports are always fresh without user page loads. |
+| **Bank Rule Creation** | ⚠️ **Manual Only**: User must hand-craft conditions and regexes from scratch. | Suggests rules after repeated manual categorizations. | Manual rule creation. | **Self-Learning Heuristic**: Suggest auto-rule creation when the same payee is manually categorized 3 times to the same account. |
+| **1099-NEC Threshold Sentinel** | ⚠️ **Report Only**: Metric visible only when inspecting the Vendor Spend report tab. | Proactive year-end 1099 filing warnings and W-9 trackers. | Basic vendor totals. | **Proactive Notification**: Surface a high-priority banner when any contractor spend crosses \$600 in the current tax year. |
+| **Scanner Drop Ingestion** | ⚠️ **Basic Watcher**: `fsnotify` detects file creation immediately. | N/A (Cloud mobile app only). | N/A (Receipt scanning add-on). | Add 2-second debounce to ensure scanner has finished writing large TIFF/PDF files, plus an Ollama worker retry queue. |

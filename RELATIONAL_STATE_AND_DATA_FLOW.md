@@ -227,3 +227,78 @@ When auditing any feature, screen, or controller, verify these **6 Relational Qu
 4. Does this action prevent **double-counting** between bank transactions and receipts?
 5. Does the **Detail Drawer** allow bidirectional navigation and 1-click unlinking?
 6. Is an immutable **Audit Log** entry created capturing what changed, who changed it, and why?
+
+
+---
+
+## 7. Automated Merchant Fee Split Flow (Net Deposit vs Gross Invoice)
+
+### Business Context:
+A client pays an invoice of **\$1,000.00** via Stripe, Square, or PayPal. The merchant processor deducts a 2.9% + \$0.30 processing fee (\$29.30) and deposits the net amount of **\$970.70** into the company's bank account.
+
+### The Accounting Problem:
+- If matched directly to revenue as \$970.70, **Gross Revenue is underreported** on IRS Schedule C Line 1 by \$29.30.
+- Furthermore, **Deductible Merchant Fees are missing** from Schedule C Line 10/27a.
+- The invoice remains unpaid by \$29.30 if matched naively without fee allocation.
+
+### The Automated Solution & Data Ripple Effect:
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. INFLOW MATCHER RECOGNIZES MERCHANT NET DEPOSIT                           │
+│    - Bank Deposit: +$970.70                                                 │
+│    - Open Invoice #INV-101: Total $1,000.00                                 │
+│    - Fee Formula Check: $1,000 - ($1,000 * 0.029 + 0.30) = $970.70 (MATCH!)│
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 2. ATOMIC SETTLEMENT & REVENUE/FEE RECOGNITION                               │
+│    - Invoice #INV-101:                                                      │
+│        * AmountPaid = $1,000.00                                             │
+│        * BalanceDue = $0.00                                                 │
+│        * Status = PAID                                                      │
+│    - Bank Transaction (Deposit +$970.70):                                   │
+│        * AllocationStatus = BALANCED                                        │
+│        * Linked Invoice = #INV-101                                          │
+│        * Split 1: Gross Sales Revenue (Account 4000) = +$1,000.00           │
+│        * Split 2: Bank & Merchant Fees (Account 5030) = -$29.30             │
+│        * Net Cash Inflow = $1,000.00 - $29.30 = $970.70 (Exact Match!)      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 3. REPORTING RIPPLE EFFECT                                                  │
+│    - Profit & Loss:                                                         │
+│        * Gross Revenue (4000): $1,000.00                                    │
+│        * Operating Expenses (5030 Merchant Fees): $29.30                    │
+│        * Net Operating Income: $970.70                                      │
+│    - IRS Schedule C:                                                        │
+│        * Line 1 (Gross Receipts): $1,000.00                                 │
+│        * Line 10 / 27a (Merchant Processing Fees): $29.30                   │
+│    - Trial Balance:                                                         │
+│        * Debit Cash (1010): +$970.70                                        │
+│        * Debit Merchant Fees (5030): +$29.30                                │
+│        * Credit Sales Revenue (4000): +$1,000.00                            │
+│        * Debits ($1,000.00) == Credits ($1,000.00) -> BALANCED!             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 8. Multi-Invoice Settlement (Batch Deposit Application)
+
+### Business Context:
+A corporate client pays multiple invoices with a single check or wire transfer (e.g., \$10,000 wire paying Invoice #1 for \$4,000 and Invoice #2 for \$6,000).
+
+### Data Ripple Effect:
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. INFLOW SUBSET-SUM ALGORITHM                                              │
+│    - Incoming Bank Deposit: +$10,000.00 from "Acme Corp"                    │
+│    - Open Invoices for "Acme Corp":                                         │
+│        * INV-001: $4,000.00 Balance Due                                     │
+│        * INV-002: $6,000.00 Balance Due                                     │
+│    - Subset-Sum Matches: $4,000 + $6,000 == $10,000 (Exact Match!)          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 2. ATOMIC BATCH APPLICATION                                                 │
+│    - Both INV-001 and INV-002 marked as PAID.                               │
+│    - Payment records linked to Bank Transaction.                            │
+│    - A/R Aging bucket reduces by $10,000 immediately.                       │
+│    - Cash-basis P&L recognizes $10,000 in Revenue.                           │
+│    - Review Queue clears deposit as BALANCED.                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
