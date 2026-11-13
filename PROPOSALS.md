@@ -58,5 +58,42 @@ on large invoices).
 
 ### Decision
 
+**APPROVED & IMPLEMENTED** (Committed as `commit d67ceb3`, Pass 16).
+
+---
+
+## PROPOSAL 2026-11-13-01: System Snapshot Restoration & Disaster Recovery Engine
+
+- **Status:** PROPOSED
+- **Raised:** Pass 19 (Settings, COA & Backup Audit), 2026-11-13
+- **Area:** `backend/controllers/exportController.go` & `frontend/src/components/AppSettingsModal.tsx`
+- **Scope:** Disaster Recovery & Data Mobility
+
+### Problem
+Reflex provides 1-click JSON backup export (`GET /api/system/backup/export`), bundling company settings, accounts, transactions, receipts, invoices, bank rules, and audit logs into a single portable, 100% private JSON snapshot. However, there is currently no corresponding restore endpoint (`POST /api/system/backup/restore`) or UI workflow to import and restore the database from a backup file if a user migrates to a new machine, recovers from disk failure, or spins up a fresh container.
+
+### Proposed Architecture & Solution
+1. **Backend Restore Handler (`POST /api/system/backup/restore`)**:
+   - Accepts multipart/form-data or JSON payload containing the backup file.
+   - Preflight Verification: Validates schema version (`v1.0`), entity integrity, and checksum before altering existing tables.
+   - Atomic Transaction (`db.Transaction`):
+     - Clears or merges historical records.
+     - Inserts Chart of Accounts (preserving IDs and hierarchies).
+     - Inserts Bank Transactions, Invoices, Expenses, Receipts, and Bank Rules.
+     - Restores Company App Settings and BooksClosedDate.
+     - If any foreign key violation or constraint error occurs, executes an immediate `tx.Rollback()`.
+   - Audit Log: Emits `PeriodAuditLog` with action `SYSTEM_RESTORED` detailing timestamp, record counts, and user agent.
+   - Event Broadcast: Broadcasts `RELOAD_ALL` / `SETTINGS_UPDATED` SSE events to refresh connected clients immediately.
+2. **Frontend Restore UI (`AppSettingsModal.tsx`)**:
+   - In the "Local Data Sovereignty & Full Backup" section, add a matching `[ Restore from Backup (.json) ]` file picker.
+   - Confirmation dialog warning the user that restoring will replace or merge database state, requiring explicit typed confirmation (`RESTORE`).
+   - Progress and success toast with automated dashboard reload.
+
+### Risk / Effort
+- **Effort:** M (~1 day)
+- **Risk:** Medium (destructive operation if mishandled; strictly mitigated by running inside an atomic DB transaction with schema validation).
+
+### Decision
 AWAITING USER REVIEW — APPROVE / MODIFY / REJECT
+
 

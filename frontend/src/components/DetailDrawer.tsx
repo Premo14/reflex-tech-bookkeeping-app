@@ -1512,7 +1512,9 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                                     <div>
                                       <div className="font-mono text-xs text-indigo-400 font-bold">{sug.invoiceNumber || `INV-${sug.id}`}</div>
                                       <div className="text-sm font-semibold text-white">{sug.clientName}</div>
-                                      <div className="text-[11px] text-zinc-400">Due: {formatDate(sug.dueDate)} • {formatMoney(sug.totalAmount)}</div>
+                                      <div className="text-[11px] text-zinc-400">
+                                        Due: {formatDate(sug.dueDate)} • {sug.balanceDue !== undefined && sug.balanceDue < sug.totalAmount ? `Balance: ${formatMoney(sug.balanceDue)} (Total ${formatMoney(sug.totalAmount)})` : formatMoney(sug.totalAmount)}
+                                      </div>
                                     </div>
                                     <Button
                                       variant="primary"
@@ -1541,7 +1543,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                                   <option value="">Choose open invoice...</option>
                                   {allOpenInvoices.map((inv) => (
                                     <option key={inv.id} value={inv.id}>
-                                      {inv.invoiceNumber || `INV-${inv.id}`} — {inv.clientName} ({formatMoney(inv.totalAmount)})
+                                      {inv.invoiceNumber || `INV-${inv.id}`} — {inv.clientName} ({inv.balanceDue !== undefined && inv.balanceDue < inv.totalAmount ? `Bal ${formatMoney(inv.balanceDue)} / Tot ${formatMoney(inv.totalAmount)}` : formatMoney(inv.totalAmount)})
                                     </option>
                                   ))}
                                 </Select>
