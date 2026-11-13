@@ -194,3 +194,54 @@ func TestUnlinkedPairTombstoneMatching(t *testing.T) {
 		t.Errorf("unrelated pair (191, 217) should NOT be blocked")
 	}
 }
+
+func TestCalculateMerchantFee(t *testing.T) {
+	tests := []struct {
+		name             string
+		grossDollars     float64
+		expectedFeeCents int64
+		expectedNetCents int64
+	}{
+		{
+			name:             "$1,000.00 Invoice (2.9% + $0.30 = $29.30)",
+			grossDollars:     1000.00,
+			expectedFeeCents: 2930,
+			expectedNetCents: 97070,
+		},
+		{
+			name:             "$100.00 Invoice (2.9% + $0.30 = $3.20)",
+			grossDollars:     100.00,
+			expectedFeeCents: 320,
+			expectedNetCents: 9680,
+		},
+		{
+			name:             "$50.00 Invoice (2.9% + $0.30 = $1.75)",
+			grossDollars:     50.00,
+			expectedFeeCents: 175,
+			expectedNetCents: 4825,
+		},
+		{
+			name:             "$0.00 Invoice",
+			grossDollars:     0.00,
+			expectedFeeCents: 0,
+			expectedNetCents: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			grossCents := int64(math.Round(tt.grossDollars * 100))
+			feeCents, netCents := CalculateMerchantFee(grossCents)
+
+			if feeCents != tt.expectedFeeCents {
+				t.Errorf("CalculateMerchantFee(%f) fee = %d cents, want %d cents", tt.grossDollars, feeCents, tt.expectedFeeCents)
+			}
+			if netCents != tt.expectedNetCents {
+				t.Errorf("CalculateMerchantFee(%f) net = %d cents, want %d cents", tt.grossDollars, netCents, tt.expectedNetCents)
+			}
+			if grossCents > 0 && feeCents+netCents != grossCents {
+				t.Errorf("Conservation of money failed: %d + %d != %d", feeCents, netCents, grossCents)
+			}
+		})
+	}
+}

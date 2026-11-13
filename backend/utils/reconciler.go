@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"fmt"
+	"log"
 	"math"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/events"
@@ -234,6 +236,156 @@ func RunReconciliation() {
 	UpdateAllocationStatuses()
 	events.Broadcast("RECONCILIATION_UPDATED", nil)
 	events.Broadcast("QUEUE_UPDATED", nil)
+
+	// pass 4: automated inflow reconciliation (matching deposits to client invoices)
+	RunInvoiceReconciliation()
+}
+
+// CalculateMerchantFee computes standard merchant processing fees (2.9% + $0.30)
+// and returns expected fee in cents and net deposit in cents.
+func CalculateMerchantFee(grossCents int64) (feeCents int64, netCents int64) {
+	if grossCents <= 0 {
+		return 0, 0
+	}
+	feeCents = int64(math.Round(float64(grossCents)*0.029 + 30))
+	netCents = grossCents - feeCents
+	return feeCents, netCents
+}
+
+// RunInvoiceReconciliation automatically reconciles incoming bank deposits (credits) with open customer invoices.
+// Pass 1: High-confidence exact match: Deposit amount matches open invoice BalanceDue within 90 days,
+//         AND client name or invoice number appears in bank description (or is sole open invoice). Auto-marks PAID.
+// Pass 2: Merchant processing fee match: Deposit matches invoice total minus standard Stripe/Square fee (2.9% + $0.30),
+//         with customer/invoice reference or tight date proximity (within 14 days). Auto-marks PAID with fee notation.
+func RunInvoiceReconciliation() {
+	if db.DB == nil {
+		return
+	}
+
+	// 1. Fetch all open invoices (UNPAID, PARTIALLY_PAID, OVERDUE) with balance due > 0
+	var openInvoices []models.Invoice
+	if err := db.DB.Where("status IN ('UNPAID', 'PARTIALLY_PAID', 'OVERDUE') AND balance_due > 0").
+		Order("due_date ASC").Find(&openInvoices).Error; err != nil || len(openInvoices) == 0 {
+		return
+	}
+
+	// 2. Fetch all linked deposit IDs to exclude already-matched bank transactions
+	var linkedTxIDs []uint
+	db.DB.Model(&models.Invoice{}).Where("bank_transaction_id IS NOT NULL").Pluck("bank_transaction_id", &linkedTxIDs)
+	linkedMap := make(map[uint]bool, len(linkedTxIDs))
+	for _, id := range linkedTxIDs {
+		linkedMap[id] = true
+	}
+
+	// 3. Fetch candidate incoming deposits (amount > 0 and review_status != 'DELETED')
+	var deposits []models.BankTransaction
+	query := db.DB.Where("amount > 0 AND COALESCE(review_status, '') NOT IN ('DELETED', 'IGNORED')")
+	if len(linkedTxIDs) > 0 {
+		query = query.Where("id NOT IN (?)", linkedTxIDs)
+	}
+	if err := query.Order("date ASC").Find(&deposits).Error; err != nil || len(deposits) == 0 {
+		return
+	}
+
+	invoicesUpdated := false
+	transactionsUpdated := false
+
+	// Match loop
+	for i := range deposits {
+		tx := &deposits[i]
+		if linkedMap[tx.ID] || IsDateInClosedPeriod(tx.Date) {
+			continue
+		}
+
+		cleanTxDesc := strings.ToLower(tx.Description)
+
+		// Check candidates among open invoices
+		for j := range openInvoices {
+			inv := &openInvoices[j]
+			if inv.Status == "PAID" || inv.BalanceDue.Cents <= 0 {
+				continue
+			}
+
+			// Proximity check: deposit date within 90 days of invoice issue date
+			daysSinceIssue := tx.Date.Sub(inv.IssueDate).Hours() / 24
+			if daysSinceIssue < -5 || daysSinceIssue > 90 {
+				continue
+			}
+
+			cleanClient := strings.ToLower(strings.TrimSpace(inv.ClientName))
+			cleanInvNum := strings.ToLower(strings.TrimSpace(inv.InvoiceNumber))
+
+			hasNameMatch := cleanClient != "" && (strings.Contains(cleanTxDesc, cleanClient) || (len(cleanClient) > 4 && strings.Contains(cleanTxDesc, cleanClient[:4])))
+			hasNumMatch := cleanInvNum != "" && strings.Contains(cleanTxDesc, cleanInvNum)
+
+			// PASS 1: Exact Balance Match
+			if tx.Amount.Cents == inv.BalanceDue.Cents && (hasNameMatch || hasNumMatch || len(openInvoices) == 1) {
+				inv.AmountPaid = inv.TotalAmount
+				inv.BalanceDue = models.NewMoney(0)
+				inv.Status = "PAID"
+				inv.BankTransactionID = &tx.ID
+				inv.PaidDate = &tx.Date
+				db.DB.Save(inv)
+
+				if inv.CategoryAccountID != nil {
+					tx.CategoryAccountID = inv.CategoryAccountID
+				}
+				tx.AllocationStatus = "BALANCED"
+				tx.ReviewStatus = "APPROVED"
+				tx.Notes = fmt.Sprintf("Payment for Invoice %s (%s)", inv.InvoiceNumber, inv.ClientName)
+				db.DB.Save(tx)
+
+				linkedMap[tx.ID] = true
+				invoicesUpdated = true
+				transactionsUpdated = true
+				log.Printf("✅ Inflow Reconciler: auto-matched deposit $%.2f (%s) to Invoice %s (%s)",
+					tx.Amount.Dollars(), tx.Description, inv.InvoiceNumber, inv.ClientName)
+				break
+			}
+
+			// PASS 2: Merchant Processing Fee Net Deposit (Stripe / Square 2.9% + $0.30)
+			grossCents := inv.TotalAmount.Cents
+			if grossCents > 500 { // Only consider invoices > $5.00
+				feeCents, expectedNetCents := CalculateMerchantFee(grossCents)
+				diffCents := int64(math.Abs(float64(tx.Amount.Cents - expectedNetCents)))
+
+				// Tolerance of $1.50 for varying card interchange rates, with customer reference or close date
+				if diffCents <= 150 && (hasNameMatch || hasNumMatch || (daysSinceIssue >= 0 && daysSinceIssue <= 7)) {
+					feeDollars := float64(feeCents) / 100.0
+					inv.AmountPaid = inv.TotalAmount
+					inv.BalanceDue = models.NewMoney(0)
+					inv.Status = "PAID"
+					inv.BankTransactionID = &tx.ID
+					inv.PaidDate = &tx.Date
+					db.DB.Save(inv)
+
+					if inv.CategoryAccountID != nil {
+						tx.CategoryAccountID = inv.CategoryAccountID
+					}
+					tx.AllocationStatus = "BALANCED"
+					tx.ReviewStatus = "APPROVED"
+					tx.Notes = fmt.Sprintf("Payment for Invoice %s (%s) [Net of $%.2f merchant fee]",
+						inv.InvoiceNumber, inv.ClientName, feeDollars)
+					db.DB.Save(tx)
+
+					linkedMap[tx.ID] = true
+					invoicesUpdated = true
+					transactionsUpdated = true
+					log.Printf("✅ Inflow Reconciler: auto-matched merchant deposit $%.2f to Invoice %s ($%.2f fee deducted)",
+						tx.Amount.Dollars(), inv.InvoiceNumber, feeDollars)
+					break
+				}
+			}
+		}
+	}
+
+	if invoicesUpdated {
+		events.Broadcast("INVOICES_UPDATED", nil)
+		events.Broadcast("SUMMARY_UPDATED", nil)
+	}
+	if transactionsUpdated {
+		events.Broadcast("TRANSACTIONS_UPDATED", nil)
+	}
 }
 
 // ---------------------------------------------------------
