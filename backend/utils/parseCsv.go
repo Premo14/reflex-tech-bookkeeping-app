@@ -35,6 +35,13 @@ var csvDateFormats = []string{
 	"01/02/06",
 }
 
+// GenerateCSVFitID computes a deterministic SHA256 unique identifier for a CSV transaction.
+func GenerateCSVFitID(txDate time.Time, desc string, amount float64, occurrenceIndex int, acctRef uint) string {
+	dupKey := fmt.Sprintf("%s|%s|%.2f", txDate.Format("2006-01-02"), strings.ToUpper(strings.TrimSpace(desc)), amount)
+	h := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d", dupKey, occurrenceIndex, acctRef)))
+	return fmt.Sprintf("CSV-%x", h[:8])
+}
+
 func parseCSVDate(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	// Try ISO prefix if date has time attached (e.g. "2026-08-12T00:00:00")
@@ -163,10 +170,58 @@ func ParseCsvStatement(filePath string) {
 		descCol = 1
 	}
 
-	// Prepare account mapping
+	// Scan preamble rows before headerIdx for account metadata and credit card hints
+	var preambleAccountID string
+	var isCreditCard bool
+	for rIdx := 0; rIdx < headerIdx; rIdx++ {
+		rowStr := strings.ToLower(strings.Join(rows[rIdx], " "))
+		if strings.Contains(rowStr, "credit card") || strings.Contains(rowStr, "card ending") {
+			isCreditCard = true
+		}
+		for _, cell := range rows[rIdx] {
+			re := regexp.MustCompile(`(?i)(?:account|acct|card)?\s*(?:number|no|#)?[:\s]+([A-Za-z0-9\-\*]{3,})`)
+			if matches := re.FindStringSubmatch(cell); len(matches) > 1 {
+				cleanNum := strings.Trim(matches[1], "* -")
+				if len(cleanNum) >= 3 && !strings.EqualFold(cleanNum, "number") {
+					preambleAccountID = cleanNum
+					break
+				}
+			}
+		}
+	}
+
+	accountType := "ASSET"
+	accountLabel := "Bank (CSV)"
+	subType := "CHECKING"
+	if isCreditCard {
+		accountType = "LIABILITY"
+		accountLabel = "Credit Card (CSV)"
+		subType = "CREDIT_CARD"
+	}
+
+	// Prepare stable account mapping
 	baseName := filepath.Base(filePath)
-	accountID := "CSV-" + strings.TrimSuffix(baseName, filepath.Ext(baseName))
-	chartAccountID := resolveOrCreateChartAccount(accountID, "", "ASSET", "Bank (CSV)", "CHECKING")
+	var accountID string
+	var chartAccountID *uint
+
+	if preambleAccountID != "" {
+		accountID = "CSV-" + preambleAccountID
+		chartAccountID = resolveOrCreateChartAccount(accountID, "", accountType, accountLabel, subType)
+	} else {
+		// Stable default account mapping: reuse primary 1010 Checking (or 2020 Credit Card)
+		targetCode := "1010"
+		if isCreditCard {
+			targetCode = "2020"
+		}
+		var targetAccount models.ChartAccount
+		if err := db.DB.Where("code = ?", targetCode).First(&targetAccount).Error; err == nil {
+			chartAccountID = &targetAccount.ID
+			accountID = fmt.Sprintf("CSV-%s", targetAccount.Code)
+		} else {
+			accountID = "CSV-DEFAULT"
+			chartAccountID = resolveOrCreateChartAccount(accountID, "", accountType, accountLabel, subType)
+		}
+	}
 
 	var parsedTransactions []models.BankTransaction
 	var minDate, maxDate time.Time
@@ -228,11 +283,14 @@ func ParseCsvStatement(filePath string) {
 			fitID = strings.TrimSpace(row[idCol])
 		}
 		if fitID == "" {
-			dupKey := fmt.Sprintf("%s|%s|%.2f", txDate.Format("2006-01-02"), desc, amount)
+			var acctRef uint = 0
+			if chartAccountID != nil {
+				acctRef = *chartAccountID
+			}
+			dupKey := fmt.Sprintf("%s|%s|%.2f", txDate.Format("2006-01-02"), strings.ToUpper(strings.TrimSpace(desc)), amount)
 			sameDayOccurrences[dupKey]++
 			occurrenceIndex := sameDayOccurrences[dupKey]
-			h := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%s", dupKey, occurrenceIndex, accountID)))
-			fitID = fmt.Sprintf("CSV-%x", h[:8])
+			fitID = GenerateCSVFitID(txDate, desc, amount, occurrenceIndex, acctRef)
 		}
 
 		txType := "DEBIT"
@@ -306,7 +364,10 @@ func ParseCsvStatement(filePath string) {
 		return
 	}
 
-	log.Printf("✅ CSV Import: successfully processed %d transactions from %s", len(parsedTransactions), baseName)
+	newCount := res.RowsAffected
+	dupCount := int64(len(parsedTransactions)) - newCount
+	log.Printf("✅ CSV Import: successfully processed %d transactions (%d new, %d duplicates skipped) from %s into ChartAccount %v",
+		len(parsedTransactions), newCount, dupCount, baseName, chartAccountID)
 
 	// Trigger real-time live events and auto-reconciliation
 	events.Broadcast("TRANSACTION_CREATED", nil)

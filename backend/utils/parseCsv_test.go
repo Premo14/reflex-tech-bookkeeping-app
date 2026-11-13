@@ -3,6 +3,7 @@ package utils
 import (
 	"math"
 	"testing"
+	"time"
 )
 
 func TestParseCSVDate(t *testing.T) {
@@ -36,6 +37,8 @@ func TestParseCSVDate(t *testing.T) {
 	}
 }
 
+
+
 func TestCleanCSVAmount(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -65,3 +68,36 @@ func TestCleanCSVAmount(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateDeterministicFITID(t *testing.T) {
+	d1 := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	d2 := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+
+	// 1. Invariance across multiple runs
+	id1 := GenerateCSVFitID(d1, "GITHUB INC", -20.00, 1, 1010)
+	id2 := GenerateCSVFitID(d2, "github inc ", -20.00, 1, 1010)
+	if id1 != id2 {
+		t.Errorf("Expected identical FITID regardless of casing/trailing space, got %s vs %s", id1, id2)
+	}
+
+	// 2. Same-day occurrence disambiguation
+	idFirstOccurrence := GenerateCSVFitID(d1, "UBER TRIP", -15.50, 1, 1010)
+	idSecondOccurrence := GenerateCSVFitID(d1, "UBER TRIP", -15.50, 2, 1010)
+	if idFirstOccurrence == idSecondOccurrence {
+		t.Errorf("Expected distinct FITIDs for multiple occurrences on same day, got %s", idFirstOccurrence)
+	}
+
+	// 3. Account-scoping disambiguation
+	idChecking := GenerateCSVFitID(d1, "AMAZON.COM", -49.99, 1, 1)  // Account 1 (Checking)
+	idCreditCard := GenerateCSVFitID(d1, "AMAZON.COM", -49.99, 1, 8) // Account 8 (Credit Card)
+	if idChecking == idCreditCard {
+		t.Errorf("Expected distinct FITIDs across different accounts, got %s", idChecking)
+	}
+
+	// 4. Proper prefix format
+	if len(id1) < 10 || id1[:4] != "CSV-" {
+		t.Errorf("Expected FITID to have 'CSV-' prefix, got %s", id1)
+	}
+}
+
+
