@@ -391,6 +391,9 @@ export default function ReportsModal({
     rows.push([]);
 
     rows.push([sanitizeCSV("NET INCOME"), "", "", sanitizeCSV(report.netIncome.toFixed(2))]);
+    if (report.netMarginPercent !== undefined) {
+      rows.push([sanitizeCSV("Net Profit Margin"), "", "", sanitizeCSV(report.netMarginPercent.toFixed(1) + "%")]);
+    }
     if (report.totalTax && report.totalTax > 0) {
       rows.push([sanitizeCSV("Sales Tax Paid (Receipts)"), "", "", sanitizeCSV(report.totalTax.toFixed(2))]);
     }
@@ -1168,7 +1171,23 @@ export default function ReportsModal({
                 {/* NET INCOME */}
                 <div className="pt-4 border-t-2 border-white/10 print:border-black">
                   <div className="flex justify-between items-center">
-                    <span className="text-base font-bold uppercase tracking-wider print:text-black">Net Income</span>
+                    <div>
+                      <span className="text-base font-bold uppercase tracking-wider print:text-black">Net Income</span>
+                      {report.netMarginPercent !== undefined && (
+                        <span className="block text-[11px] text-zinc-400 print:text-zinc-600 mt-0.5">
+                          Net Profit Margin:{" "}
+                          <strong
+                            className={`font-mono font-bold ${
+                              report.netIncome >= 0
+                                ? "text-emerald-400 print:text-emerald-700"
+                                : "text-rose-400 print:text-rose-700"
+                            }`}
+                          >
+                            {report.netMarginPercent.toFixed(1)}%
+                          </strong>
+                        </span>
+                      )}
+                    </div>
                     <span
                       className={`text-xl font-black ${
                         report.netIncome >= 0

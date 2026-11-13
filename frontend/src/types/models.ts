@@ -144,6 +144,7 @@ export interface ProfitLossReport {
   expenses: PLLine[];
   totalExpenses: number;
   netIncome: number;
+  netMarginPercent?: number;
   totalTax?: number;
   uncategorizedTxCount: number;
   uncategorizedExpCount: number;

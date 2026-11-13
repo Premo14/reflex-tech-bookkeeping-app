@@ -19,29 +19,229 @@ func roundCents(v float64) float64 {
 	return math.Round(v*100) / 100
 }
 
+// PLLine represents an aggregated revenue or expense line in the Profit & Loss statement.
+type PLLine struct {
+	AccountCode string       `json:"accountCode"`
+	AccountName string       `json:"accountName"`
+	Total       models.Money `json:"total"`
+}
+
+// ProfitLossReportData contains all compiled figures for a P&L period.
+type ProfitLossReportData struct {
+	StartDate             string       `json:"startDate"`
+	EndDate               string       `json:"endDate"`
+	Revenue               []PLLine     `json:"revenue"`
+	TotalRevenue          models.Money `json:"totalRevenue"`
+	Expenses              []PLLine     `json:"expenses"`
+	TotalExpenses         models.Money `json:"totalExpenses"`
+	NetIncome             models.Money `json:"netIncome"`
+	NetMarginPercent      float64      `json:"netMarginPercent"`
+	TotalTax              models.Money `json:"totalTax"`
+	UncategorizedTxCount  int64        `json:"uncategorizedTxCount"`
+	UncategorizedExpCount int64        `json:"uncategorizedExpCount"`
+	ExcludedTxCount       int64        `json:"excludedTxCount"`
+	ExcludedTxTotal       models.Money `json:"excludedTxTotal"`
+	ExcludedExpCount      int64        `json:"excludedExpCount"`
+	ExcludedExpTotal      models.Money `json:"excludedExpTotal"`
+}
+
+// PLRawAccountLine represents an unaggregated line scanned from GORM queries.
+type PLRawAccountLine struct {
+	AccountCode string       `gorm:"column:account_code"`
+	AccountName string       `gorm:"column:account_name"`
+	Total       models.Money `gorm:"column:total"`
+}
+
+// PLPartialDebitRemainder represents a partial allocation balance.
+type PLPartialDebitRemainder struct {
+	AccountCode *string      `gorm:"column:account_code"`
+	AccountName *string      `gorm:"column:account_name"`
+	AccountType *string      `gorm:"column:account_type"`
+	Total       models.Money `gorm:"column:total"`
+}
+
+// PLBuilderInput contains all raw database inputs to be compiled by BuildProfitLossData.
+type PLBuilderInput struct {
+	StartDate              string
+	EndDate                string
+	RevenueLines           []PLRawAccountLine
+	UncategorizedDeposits  models.Money
+	ReceiptExpenses        []PLRawAccountLine
+	DebitExpenses          []PLRawAccountLine
+	UncategorizedExpenses  models.Money
+	UncategorizedDebits    models.Money
+	PartialDebitRemainders []PLPartialDebitRemainder
+	SalesTax               models.Money
+	UncategorizedTxCount   int64
+	UncategorizedExpCount  int64
+	ExcludedTxCount        int64
+	ExcludedTxTotal        models.Money
+	ExcludedExpCount       int64
+	ExcludedExpTotal       models.Money
+}
+
+// BuildProfitLossData compiles raw ledger inputs into a certified GAAP Profit & Loss statement.
+// It is pure and nil-DB safe, enforcing exact integer-cent arithmetic and calculating net profit margins.
+func BuildProfitLossData(input PLBuilderInput) ProfitLossReportData {
+	// 1. Revenue lines
+	revMap := make(map[string]*PLLine)
+	for _, l := range input.RevenueLines {
+		if existing, ok := revMap[l.AccountCode]; ok {
+			existing.Total = existing.Total.Add(l.Total)
+		} else {
+			revMap[l.AccountCode] = &PLLine{
+				AccountCode: l.AccountCode,
+				AccountName: l.AccountName,
+				Total:       l.Total,
+			}
+		}
+	}
+	if input.UncategorizedDeposits.IsPositive() {
+		if existing, ok := revMap["9998"]; ok {
+			existing.Total = existing.Total.Add(input.UncategorizedDeposits)
+		} else {
+			revMap["9998"] = &PLLine{
+				AccountCode: "9998",
+				AccountName: "Uncategorized Income / Suspense",
+				Total:       input.UncategorizedDeposits,
+			}
+		}
+	}
+
+	var revenue []PLLine
+	for _, l := range revMap {
+		revenue = append(revenue, *l)
+	}
+	sort.Slice(revenue, func(i, j int) bool {
+		return revenue[i].AccountCode < revenue[j].AccountCode
+	})
+
+	var totalRevenue models.Money
+	for _, l := range revenue {
+		totalRevenue = totalRevenue.Add(l.Total)
+	}
+
+	// 2. Expense lines
+	expMap := make(map[string]*PLLine)
+	for _, l := range input.ReceiptExpenses {
+		if existing, ok := expMap[l.AccountCode]; ok {
+			existing.Total = existing.Total.Add(l.Total)
+		} else {
+			expMap[l.AccountCode] = &PLLine{
+				AccountCode: l.AccountCode,
+				AccountName: l.AccountName,
+				Total:       l.Total,
+			}
+		}
+	}
+	for _, l := range input.DebitExpenses {
+		if existing, ok := expMap[l.AccountCode]; ok {
+			existing.Total = existing.Total.Add(l.Total)
+		} else {
+			expMap[l.AccountCode] = &PLLine{
+				AccountCode: l.AccountCode,
+				AccountName: l.AccountName,
+				Total:       l.Total,
+			}
+		}
+	}
+
+	// Partial debit remainder handling
+	var partialUncatRemainder models.Money
+	for _, pl := range input.PartialDebitRemainders {
+		if pl.AccountCode != nil && pl.AccountType != nil && *pl.AccountType == "EXPENSE" {
+			code := *pl.AccountCode
+			name := ""
+			if pl.AccountName != nil {
+				name = *pl.AccountName
+			}
+			if existing, ok := expMap[code]; ok {
+				existing.Total = existing.Total.Add(pl.Total)
+			} else {
+				expMap[code] = &PLLine{
+					AccountCode: code,
+					AccountName: name,
+					Total:       pl.Total,
+				}
+			}
+		} else {
+			// Any unallocated remainder without an EXPENSE category is routed to uncategorized suspense
+			partialUncatRemainder = partialUncatRemainder.Add(pl.Total)
+		}
+	}
+
+	totalUncatExpenses := input.UncategorizedExpenses.Add(input.UncategorizedDebits).Add(partialUncatRemainder)
+	if totalUncatExpenses.IsPositive() {
+		if existing, ok := expMap["9999"]; ok {
+			existing.Total = existing.Total.Add(totalUncatExpenses)
+		} else {
+			expMap["9999"] = &PLLine{
+				AccountCode: "9999",
+				AccountName: "Uncategorized Expenses / Suspense",
+				Total:       totalUncatExpenses,
+			}
+		}
+	}
+
+	var expenses []PLLine
+	for _, l := range expMap {
+		expenses = append(expenses, *l)
+	}
+	sort.Slice(expenses, func(i, j int) bool {
+		return expenses[i].AccountCode < expenses[j].AccountCode
+	})
+
+	var totalExpenses models.Money
+	for _, l := range expenses {
+		totalExpenses = totalExpenses.Add(l.Total)
+	}
+
+	// 3. Net Income & Net Margin
+	netIncome := totalRevenue.Sub(totalExpenses)
+	var netMarginPercent float64
+	if totalRevenue.Cents > 0 {
+		margin := (float64(netIncome.Cents) / float64(totalRevenue.Cents)) * 100.0
+		netMarginPercent = math.Round(margin*100) / 100
+	}
+
+	return ProfitLossReportData{
+		StartDate:             input.StartDate,
+		EndDate:               input.EndDate,
+		Revenue:               revenue,
+		TotalRevenue:          totalRevenue,
+		Expenses:              expenses,
+		TotalExpenses:         totalExpenses,
+		NetIncome:             netIncome,
+		NetMarginPercent:      netMarginPercent,
+		TotalTax:              input.SalesTax,
+		UncategorizedTxCount:  input.UncategorizedTxCount,
+		UncategorizedExpCount: input.UncategorizedExpCount,
+		ExcludedTxCount:       input.ExcludedTxCount,
+		ExcludedTxTotal:       input.ExcludedTxTotal,
+		ExcludedExpCount:      input.ExcludedExpCount,
+		ExcludedExpTotal:      input.ExcludedExpTotal,
+	}
+}
+
 // GetProfitLoss returns a structured Profit & Loss report for a given date range.
 //
 // Logic:
 //   - REVENUE lines: sum of BankTransaction amounts grouped by ChartAccountID
-//     where ChartAccount type = REVENUE (plus any uncategorized deposits under Suspense).
+//     where ChartAccount type = REVENUE (plus any uncategorized deposits under Suspense 9998).
 //   - EXPENSE lines:
 //     1. sum of Expense amounts where ChartAccount type = EXPENSE.
 //     2. sum of unlinked BankTransaction debits categorized under EXPENSE accounts.
-//     3. uncategorized expenses and unlinked uncategorized debits grouped under Suspense (9999).
+//     3. uncategorized expenses, unlinked debits, and unallocated remainders grouped under Suspense (9999).
 func GetProfitLoss(c fiber.Ctx) error {
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 
-	type AccountLine struct {
-		AccountCode string
-		AccountName string
-		Total       float64
+	type amtResult struct {
+		Total models.Money `gorm:"column:total"`
 	}
 
-	type amtResult struct{ Total float64 }
-
 	// --- REVENUE ---
-	var revenueLines []AccountLine
+	var revenueLines []PLRawAccountLine
 	revQ := db.DB.Table("bank_transactions bt").
 		Select("ca.code as account_code, ca.name as account_name, COALESCE(SUM(bt.amount), 0) as total").
 		Joins("JOIN chart_accounts ca ON ca.id = bt.category_account_id").
@@ -70,33 +270,9 @@ func GetProfitLoss(c fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to calculate uncategorized deposits"})
 	}
 
-	if uncatDeposits.Total > 0 {
-		revenueLines = append(revenueLines, AccountLine{
-			AccountCode: "9998",
-			AccountName: "Uncategorized Income / Suspense",
-			Total:       uncatDeposits.Total,
-		})
-	}
-
-	for i := range revenueLines {
-		revenueLines[i].Total = roundCents(revenueLines[i].Total)
-	}
-
-	sort.Slice(revenueLines, func(i, j int) bool {
-		return revenueLines[i].AccountCode < revenueLines[j].AccountCode
-	})
-
-	var totalRevenue float64
-	for _, line := range revenueLines {
-		totalRevenue += line.Total
-	}
-	totalRevenue = roundCents(totalRevenue)
-
 	// --- EXPENSES ---
-	expenseMap := make(map[string]*AccountLine)
-
 	// 1. From confirmed Expense records
-	var expFromReceipts []AccountLine
+	var expFromReceipts []PLRawAccountLine
 	expQ := db.DB.Table("expenses e").
 		Select("ca.code as account_code, ca.name as account_name, COALESCE(SUM(e.amount), 0) as total").
 		Joins("JOIN chart_accounts ca ON ca.id = e.chart_account_id").
@@ -108,14 +284,10 @@ func GetProfitLoss(c fiber.Ctx) error {
 	if err := expQ.Scan(&expFromReceipts).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to calculate expense records"})
 	}
-	for _, line := range expFromReceipts {
-		l := line
-		expenseMap[line.AccountCode] = &l
-	}
 
 	// 2. From unlinked Bank Transactions categorized under EXPENSE accounts.
 	// Netting `-bt.amount` properly includes debits (-amount > 0) and vendor refunds/rebates (+amount, so -amount < 0 contra-expense).
-	var expFromDebits []AccountLine
+	var expFromDebits []PLRawAccountLine
 	debitQ := db.DB.Table("bank_transactions bt").
 		Select("ca.code as account_code, ca.name as account_name, COALESCE(SUM(-bt.amount), 0) as total").
 		Joins("JOIN chart_accounts ca ON ca.id = bt.category_account_id").
@@ -126,14 +298,6 @@ func GetProfitLoss(c fiber.Ctx) error {
 	debitQ = ApplyDateRange(debitQ, "bt.date", startDate, endDate)
 	if err := debitQ.Scan(&expFromDebits).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to calculate expense debits"})
-	}
-	for _, line := range expFromDebits {
-		if existing, ok := expenseMap[line.AccountCode]; ok {
-			existing.Total += line.Total
-		} else {
-			l := line
-			expenseMap[line.AccountCode] = &l
-		}
 	}
 
 	// 3. Uncategorized Expenses and unlinked uncategorized Bank Debits
@@ -160,13 +324,7 @@ func GetProfitLoss(c fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to calculate uncategorized bank debits"})
 	}
 
-	type partialDebitLine struct {
-		AccountCode *string
-		AccountName *string
-		AccountType *string
-		Total       float64
-	}
-	var partialDebitLines []partialDebitLine
+	var partialDebitLines []PLPartialDebitRemainder
 	partQ := db.DB.Table("bank_transactions bt").
 		Select("ca.code as account_code, ca.name as account_name, ca.type as account_type, COALESCE(SUM(ABS(bt.amount) - sub.allocated), 0) as total").
 		Joins("JOIN (SELECT bank_transaction_id, SUM(e.amount) as allocated FROM expense_bank_transactions ebt JOIN expenses e ON e.id = ebt.expense_id WHERE ebt.status = 'confirmed' GROUP BY bank_transaction_id) sub ON sub.bank_transaction_id = bt.id").
@@ -180,57 +338,7 @@ func GetProfitLoss(c fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to calculate partial debit remainders"})
 	}
 
-	var partialUncatRemainder float64
-	for _, pl := range partialDebitLines {
-		if pl.AccountCode != nil && pl.AccountType != nil && *pl.AccountType == "EXPENSE" {
-			code := *pl.AccountCode
-			name := ""
-			if pl.AccountName != nil {
-				name = *pl.AccountName
-			}
-			if existing, ok := expenseMap[code]; ok {
-				existing.Total += pl.Total
-			} else {
-				expenseMap[code] = &AccountLine{
-					AccountCode: code,
-					AccountName: name,
-					Total:       pl.Total,
-				}
-			}
-		} else if pl.AccountCode == nil || pl.AccountType == nil {
-			partialUncatRemainder += pl.Total
-		}
-	}
-
-	totalUncatExpenses := uncatExpTotal.Total + uncatDebitTotal.Total + partialUncatRemainder
-	if totalUncatExpenses > 0 {
-		if existing, ok := expenseMap["9999"]; ok {
-			existing.Total += totalUncatExpenses
-		} else {
-			expenseMap["9999"] = &AccountLine{
-				AccountCode: "9999",
-				AccountName: "Uncategorized Expenses / Suspense",
-				Total:       totalUncatExpenses,
-			}
-		}
-	}
-
-	var expenseLines []AccountLine
-	for _, line := range expenseMap {
-		line.Total = roundCents(line.Total)
-		expenseLines = append(expenseLines, *line)
-	}
-	sort.Slice(expenseLines, func(i, j int) bool {
-		return expenseLines[i].AccountCode < expenseLines[j].AccountCode
-	})
-
-	var totalExpenses float64
-	for _, line := range expenseLines {
-		totalExpenses += line.Total
-	}
-	totalExpenses = roundCents(totalExpenses)
-
-	// Also count uncategorized transactions and expenses for completeness (excluding confirmed-linked split transactions and LIABILITY card payment credits)
+	// Also count uncategorized transactions and expenses for completeness
 	var uncategorizedTxCount int64
 	uncatTxQ := db.DB.Model(&models.BankTransaction{}).
 		Where(inBooksClause).
@@ -245,35 +353,18 @@ func GetProfitLoss(c fiber.Ctx) error {
 	uncatExpQ = ApplyDateRange(uncatExpQ, "timestamp", startDate, endDate)
 	uncatExpQ.Count(&uncategorizedExpCount)
 
-	// Disclosure: items excluded from the books in this date range (not counted above).
-	type exclAgg struct {
-		Count int64
-		Total float64
+	// Excluded items summary
+	type rawExclAgg struct {
+		Count int64        `gorm:"column:count"`
+		Total models.Money `gorm:"column:total"`
 	}
-	var exclTx, exclExp exclAgg
+	var exclTx, exclExp rawExclAgg
 	exTxQ := db.DB.Model(&models.BankTransaction{}).Select("COUNT(*) as count, COALESCE(SUM(ABS(amount)), 0) as total").Where("review_status = ?", "IGNORED")
 	exTxQ = ApplyDateRange(exTxQ, "date", startDate, endDate)
 	exTxQ.Scan(&exclTx)
 	exExpQ := db.DB.Model(&models.Expense{}).Select("COUNT(*) as count, COALESCE(SUM(amount), 0) as total").Where("review_status = ?", "IGNORED")
 	exExpQ = ApplyDateRange(exExpQ, "timestamp", startDate, endDate)
 	exExpQ.Scan(&exclExp)
-
-	netIncome := roundCents(totalRevenue - totalExpenses)
-
-	// Convert slice to a serializable format
-	type PLLine struct {
-		AccountCode string `json:"accountCode"`
-		AccountName string `json:"accountName"`
-		Total       models.Money  `json:"total"`
-	}
-	revLines := make([]PLLine, len(revenueLines))
-	for i, l := range revenueLines {
-		revLines[i] = PLLine{l.AccountCode, l.AccountName, models.NewMoney(roundCents(l.Total))}
-	}
-	expLines := make([]PLLine, len(expenseLines))
-	for i, l := range expenseLines {
-		expLines[i] = PLLine{l.AccountCode, l.AccountName, models.NewMoney(roundCents(l.Total))}
-	}
 
 	var salesTaxTotal amtResult
 	stQ := db.DB.Model(&models.Expense{}).
@@ -283,22 +374,42 @@ func GetProfitLoss(c fiber.Ctx) error {
 	stQ = ApplyDateRange(stQ, "timestamp", startDate, endDate)
 	stQ.Scan(&salesTaxTotal)
 
+	report := BuildProfitLossData(PLBuilderInput{
+		StartDate:              startDate,
+		EndDate:                endDate,
+		RevenueLines:           revenueLines,
+		UncategorizedDeposits:  uncatDeposits.Total,
+		ReceiptExpenses:        expFromReceipts,
+		DebitExpenses:          expFromDebits,
+		UncategorizedExpenses:  uncatExpTotal.Total,
+		UncategorizedDebits:    uncatDebitTotal.Total,
+		PartialDebitRemainders: partialDebitLines,
+		SalesTax:               salesTaxTotal.Total,
+		UncategorizedTxCount:   uncategorizedTxCount,
+		UncategorizedExpCount:  uncategorizedExpCount,
+		ExcludedTxCount:        exclTx.Count,
+		ExcludedTxTotal:        exclTx.Total,
+		ExcludedExpCount:       exclExp.Count,
+		ExcludedExpTotal:       exclExp.Total,
+	})
+
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":                "success",
-		"startDate":             startDate,
-		"endDate":               endDate,
-		"revenue":               revLines,
-		"totalRevenue":          models.NewMoney(roundCents(totalRevenue)),
-		"expenses":              expLines,
-		"totalExpenses":         models.NewMoney(roundCents(totalExpenses)),
-		"netIncome":             models.NewMoney(netIncome),
-		"totalTax":              models.NewMoney(roundCents(salesTaxTotal.Total)),
-		"uncategorizedTxCount":  uncategorizedTxCount,
-		"uncategorizedExpCount": uncategorizedExpCount,
-		"excludedTxCount":       exclTx.Count,
-		"excludedTxTotal":       models.NewMoney(roundCents(exclTx.Total)),
-		"excludedExpCount":      exclExp.Count,
-		"excludedExpTotal":      models.NewMoney(roundCents(exclExp.Total)),
+		"startDate":             report.StartDate,
+		"endDate":               report.EndDate,
+		"revenue":               report.Revenue,
+		"totalRevenue":          report.TotalRevenue,
+		"expenses":              report.Expenses,
+		"totalExpenses":         report.TotalExpenses,
+		"netIncome":             report.NetIncome,
+		"netMarginPercent":      report.NetMarginPercent,
+		"totalTax":              report.TotalTax,
+		"uncategorizedTxCount":  report.UncategorizedTxCount,
+		"uncategorizedExpCount": report.UncategorizedExpCount,
+		"excludedTxCount":       report.ExcludedTxCount,
+		"excludedTxTotal":       report.ExcludedTxTotal,
+		"excludedExpCount":      report.ExcludedExpCount,
+		"excludedExpTotal":      report.ExcludedExpTotal,
 	})
 }
 
