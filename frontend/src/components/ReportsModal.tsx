@@ -815,15 +815,15 @@ export default function ReportsModal({
     : [];
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title={titleContent} maxWidth="4xl" headerClassName="print:hidden">
-      <div className="flex flex-col gap-4 sm:gap-5">
-        {/* REPORT TAB SELECTOR (5 TABS) - STICKY */}
-        <div className="sticky -top-5 sm:-top-6 -mt-5 sm:-mt-6 -mx-5 sm:-mx-6 px-4 sm:px-6 py-2 sm:py-2.5 bg-zinc-900/95 backdrop-blur-md z-30 border-b border-white/10 flex items-center justify-between gap-2 shadow-md overflow-x-auto no-scrollbar print:static print:bg-transparent print:p-0 print:border-none print:m-0">
+    <Modal isOpen={isOpen} onClose={handleClose} title={titleContent} maxWidth="5xl" headerClassName="print:hidden">
+      <div className="flex flex-col gap-4 sm:gap-5 min-w-0">
+        {/* REPORT TAB SELECTOR (6 TABS) - STICKY & FLUID HORIZONTAL SCROLL */}
+        <div className="sticky -top-5 sm:-top-6 -mt-5 sm:-mt-6 -mx-5 sm:-mx-6 px-3 sm:px-6 py-2 sm:py-2.5 bg-zinc-900/95 backdrop-blur-md z-30 border-b border-white/10 flex items-center justify-between gap-2 shadow-md overflow-x-auto no-scrollbar scroll-smooth print:static print:bg-transparent print:p-0 print:border-none print:m-0 min-w-0">
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               type="button"
               onClick={() => handleTabChange("pl")}
-              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "pl"
                   ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm"
                   : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10 border border-white/5"
@@ -838,7 +838,7 @@ export default function ReportsModal({
             <button
               type="button"
               onClick={() => handleTabChange("cash_flow")}
-              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "cash_flow"
                   ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm"
                   : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10 border border-white/5"
@@ -848,7 +848,7 @@ export default function ReportsModal({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               Cash Flow
-              <span className="bg-cyan-500/30 text-cyan-200 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+              <span className="hidden md:inline-block bg-cyan-500/30 text-cyan-200 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
                 Runway
               </span>
             </button>
@@ -856,7 +856,7 @@ export default function ReportsModal({
             <button
               type="button"
               onClick={() => handleTabChange("vendor_spend")}
-              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "vendor_spend"
                   ? "bg-purple-500/20 text-purple-300 border border-purple-500/40 shadow-sm"
                   : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10 border border-white/5"
@@ -871,7 +871,7 @@ export default function ReportsModal({
             <button
               type="button"
               onClick={() => handleTabChange("ar_aging")}
-              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "ar_aging"
                   ? "bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-sm"
                   : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10 border border-white/5"
@@ -881,7 +881,7 @@ export default function ReportsModal({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               A/R Aging
-              <span className="bg-rose-500/30 text-rose-200 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+              <span className="hidden md:inline-block bg-rose-500/30 text-rose-200 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
                 Invoices
               </span>
             </button>
@@ -889,7 +889,7 @@ export default function ReportsModal({
             <button
               type="button"
               onClick={() => handleTabChange("schedule_c")}
-              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "schedule_c"
                   ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm"
                   : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10 border border-white/5"
@@ -899,7 +899,7 @@ export default function ReportsModal({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
               Schedule C
-              <span className="bg-amber-500/30 text-amber-200 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+              <span className="hidden md:inline-block bg-amber-500/30 text-amber-200 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
                 Tax Pack
               </span>
             </button>
@@ -907,7 +907,7 @@ export default function ReportsModal({
             <button
               type="button"
               onClick={() => handleTabChange("trial_balance")}
-              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "trial_balance"
                   ? "bg-blue-500/20 text-blue-300 border border-blue-500/40 shadow-sm"
                   : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10 border border-white/5"
@@ -917,7 +917,7 @@ export default function ReportsModal({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
               </svg>
               Trial Balance
-              <span className="bg-blue-500/30 text-blue-200 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+              <span className="hidden md:inline-block bg-blue-500/30 text-blue-200 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
                 Double-Entry
               </span>
             </button>

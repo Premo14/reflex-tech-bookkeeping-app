@@ -556,9 +556,24 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
         <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-2 gap-px bg-white/5 relative">
           {/* SOURCE DOCUMENTS COLUMN (RECEIPTS & CLIENT INVOICES) */}
           <div className={`flex-col bg-[#0a0a0a] min-h-0 ${mobileTab === 'expenses' || mobileTab === 'invoices' ? 'flex' : 'hidden lg:flex'}`}>
-            <div className="px-4 sm:px-6 py-3 flex justify-between items-center gap-2 bg-[#121212] border-b border-white/5 shrink-0 min-w-0">
+            <div className="px-3 sm:px-5 py-2.5 flex justify-between items-center gap-2 bg-[#121212] border-b border-white/5 shrink-0 min-w-0 overflow-hidden">
+              {/* Mobile / Tablet Header Label */}
+              <div className="lg:hidden flex items-center gap-2 font-bold text-xs text-white shrink-0 min-w-0">
+                {(mobileTab === 'invoices' || sourceDocTab === "invoices") ? (
+                  <>
+                    <svg className="w-3.5 h-3.5 text-indigo-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    <span className="truncate">Client Invoices ({invoices.length})</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-3.5 h-3.5 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    <span className="truncate">Receipts & Slips ({expenses.length})</span>
+                  </>
+                )}
+              </div>
+
               {/* Desktop Segmented Tab Switcher */}
-              <div className="flex items-center gap-1 bg-zinc-950/80 p-0.5 rounded-lg border border-white/10 shrink-0">
+              <div className="hidden lg:flex items-center gap-1 bg-zinc-950/80 p-0.5 rounded-lg border border-white/10 shrink-0">
                 <button
                   type="button"
                   onClick={() => { setSourceDocTab("receipts"); setMobileTab("expenses"); }}
@@ -595,12 +610,12 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
 
               {/* Controls for Active Document Sub-Tab */}
               {(mobileTab === 'invoices' || sourceDocTab === "invoices") ? (
-                <div className="flex gap-2 items-center shrink-0">
+                <div className="flex gap-1.5 sm:gap-2 items-center shrink-0 min-w-0">
                   <div className="w-auto shrink-0">
                     <Select
                       value={invFilter}
                       onChange={e => { setInvFilter(e.target.value); }}
-                      className="py-1.5! text-xs! whitespace-nowrap"
+                      className="py-1! sm:py-1.5! text-xs! whitespace-nowrap"
                       autoWidth
                       dropdownAlign="right"
                     >
@@ -613,18 +628,18 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
                     </Select>
                   </div>
                   {onOpenInvoices && (
-                    <Button variant="secondary" onClick={onOpenInvoices} title="Create Client Invoice" className="p-1.5!" size="sm">
-                      <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
+                    <Button variant="secondary" onClick={onOpenInvoices} title="Create Client Invoice" className="p-1.5! shrink-0" size="sm">
+                      <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
                     </Button>
                   )}
                 </div>
               ) : (
-                <div className="flex gap-2 items-center shrink-0">
+                <div className="flex gap-1.5 sm:gap-2 items-center shrink-0 min-w-0">
                   <div className="w-auto shrink-0">
                     <Select
                       value={expFilter}
                       onChange={e => { setExpFilter(e.target.value); setExpPage(1); }}
-                      className="py-1.5! text-xs! whitespace-nowrap"
+                      className="py-1! sm:py-1.5! text-xs! whitespace-nowrap"
                       autoWidth
                       dropdownAlign="right"
                     >
@@ -637,8 +652,8 @@ export default function LedgerGrid({ startDate, endDate, accounts, activeAccount
                       <option value="OVER_ALLOCATED">Over-Allocated</option>
                     </Select>
                   </div>
-                  <Button variant="secondary" onClick={handleOpenAddExpense} title="Add Expense" className="p-1.5!" size="sm">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
+                  <Button variant="secondary" onClick={handleOpenAddExpense} title="Add Expense" className="p-1.5! shrink-0" size="sm">
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
                   </Button>
                 </div>
               )}

@@ -207,13 +207,13 @@ export default function Sidebar({
       {/* MOBILE OVERLAY */}
       {isSidebarOpen && (
         <div
-          className="fixed inset-0 bg-black/80 z-40 md:hidden backdrop-blur-sm transition-opacity"
+          className="fixed inset-0 bg-black/80 z-40 lg:hidden backdrop-blur-sm transition-opacity"
           onClick={() => setIsSidebarOpen(false)}
         />
       )}
 
       {/* SIDEBAR */}
-      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#050505] border-r border-white/10 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#050505] border-r border-white/10 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out lg:relative lg:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         
         {/* HEADER */}
         <div className="p-3.5 border-b border-white/10 flex justify-between items-center bg-[#0a0a0a]">
@@ -227,7 +227,7 @@ export default function Sidebar({
             </div>
           </div>
           <button
-            className="md:hidden text-zinc-400 hover:text-white transition-colors p-1"
+            className="lg:hidden text-zinc-400 hover:text-white transition-colors p-1 cursor-pointer"
             onClick={() => setIsSidebarOpen(false)}
             aria-label="Close sidebar"
           >

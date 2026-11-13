@@ -138,7 +138,7 @@ export default function Header({
       <header className="px-4 sm:px-6 py-3 border-b border-white/10 flex flex-wrap items-center justify-between gap-3 shrink-0 bg-zinc-950/70">
         <div className="flex items-center gap-3 flex-wrap">
           {/* Mobile Top Bar (Hamburger Menu) */}
-          <div className="flex items-center md:hidden">
+          <div className="flex items-center lg:hidden">
             <Button variant="ghost"
               size="sm"
               onClick={() => setIsSidebarOpen(true)}

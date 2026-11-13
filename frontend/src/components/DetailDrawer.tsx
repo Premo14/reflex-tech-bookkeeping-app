@@ -1532,21 +1532,23 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                           )}
 
                           {allOpenInvoices.length > 0 && (
-                            <div className="p-3.5 bg-zinc-900/40 border border-white/5 rounded-xl space-y-2">
+                            <div className="p-3.5 bg-zinc-900/40 border border-white/5 rounded-xl space-y-2 min-w-0">
                               <label className="text-xs font-semibold text-zinc-300 block">Select Open Invoice to Match:</label>
-                              <div className="flex gap-2 items-center">
-                                <Select
-                                  value={selectedInvoiceToMatch ? String(selectedInvoiceToMatch) : ""}
-                                  onChange={(e) => setSelectedInvoiceToMatch(Number(e.target.value) || null)}
-                                  className="text-xs py-1.5! flex-1"
-                                >
-                                  <option value="">Choose open invoice...</option>
-                                  {allOpenInvoices.map((inv) => (
-                                    <option key={inv.id} value={inv.id}>
-                                      {inv.invoiceNumber || `INV-${inv.id}`} — {inv.clientName} ({inv.balanceDue !== undefined && inv.balanceDue < inv.totalAmount ? `Bal ${formatMoney(inv.balanceDue)} / Tot ${formatMoney(inv.totalAmount)}` : formatMoney(inv.totalAmount)})
-                                    </option>
-                                  ))}
-                                </Select>
+                              <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center min-w-0">
+                                <div className="flex-1 min-w-0">
+                                  <Select
+                                    value={selectedInvoiceToMatch ? String(selectedInvoiceToMatch) : ""}
+                                    onChange={(e) => setSelectedInvoiceToMatch(Number(e.target.value) || null)}
+                                    className="text-xs py-1.5! w-full truncate"
+                                  >
+                                    <option value="">Choose open invoice...</option>
+                                    {allOpenInvoices.map((inv) => (
+                                      <option key={inv.id} value={inv.id}>
+                                        {inv.invoiceNumber || `INV-${inv.id}`} — {inv.clientName} ({inv.balanceDue !== undefined && inv.balanceDue < inv.totalAmount ? `Bal ${formatMoney(inv.balanceDue)} / Tot ${formatMoney(inv.totalAmount)}` : formatMoney(inv.totalAmount)})
+                                      </option>
+                                    ))}
+                                  </Select>
+                                </div>
                                 <Button
                                   variant="info"
                                   size="sm"
@@ -1557,7 +1559,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                                       handleMatchInvoicePayment(selectedInvoiceToMatch, tx.id);
                                     }
                                   }}
-                                  className="text-xs shrink-0"
+                                  className="text-xs shrink-0 justify-center"
                                 >
                                   Match
                                 </Button>
@@ -2510,40 +2512,44 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                         return (
                           <div key={receipt.id} className="w-full flex flex-col items-center">
                             {!isPdf && (
-                              <div className="flex items-center gap-1.5 mb-2.5 bg-zinc-900/90 px-3 py-1 rounded-lg border border-white/10 shadow-md">
+                              <div className="flex items-center gap-1.5 mb-2.5 bg-zinc-900/95 px-3 py-1.5 rounded-xl border border-white/10 shadow-lg backdrop-blur-md">
                                 <button
                                   type="button"
                                   onClick={() => setReceiptZoom(prev => Math.max(0.5, prev - 0.25))}
-                                  className="text-zinc-300 hover:text-white px-1.5 py-0.5 rounded text-xs font-bold hover:bg-white/10 transition-colors cursor-pointer"
+                                  className="text-zinc-300 hover:text-white min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] flex items-center justify-center rounded-lg text-sm font-bold hover:bg-white/10 transition-colors cursor-pointer"
                                   title="Zoom Out (−)"
+                                  aria-label="Zoom Out"
                                 >
                                   −
                                 </button>
-                                <span className="text-[11px] font-mono text-zinc-300 w-12 text-center select-none font-semibold">
+                                <span className="text-xs font-mono text-zinc-300 w-12 text-center select-none font-semibold">
                                   {Math.round(receiptZoom * 100)}%
                                 </span>
                                 <button
                                   type="button"
                                   onClick={() => setReceiptZoom(prev => Math.min(3, prev + 0.25))}
-                                  className="text-zinc-300 hover:text-white px-1.5 py-0.5 rounded text-xs font-bold hover:bg-white/10 transition-colors cursor-pointer"
+                                  className="text-zinc-300 hover:text-white min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] flex items-center justify-center rounded-lg text-sm font-bold hover:bg-white/10 transition-colors cursor-pointer"
                                   title="Zoom In (+)"
+                                  aria-label="Zoom In"
                                 >
                                   +
                                 </button>
-                                <div className="h-3 w-px bg-white/20 mx-1" />
+                                <div className="h-4 w-px bg-white/20 mx-1" />
                                 <button
                                   type="button"
                                   onClick={() => setReceiptRotation(prev => (prev + 90) % 360)}
-                                  className="text-zinc-300 hover:text-white px-1.5 py-0.5 rounded text-xs font-bold hover:bg-white/10 transition-colors cursor-pointer"
-                                  title="Rotate 90° (R)"
+                                  className="text-zinc-300 hover:text-white min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] flex items-center justify-center rounded-lg text-base font-bold hover:bg-white/10 transition-colors cursor-pointer"
+                                  title="Rotate 90° Clockwise (R)"
+                                  aria-label="Rotate 90 degrees clockwise"
                                 >
                                   ↻
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => { setReceiptZoom(1); setReceiptRotation(0); }}
-                                  className="text-zinc-400 hover:text-white px-1.5 py-0.5 rounded text-[10px] font-medium hover:bg-white/10 transition-colors ml-1 cursor-pointer"
+                                  className="text-zinc-400 hover:text-white px-2.5 py-1 rounded-lg text-xs font-medium hover:bg-white/10 transition-colors ml-1 cursor-pointer"
                                   title="Reset Zoom & Rotation (0)"
+                                  aria-label="Reset zoom and rotation"
                                 >
                                   Reset
                                 </button>

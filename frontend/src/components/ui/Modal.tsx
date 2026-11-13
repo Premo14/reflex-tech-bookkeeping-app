@@ -7,7 +7,7 @@ interface ModalProps {
   title: React.ReactNode;
   children: React.ReactNode;
   footer?: React.ReactNode;
-  maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl';
+  maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl' | '5xl' | '6xl';
   suspended?: boolean;
   bodyClassName?: string;
   headerClassName?: string;
@@ -101,13 +101,15 @@ export function Modal({ isOpen, onClose, title, children, footer, maxWidth = 'md
     xl: 'max-w-xl',
     '2xl': 'max-w-2xl',
     '4xl': 'max-w-4xl',
+    '5xl': 'max-w-5xl',
+    '6xl': 'max-w-6xl',
   };
 
   const content = (
     <div 
       ref={overlayRef}
       onClick={handleOverlayClick}
-      className={`fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200 print:static print:p-0 print:bg-white print:overflow-visible print:block ${
+      className={`fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-2 sm:p-4 overflow-hidden animate-in fade-in duration-200 print:static print:p-0 print:bg-white print:overflow-visible print:block ${
         suspended ? 'invisible pointer-events-none' : ''
       }`}
     >
@@ -117,7 +119,7 @@ export function Modal({ isOpen, onClose, title, children, footer, maxWidth = 'md
         aria-modal="true"
         aria-labelledby="modal-dialog-title"
         tabIndex={-1}
-        className={`bg-zinc-900 border border-white/10 rounded-2xl w-full ${maxWidthClasses[maxWidth]} shadow-2xl flex flex-col max-h-[min(90vh,90dvh)] animate-in zoom-in-95 duration-200 outline-none print:static print:max-h-none print:w-full print:max-w-none print:border-none print:shadow-none print:bg-white print:text-black print:overflow-visible`}
+        className={`bg-zinc-900 border border-white/10 rounded-2xl w-full max-w-[calc(100vw-1rem)] ${maxWidthClasses[maxWidth]} shadow-2xl flex flex-col max-h-[min(92vh,92dvh)] overflow-hidden animate-in zoom-in-95 duration-200 outline-none print:static print:max-h-none print:w-full print:max-w-none print:border-none print:shadow-none print:bg-white print:text-black print:overflow-visible`}
       >
         <div className={`flex justify-between items-center px-6 py-4 border-b border-white/10 shrink-0 bg-zinc-950/40 ${headerClassName || ''}`}>
           <h2 id="modal-dialog-title" className="text-base font-bold text-white tracking-tight print:text-black">{title}</h2>
