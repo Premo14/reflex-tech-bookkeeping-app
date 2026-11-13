@@ -6,6 +6,8 @@ import { LoadingSpinner } from "./ui/LoadingSpinner";
 import { useConfirm } from "./ui/ConfirmDialog";
 import {
   getBankRules,
+  getBankRuleSuggestions,
+  type RuleSuggestion,
   createBankRule,
   updateBankRule,
   deleteBankRule,
@@ -94,16 +96,19 @@ export default function BankRulesTab({
   } | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [suggestions, setSuggestions] = useState<RuleSuggestion[]>([]);
 
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [rulesData, accountsData] = await Promise.all([
+      const [rulesData, accountsData, suggData] = await Promise.all([
         getBankRules(),
         getChartAccounts(),
+        getBankRuleSuggestions().catch(() => ({ suggestions: [] })),
       ]);
       setRules(rulesData || []);
       setAccounts(accountsData || []);
+      setSuggestions(suggData?.suggestions || []);
     } catch (err) {
       console.error("Failed to load rules:", err);
     } finally {
@@ -177,6 +182,21 @@ export default function BankRulesTab({
     setAutoExclude(false);
     setExclusionReason("PERSONAL");
     setNotes("");
+    setPreviewMatches(null);
+    setIsEditing(true);
+  };
+
+  const handleAdoptSuggestion = (s: RuleSuggestion) => {
+    setEditingRuleId(null);
+    setRuleName(s.suggestedName);
+    setMatchLogic("AND");
+    setConditions([{ field: "description", operator: "contains", value: s.payeeKeyword }]);
+    setCategoryAccountId(s.categoryAccountId);
+    setRenamedVendor(s.payeeKeyword);
+    setAutoConfirm(true);
+    setAutoExclude(false);
+    setExclusionReason("PERSONAL");
+    setNotes(`Auto-generated from ${s.matchingTxCount} recurring transactions`);
     setPreviewMatches(null);
     setIsEditing(true);
   };
@@ -435,6 +455,50 @@ export default function BankRulesTab({
           >
             &times;
           </button>
+        </div>
+      )}
+
+      {/* SMART RULE SUGGESTIONS */}
+      {!isEditing && suggestions.length > 0 && (
+        <div className="p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 space-y-2 mb-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-indigo-300 flex items-center gap-1.5">
+              <span>💡</span> Smart Rule Suggestions ({suggestions.length})
+            </span>
+            <span className="text-[11px] text-zinc-400">
+              Detected recurring categorizations
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {suggestions.map((s, idx) => (
+              <div
+                key={idx}
+                className="flex items-center justify-between gap-2 p-2 rounded-lg bg-zinc-950/60 border border-white/5 text-xs"
+              >
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono text-[11px] text-zinc-200 bg-zinc-900 px-1.5 py-0.5 rounded border border-white/5">
+                    &ldquo;{s.payeeKeyword}&rdquo;
+                  </span>
+                  <span className="text-zinc-400 text-[11px]">&rarr;</span>
+                  <span className="text-indigo-300 font-medium text-[11px]">
+                    {s.categoryCode} {s.categoryName}
+                  </span>
+                  <span className="text-zinc-500 text-[10px]">
+                    ({s.matchingTxCount} transactions)
+                  </span>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => handleAdoptSuggestion(s)}
+                  className="text-[11px] py-1 px-2.5 h-auto text-indigo-300 hover:text-white"
+                >
+                  Create Rule
+                </Button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

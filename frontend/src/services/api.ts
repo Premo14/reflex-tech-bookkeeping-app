@@ -710,6 +710,20 @@ export function getBankRules(): Promise<BankRule[]> {
   return getJSON("/rules");
 }
 
+export interface RuleSuggestion {
+  payeeKeyword: string;
+  suggestedName: string;
+  categoryAccountId: number;
+  categoryName: string;
+  categoryCode: string;
+  matchingTxCount: number;
+  sampleDescription: string;
+}
+
+export function getBankRuleSuggestions(): Promise<{ suggestions: RuleSuggestion[] }> {
+  return getJSON("/rules/suggestions");
+}
+
 export function getBankRule(id: number): Promise<BankRule> {
   return getJSON(`/rules/${id}`);
 }

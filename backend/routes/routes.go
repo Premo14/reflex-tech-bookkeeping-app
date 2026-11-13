@@ -30,6 +30,7 @@ func SetupRoutes(app *fiber.App) {
 
 	// Automated Bank Rules
 	api.Get("/rules", controllers.GetRules)
+	api.Get("/rules/suggestions", controllers.GetRuleSuggestions)
 	api.Post("/rules", controllers.CreateRule)
 	api.Get("/rules/:id", controllers.GetRule)
 	api.Patch("/rules/:id", controllers.UpdateRule)

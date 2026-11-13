@@ -336,3 +336,65 @@ func TestRulePreview(c fiber.Ctx) error {
 		"sampleMatches": samples,
 	})
 }
+
+// GetRuleSuggestions detects recurring payee categorizations that do not yet have an automated BankRule.
+func GetRuleSuggestions(c fiber.Ctx) error {
+	// Query top payees with >= 2 transactions categorized to the same category
+	type candidateRow struct {
+		CategoryAccountID uint   `json:"categoryAccountId"`
+		Count             int64  `json:"count"`
+		SampleDesc        string `json:"sampleDesc"`
+	}
+
+	var candidates []candidateRow
+	db.DB.Raw(`
+		SELECT category_account_id, COUNT(*) as count, MIN(description) as sample_desc
+		FROM bank_transactions
+		WHERE category_account_id IS NOT NULL 
+		  AND COALESCE(review_status, '') NOT IN ('DELETED', 'IGNORED')
+		GROUP BY category_account_id, LOWER(TRIM(description))
+		HAVING COUNT(*) >= 2
+		ORDER BY count DESC
+		LIMIT 10
+	`).Scan(&candidates)
+
+	// Fetch existing active rules to filter out already-automated descriptions
+	var activeRules []models.BankRule
+	db.DB.Where("active = true").Find(&activeRules)
+
+	var suggestions []fiber.Map
+	for _, cand := range candidates {
+		// Check if any rule already matches this sample description
+		alreadyCovered := false
+		dummyTx := models.BankTransaction{Description: cand.SampleDesc}
+		for _, rule := range activeRules {
+			if utils.EvaluateRule(rule, dummyTx) {
+				alreadyCovered = true
+				break
+			}
+		}
+
+		if !alreadyCovered && cand.CategoryAccountID > 0 {
+			var cat models.ChartAccount
+			if err := db.DB.First(&cat, cand.CategoryAccountID).Error; err == nil {
+				cleanKeyword := strings.TrimSpace(cand.SampleDesc)
+				if len(cleanKeyword) > 24 {
+					cleanKeyword = cleanKeyword[:24]
+				}
+				suggestions = append(suggestions, fiber.Map{
+					"payeeKeyword":      cleanKeyword,
+					"suggestedName":     fmt.Sprintf("Auto-categorize %s to %s", cleanKeyword, cat.Name),
+					"categoryAccountId": cat.ID,
+					"categoryName":      cat.Name,
+					"categoryCode":      cat.Code,
+					"matchingTxCount":   cand.Count,
+					"sampleDescription": cand.SampleDesc,
+				})
+			}
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"suggestions": suggestions,
+	})
+}
