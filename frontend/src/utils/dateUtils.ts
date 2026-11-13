@@ -32,3 +32,55 @@ export function toLocalISODate(d: Date = new Date()): string {
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
+
+/**
+ * Converts standard/accounting payment terms (e.g. "Net 30", "Due Upon Receipt")
+ * into clear, plain-English human-readable descriptions.
+ */
+export function formatPaymentTerms(terms: string | null | undefined): string {
+  if (!terms) return "30 days to pay";
+  const normalized = terms.trim().toLowerCase();
+  if (normalized === "net 30" || normalized === "net30") return "30 days to pay";
+  if (normalized === "net 15" || normalized === "net15") return "15 days to pay";
+  if (normalized === "net 60" || normalized === "net60") return "60 days to pay";
+  if (normalized === "net 90" || normalized === "net90") return "90 days to pay";
+  if (normalized.includes("receipt") || normalized.includes("immediate")) return "Due immediately";
+  return terms;
+}
+
+/**
+ * Returns plain-English deadline text (e.g. "Due in 30 days").
+ */
+export function formatPaymentDeadline(terms: string | null | undefined): string {
+  if (!terms) return "Due in 30 days";
+  const normalized = terms.trim().toLowerCase();
+  if (normalized === "net 30" || normalized === "net30") return "Due in 30 days";
+  if (normalized === "net 15" || normalized === "net15") return "Due in 15 days";
+  if (normalized === "net 60" || normalized === "net60") return "Due in 60 days";
+  if (normalized === "net 90" || normalized === "net90") return "Due in 90 days";
+  if (normalized.includes("receipt") || normalized.includes("immediate")) return "Due immediately";
+  return `Due: ${terms}`;
+}
+
+/**
+ * Calculates due date string (YYYY-MM-DD) from issue date and payment terms.
+ */
+export function calculateDueDateFromTerms(issueDateStr: string, terms: string): string {
+  if (!issueDateStr) return "";
+  const match = issueDateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const base = match 
+    ? new Date(parseInt(match[1], 10), parseInt(match[2], 10) - 1, parseInt(match[3], 10))
+    : new Date(issueDateStr);
+  if (isNaN(base.getTime())) return "";
+
+  let days = 30;
+  const norm = terms.toLowerCase();
+  if (norm.includes("receipt") || norm.includes("immediate")) days = 0;
+  else if (norm.includes("15")) days = 15;
+  else if (norm.includes("30")) days = 30;
+  else if (norm.includes("60")) days = 60;
+  else if (norm.includes("90")) days = 90;
+
+  const due = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+  return toLocalISODate(due);
+}

@@ -24,6 +24,7 @@ import type {
   ChartAccount,
 } from "../types/models";
 import { getGroupedAccounts } from "../utils/accountHierarchy";
+import { formatPaymentTerms, calculateDueDateFromTerms } from "../utils/dateUtils";
 
 interface InvoicingModalProps {
   isOpen: boolean;
@@ -625,7 +626,7 @@ export default function InvoicingModal({
 
               <div>
                 <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider block mb-1">
-                  Payment Terms
+                  Payment Deadline
                 </label>
                 <Select
                   value={paymentTerms}
@@ -633,27 +634,21 @@ export default function InvoicingModal({
                     const terms = e.target.value;
                     setPaymentTerms(terms);
                     if (issueDate) {
-                      const base = new Date(issueDate);
-                      if (!isNaN(base.getTime())) {
-                        let days = 30;
-                        if (terms === "Due Upon Receipt") days = 0;
-                        else if (terms === "Net 15") days = 15;
-                        else if (terms === "Net 30") days = 30;
-                        else if (terms === "Net 60") days = 60;
-                        else if (terms === "Net 90") days = 90;
-                        const due = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
-                        setDueDate(due.toISOString().split("T")[0]);
-                      }
+                      const computedDue = calculateDueDateFromTerms(issueDate, terms);
+                      if (computedDue) setDueDate(computedDue);
                     }
                   }}
                   className="w-full text-xs"
                 >
-                  <option value="Net 30">Net 30 (Due in 30 days)</option>
-                  <option value="Due Upon Receipt">Due Upon Receipt (Immediate)</option>
-                  <option value="Net 15">Net 15 (Due in 15 days)</option>
-                  <option value="Net 60">Net 60 (Due in 60 days)</option>
-                  <option value="Net 90">Net 90 (Due in 90 days)</option>
+                  <option value="Net 30">Due in 30 days (Standard / Net 30)</option>
+                  <option value="Due Upon Receipt">Due immediately (Upon receipt)</option>
+                  <option value="Net 15">Due in 15 days (Net 15)</option>
+                  <option value="Net 60">Due in 60 days (Net 60)</option>
+                  <option value="Net 90">Due in 90 days (Net 90)</option>
                 </Select>
+                <p className="text-[10px] text-zinc-500 mt-1">
+                  Automatically calculates due date from issue date.
+                </p>
               </div>
 
               <div>
@@ -667,17 +662,8 @@ export default function InvoicingModal({
                     const newIssue = e.target.value;
                     setIssueDate(newIssue);
                     if (newIssue) {
-                      const base = new Date(newIssue);
-                      if (!isNaN(base.getTime())) {
-                        let days = 30;
-                        if (paymentTerms === "Due Upon Receipt") days = 0;
-                        else if (paymentTerms === "Net 15") days = 15;
-                        else if (paymentTerms === "Net 30") days = 30;
-                        else if (paymentTerms === "Net 60") days = 60;
-                        else if (paymentTerms === "Net 90") days = 90;
-                        const due = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
-                        setDueDate(due.toISOString().split("T")[0]);
-                      }
+                      const computedDue = calculateDueDateFromTerms(newIssue, paymentTerms);
+                      if (computedDue) setDueDate(computedDue);
                     }
                   }}
                 />
@@ -988,8 +974,8 @@ export default function InvoicingModal({
                     <span>{formatDate(previewInvoice.dueDate)}</span>
                   </div>
                   <div>
-                    <span className="font-bold text-zinc-900">Terms: </span>
-                    <span>{previewInvoice.paymentTerms || "Net 30"}</span>
+                    <span className="font-bold text-zinc-900">Payment Window: </span>
+                    <span>{formatPaymentTerms(previewInvoice.paymentTerms || "Net 30")} ({previewInvoice.paymentTerms || "Net 30"})</span>
                   </div>
                 </div>
               </div>
@@ -1010,7 +996,7 @@ export default function InvoicingModal({
                       let items: InvoiceLineItem[] = [];
                       try {
                         if (previewInvoice.items) items = JSON.parse(previewInvoice.items);
-                      } catch (e) {
+                      } catch {
                         items = [];
                       }
                       if (items.length === 0) {

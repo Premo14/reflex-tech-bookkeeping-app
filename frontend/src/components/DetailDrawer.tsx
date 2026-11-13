@@ -22,7 +22,7 @@ import type { BankTransaction, Expense, ChartAccount, Invoice, ScoredDepositCand
 import CreateExpenseForm from "./CreateExpenseForm";
 import CreateTransactionForm from "./CreateTransactionForm";
 import { getGroupedAccounts } from "../utils/accountHierarchy";
-import { formatDate } from "../utils/dateUtils";
+import { formatDate, formatPaymentTerms } from "../utils/dateUtils";
 import { useLiveEvent } from "../utils/useLiveSync";
 import { extractCleanVendor } from "../utils/vendorUtils";
 import { computeMatchScore } from "../utils/matchConfidence";
@@ -1129,13 +1129,16 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
               <span className="text-zinc-200 font-medium">{formatDate(invoice.dueDate)}</span>
             </div>
             <div>
-              <span className="text-zinc-500 block text-[10px] uppercase font-bold">Terms</span>
+              <span className="text-zinc-500 block text-[10px] uppercase font-bold">Payment Window</span>
               <span 
                 className="text-zinc-200 font-medium cursor-help underline decoration-dotted decoration-zinc-600 hover:text-white transition-colors"
-                title={invoice.paymentTerms === 'Net 30' ? 'Net 30: Full invoice balance is due within 30 days of the issue date' : `Payment terms: ${invoice.paymentTerms || 'Net 30'}`}
-                data-tooltip={invoice.paymentTerms === 'Net 30' ? 'Net 30: Due within 30 days of issue' : `Payment terms: ${invoice.paymentTerms || 'Net 30'}`}
+                title={`Payment terms: ${invoice.paymentTerms || 'Net 30'} (${formatPaymentTerms(invoice.paymentTerms || 'Net 30')})`}
+                data-tooltip={`Payment terms: ${invoice.paymentTerms || 'Net 30'} (${formatPaymentTerms(invoice.paymentTerms || 'Net 30')})`}
               >
-                {invoice.paymentTerms || "Net 30"}
+                {formatPaymentTerms(invoice.paymentTerms || "Net 30")}
+              </span>
+              <span className="text-[10px] text-zinc-500 block font-normal mt-0.5">
+                ({invoice.paymentTerms || "Net 30"})
               </span>
             </div>
           </div>

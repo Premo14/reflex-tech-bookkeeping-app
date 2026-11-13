@@ -1,7 +1,7 @@
 import type { Invoice } from "../types/models";
 import { Card } from "./ui/Card";
 import { Badge } from "./ui/Badge";
-import { formatDate } from "../utils/dateUtils";
+import { formatDate, formatPaymentTerms } from "../utils/dateUtils";
 
 interface InvoiceListProps {
   invoices: Invoice[];
@@ -167,7 +167,7 @@ export default function InvoiceList({
                   {inv.clientName}
                 </h3>
 
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[11px] text-zinc-400">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-[11px] text-zinc-400">
                   <span>Issued: {formatDate(inv.issueDate)}</span>
                   <span>•</span>
                   <span>Due: {formatDate(inv.dueDate)}</span>
@@ -175,11 +175,11 @@ export default function InvoiceList({
                     <>
                       <span>•</span>
                       <span 
-                        className="text-zinc-500 cursor-help underline decoration-dotted decoration-zinc-600 hover:text-zinc-300 transition-colors" 
-                        title={`Payment terms: ${inv.paymentTerms} (${inv.paymentTerms === 'Net 30' ? 'Full balance due within 30 days of invoice date' : inv.paymentTerms === 'Net 15' ? 'Due within 15 days' : inv.paymentTerms === 'Net 60' ? 'Due within 60 days' : 'Due upon invoice credit terms'})`}
-                        data-tooltip={`Payment terms: ${inv.paymentTerms} (${inv.paymentTerms === 'Net 30' ? 'Due in 30 days' : 'Credit terms'})`}
+                        className="text-zinc-400 font-medium cursor-help underline decoration-dotted decoration-zinc-600 hover:text-zinc-200 transition-colors" 
+                        title={`Payment terms: ${inv.paymentTerms} (${formatPaymentTerms(inv.paymentTerms)})`}
+                        data-tooltip={`Payment terms: ${inv.paymentTerms} (${formatPaymentTerms(inv.paymentTerms)})`}
                       >
-                        {inv.paymentTerms}
+                        {formatPaymentTerms(inv.paymentTerms)}
                       </span>
                     </>
                   )}
