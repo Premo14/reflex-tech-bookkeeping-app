@@ -1150,54 +1150,35 @@ type VendorSpendReportData struct {
 	Total1099Spend     models.Money      `json:"total1099Spend"`     // Total spend across all 1099-reportable vendors
 }
 
-// GetVendorSpendReport analyzes expense and debit spending grouped and ranked by payee/vendor.
-func GetVendorSpendReport(c fiber.Ctx) error {
-	startDate := c.Query("startDate")
-	endDate := c.Query("endDate")
+type VendorSpendRawItem struct {
+	Vendor       string
+	Description  string
+	Amount       models.Money
+	Timestamp    time.Time
+	CategoryCode string
+	CategoryName string
+}
 
-	type rawExpense struct {
-		Vendor       string
-		Description  string
-		Amount       float64
-		Timestamp    time.Time
-		CategoryCode string
-		CategoryName string
-	}
+type VendorSpendBuilderInput struct {
+	StartDate string
+	EndDate   string
+	Items     []VendorSpendRawItem
+}
 
-	var exps []rawExpense
-	expQ := db.DB.Table("expenses e").
-		Select("e.vendor, e.description, e.amount, e.timestamp, ca.code as category_code, ca.name as category_name").
-		Joins("JOIN chart_accounts ca ON ca.id = e.chart_account_id").
-		Where("ca.type = ?", "EXPENSE").
-		Where(inBooksClauseExpAS).
-		Where("(LOWER(COALESCE(e.tender, '')) = 'cash' OR e.review_status = 'WARNINGS_IGNORED' OR e.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
-	expQ = ApplyDateRange(expQ, "e.timestamp", startDate, endDate)
-	_ = expQ.Scan(&exps)
-
-	var debits []rawExpense
-	debQ := db.DB.Table("bank_transactions bt").
-		Select("bt.description as vendor, bt.description, ABS(bt.amount) as amount, bt.date as timestamp, ca.code as category_code, ca.name as category_name").
-		Joins("JOIN chart_accounts ca ON ca.id = bt.category_account_id").
-		Where("ca.type = ?", "EXPENSE").
-		Where("bt.amount < 0").
-		Where(inBooksClauseBT).
-		Where("bt.id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')")
-	debQ = ApplyDateRange(debQ, "bt.date", startDate, endDate)
-	_ = debQ.Scan(&debits)
-
+// BuildVendorSpendData compiles vendor spend analytics and IRS 1099-NEC contractor compliance using exact integer cents.
+func BuildVendorSpendData(input VendorSpendBuilderInput) VendorSpendReportData {
 	type vendorAgg struct {
 		VendorName string
-		TotalSpend float64
+		TotalCents int64
 		Count      int64
 		Categories map[string]int // "Code|Name" -> count
 		MostRecent time.Time
 	}
 
 	aggMap := make(map[string]*vendorAgg)
-	allItems := append(exps, debits...)
-	var grandTotal float64
+	var grandTotalCents int64
 
-	for _, item := range allItems {
+	for _, item := range input.Items {
 		name := strings.TrimSpace(item.Vendor)
 		if name == "" {
 			name = strings.TrimSpace(item.Description)
@@ -1217,9 +1198,13 @@ func GetVendorSpendReport(c fiber.Ctx) error {
 			aggMap[key] = agg
 		}
 
-		agg.TotalSpend += item.Amount
+		cents := item.Amount.Cents
+		if cents < 0 {
+			cents = -cents
+		}
+		agg.TotalCents += cents
 		agg.Count++
-		grandTotal += item.Amount
+		grandTotalCents += cents
 		if item.Timestamp.After(agg.MostRecent) {
 			agg.MostRecent = item.Timestamp
 		}
@@ -1244,59 +1229,127 @@ func GetVendorSpendReport(c fiber.Ctx) error {
 			}
 		}
 
-		totalSpend := roundCents(agg.TotalSpend)
-		avgSpend := roundCents(totalSpend / float64(agg.Count))
+		avgCents := int64(0)
+		if agg.Count > 0 {
+			avgCents = int64(math.Round(float64(agg.TotalCents) / float64(agg.Count)))
+		}
 		pct := 0.0
-		if grandTotal > 0 {
-			pct = roundCents((totalSpend / grandTotal) * 100.0)
+		if grandTotalCents > 0 {
+			pct = math.Round((float64(agg.TotalCents)/float64(grandTotalCents))*10000.0) / 100.0
 		}
 
 		vendorList = append(vendorList, VendorSpendItem{
 			VendorName:          agg.VendorName,
-			TotalSpend:          models.NewMoney(totalSpend),
+			TotalSpend:          models.Money{Cents: agg.TotalCents},
 			TransactionCount:    agg.Count,
-			AverageSpend:        models.NewMoney(avgSpend),
+			AverageSpend:        models.Money{Cents: avgCents},
 			PercentOfTotal:      pct,
 			PrimaryCategoryCode: bestCatCode,
 			PrimaryCategoryName: bestCatName,
 			LastDate:            agg.MostRecent.Format("2006-01-02"),
-			Requires1099:        totalSpend >= 600.0,
+			Requires1099:        agg.TotalCents >= 60000, // $600.00 IRS Form 1099-NEC threshold
 		})
 	}
 
 	sort.Slice(vendorList, func(i, j int) bool {
-		return vendorList[i].TotalSpend.Dollars() > vendorList[j].TotalSpend.Dollars()
+		return vendorList[i].TotalSpend.Cents > vendorList[j].TotalSpend.Cents
 	})
 
-	top5Spend := 0.0
+	var top5Cents int64
 	contractorsOver600 := 0
-	total1099Spend := 0.0
+	var total1099Cents int64
 	for i, v := range vendorList {
 		if i < 5 {
-			top5Spend += v.TotalSpend.Dollars()
+			top5Cents += v.TotalSpend.Cents
 		}
 		if v.Requires1099 {
 			contractorsOver600++
-			total1099Spend += v.TotalSpend.Dollars()
+			total1099Cents += v.TotalSpend.Cents
 		}
 	}
 	top5Pct := 0.0
-	if grandTotal > 0 {
-		top5Pct = roundCents((top5Spend / grandTotal) * 100.0)
+	if grandTotalCents > 0 {
+		top5Pct = math.Round((float64(top5Cents)/float64(grandTotalCents))*10000.0) / 100.0
 	}
+
+	return VendorSpendReportData{
+		StartDate:          input.StartDate,
+		EndDate:            input.EndDate,
+		TotalSpend:         models.Money{Cents: grandTotalCents},
+		TotalVendors:       len(vendorList),
+		Top5Percent:        top5Pct,
+		Vendors:            vendorList,
+		ContractorsOver600: contractorsOver600,
+		Total1099Spend:     models.Money{Cents: total1099Cents},
+	}
+}
+
+// GetVendorSpendReport analyzes expense and debit spending grouped and ranked by payee/vendor.
+func GetVendorSpendReport(c fiber.Ctx) error {
+	startDate := c.Query("startDate")
+	endDate := c.Query("endDate")
+
+	type dbExpenseRow struct {
+		Vendor       string
+		Description  string
+		Amount       models.Money
+		Timestamp    time.Time
+		CategoryCode string
+		CategoryName string
+	}
+
+	var exps []dbExpenseRow
+	expQ := db.DB.Table("expenses e").
+		Select("e.vendor, e.description, e.amount, e.timestamp, ca.code as category_code, ca.name as category_name").
+		Joins("JOIN chart_accounts ca ON ca.id = e.chart_account_id").
+		Where("ca.type = ?", "EXPENSE").
+		Where(inBooksClauseExpAS).
+		Where("(LOWER(COALESCE(e.tender, '')) = 'cash' OR e.review_status = 'WARNINGS_IGNORED' OR e.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
+	expQ = ApplyDateRange(expQ, "e.timestamp", startDate, endDate)
+	_ = expQ.Scan(&exps)
+
+	var debits []dbExpenseRow
+	debQ := db.DB.Table("bank_transactions bt").
+		Select("bt.description as vendor, bt.description, ABS(bt.amount) as amount, bt.date as timestamp, ca.code as category_code, ca.name as category_name").
+		Joins("JOIN chart_accounts ca ON ca.id = bt.category_account_id").
+		Where("ca.type = ?", "EXPENSE").
+		Where("bt.amount < 0").
+		Where(inBooksClauseBT).
+		Where("bt.id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')")
+	debQ = ApplyDateRange(debQ, "bt.date", startDate, endDate)
+	debQ.Scan(&debits)
+
+	var rawItems []VendorSpendRawItem
+	for _, e := range exps {
+		rawItems = append(rawItems, VendorSpendRawItem{
+			Vendor:       e.Vendor,
+			Description:  e.Description,
+			Amount:       e.Amount,
+			Timestamp:    e.Timestamp,
+			CategoryCode: e.CategoryCode,
+			CategoryName: e.CategoryName,
+		})
+	}
+	for _, d := range debits {
+		rawItems = append(rawItems, VendorSpendRawItem{
+			Vendor:       d.Vendor,
+			Description:  d.Description,
+			Amount:       d.Amount,
+			Timestamp:    d.Timestamp,
+			CategoryCode: d.CategoryCode,
+			CategoryName: d.CategoryName,
+		})
+	}
+
+	report := BuildVendorSpendData(VendorSpendBuilderInput{
+		StartDate: startDate,
+		EndDate:   endDate,
+		Items:     rawItems,
+	})
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status": "success",
-		"report": VendorSpendReportData{
-			StartDate:          startDate,
-			EndDate:            endDate,
-			TotalSpend:         models.NewMoney(roundCents(grandTotal)),
-			TotalVendors:       len(vendorList),
-			Top5Percent:        top5Pct,
-			Vendors:            vendorList,
-			ContractorsOver600: contractorsOver600,
-			Total1099Spend:     models.NewMoney(roundCents(total1099Spend)),
-		},
+		"report": report,
 	})
 }
 
