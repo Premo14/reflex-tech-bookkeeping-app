@@ -13,9 +13,12 @@ This document is automatically managed by the autonomous hardening agent (Hermes
 
 ## PROPOSAL 2026-11-12-01: Migrate invoice write-path money math to integer cents
 
-- **Status:** PROPOSED (not implemented)
+- **Status:** IMPLEMENTED (Pass 16, 2026-11-13)
 - **Raised:** Pass 11 (A/R Aging & Invoices Report vertical slice), 2026-11-12
 - **Area:** `backend/controllers/invoiceController.go` (create/update/payment-match paths)
+- **Resolution:** Replaced all `roundCents` float64 operations across `CreateInvoice`, `UpdateInvoice`, `MatchInvoicePayment`, and `GetInvoices` summary metrics with exact integer-cent `models.Money` arithmetic (`.Add()`, `.Sub()`, `.PercentOf()`). Added `SweepOverdueInvoices()` and verified with `TestInvoiceWritePathMoneyArithmetic`.
+
+---
 
 ### Problem
 

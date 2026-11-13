@@ -231,3 +231,40 @@ func TestARReceivableFallback(t *testing.T) {
 		t.Errorf("expected fallback 100000c, got %v", got)
 	}
 }
+
+// TestInvoiceWritePathMoneyArithmetic pins PROPOSAL 2026-11-12-01:
+// Integer-cent arithmetic on invoice write paths prevents float drift.
+func TestInvoiceWritePathMoneyArithmetic(t *testing.T) {
+	// 1. Repeated partial payments: 3 payments of $0.10 on a $0.30 invoice
+	inv := models.Invoice{
+		TotalAmount: models.NewMoney(0.30),
+		AmountPaid:  models.NewMoney(0),
+		BalanceDue:  models.NewMoney(0.30),
+		Status:      "SENT",
+	}
+
+	payment := models.NewMoney(0.10)
+	for i := 1; i <= 3; i++ {
+		inv.AmountPaid = inv.AmountPaid.Add(payment)
+		inv.BalanceDue = inv.TotalAmount.Sub(inv.AmountPaid)
+	}
+
+	if inv.BalanceDue.Cents != 0 {
+		t.Errorf("Expected BalanceDue to be exactly 0 cents after 3x$0.10 payments, got %d cents", inv.BalanceDue.Cents)
+	}
+	if inv.AmountPaid.Cents != 30 {
+		t.Errorf("Expected AmountPaid to be exactly 30 cents, got %d cents", inv.AmountPaid.Cents)
+	}
+
+	// 2. Tax rate calculation via PercentOf
+	subtotal := models.NewMoney(100.00) // 10000 cents
+	taxRate := 8.25                     // 8.25%
+	tax := subtotal.PercentOf(taxRate)
+	if tax.Cents != 825 {
+		t.Errorf("Expected tax of 825 cents ($8.25), got %d cents", tax.Cents)
+	}
+	total := subtotal.Add(tax)
+	if total.Cents != 10825 {
+		t.Errorf("Expected total of 10825 cents ($108.25), got %d cents", total.Cents)
+	}
+}

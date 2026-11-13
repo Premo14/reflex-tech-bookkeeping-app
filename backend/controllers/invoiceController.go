@@ -50,7 +50,23 @@ func calculateDueDate(issueDate time.Time, terms string, explicitDueDate string)
 		return issueDate.AddDate(0, 0, 30) // Net 30 default
 	}
 }
+
+// SweepOverdueInvoices updates any SENT or PARTIALLY_PAID invoice past its due date to OVERDUE.
+func SweepOverdueInvoices() int64 {
+	res := db.DB.Model(&models.Invoice{}).
+		Where("status IN ('SENT', 'PARTIALLY_PAID') AND due_date < ?", time.Now().UTC()).
+		Update("status", "OVERDUE")
+	if res.RowsAffected > 0 {
+		BroadcastEvent("INVOICES_UPDATED", nil)
+		BroadcastEvent("SUMMARY_UPDATED", nil)
+	}
+	return res.RowsAffected
+}
+
 func GetInvoices(c fiber.Ctx) error {
+	// Automatically sweep overdue statuses before querying
+	SweepOverdueInvoices()
+
 	status := strings.TrimSpace(c.Query("status"))
 	search := strings.TrimSpace(c.Query("search"))
 	yearStr := strings.TrimSpace(c.Query("year"))
@@ -82,44 +98,29 @@ func GetInvoices(c fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch invoices"})
 	}
 
-	// Update overdue statuses dynamically if dueDate < now and status is SENT or PARTIALLY_PAID (never DRAFT)
+	// Exact integer-cent summary metrics
 	now := time.Now()
-	for i := range invoices {
-		if (invoices[i].Status == "SENT" || invoices[i].Status == "PARTIALLY_PAID") && invoices[i].DueDate.Before(now) {
-			invoices[i].Status = "OVERDUE"
-			db.DB.Model(&models.Invoice{}).Where("id = ?", invoices[i].ID).Update("status", "OVERDUE")
-		}
-	}
-
-	// Summary metrics
-	type sumResult struct {
-		TotalInvoiced float64
-		TotalPaid     float64
-		TotalUnpaid   float64
-		OverdueCount  int64
-	}
-
-	var totalInvoiced float64
-	var totalPaid float64
-	var totalUnpaid float64
+	var totalInvoicedCents int64
+	var totalPaidCents int64
+	var totalUnpaidCents int64
 	var overdueCount int64
 
 	var allInvoices []models.Invoice
 	db.DB.Find(&allInvoices)
 	for _, inv := range allInvoices {
 		if inv.Status != "VOID" {
-			totalInvoiced += inv.TotalAmount.Dollars()
+			totalInvoicedCents += inv.TotalAmount.Cents
 		}
 		if inv.Status == "PAID" {
-			totalPaid += inv.TotalAmount.Dollars()
+			totalPaidCents += inv.TotalAmount.Cents
 		} else {
-			totalPaid += inv.AmountPaid.Dollars()
-			unpaidBal := inv.BalanceDue.Dollars()
-			if unpaidBal <= 0 && inv.TotalAmount.Dollars() > inv.AmountPaid.Dollars() {
-				unpaidBal = roundCents(inv.TotalAmount.Dollars() - inv.AmountPaid.Dollars())
+			totalPaidCents += inv.AmountPaid.Cents
+			unpaidCents := inv.BalanceDue.Cents
+			if unpaidCents <= 0 && inv.TotalAmount.Cents > inv.AmountPaid.Cents {
+				unpaidCents = inv.TotalAmount.Cents - inv.AmountPaid.Cents
 			}
 			if inv.Status != "VOID" {
-				totalUnpaid += unpaidBal
+				totalUnpaidCents += unpaidCents
 			}
 			if (inv.Status == "SENT" || inv.Status == "OVERDUE" || inv.Status == "PARTIALLY_PAID") && inv.DueDate.Before(now) {
 				overdueCount++
@@ -131,9 +132,9 @@ func GetInvoices(c fiber.Ctx) error {
 		"status":   "success",
 		"invoices": invoices,
 		"summary": fiber.Map{
-			"totalInvoiced": roundCents(totalInvoiced),
-			"totalPaid":     roundCents(totalPaid),
-			"totalUnpaid":   roundCents(totalUnpaid),
+			"totalInvoiced": float64(totalInvoicedCents) / 100.0,
+			"totalPaid":     float64(totalPaidCents) / 100.0,
+			"totalUnpaid":   float64(totalUnpaidCents) / 100.0,
 			"overdueCount":  overdueCount,
 			"invoiceCount":  len(invoices),
 		},
@@ -213,21 +214,21 @@ func CreateInvoice(c fiber.Ctx) error {
 		invoiceNumber = fmt.Sprintf("INV-%d-%03d", year, maxSeq+1)
 	}
 
-	// Calculate Line Items and Totals
-	var subtotal float64
+	// Calculate Line Items and Totals using exact integer-cent Money arithmetic
+	var subtotal models.Money
 	for _, it := range input.Items {
-		lineAmt := it.Quantity * it.UnitPrice
-		if it.Amount.Dollars() > 0 {
-			lineAmt = it.Amount.Dollars()
+		lineAmt := models.NewMoney(it.Quantity * it.UnitPrice)
+		if it.Amount.Cents > 0 {
+			lineAmt = it.Amount
 		}
-		subtotal += lineAmt
+		subtotal = subtotal.Add(lineAmt)
 	}
 
-	taxAmount := 0.0
+	var taxAmount models.Money
 	if input.TaxRate > 0 {
-		taxAmount = roundCents(subtotal * (input.TaxRate / 100.0))
+		taxAmount = subtotal.PercentOf(input.TaxRate)
 	}
-	totalAmount := roundCents(subtotal + taxAmount)
+	totalAmount := subtotal.Add(taxAmount)
 
 	itemsJSON, _ := json.Marshal(input.Items)
 
@@ -258,20 +259,20 @@ func CreateInvoice(c fiber.Ctx) error {
 		IssueDate:         issueDate,
 		DueDate:           dueDate,
 		Items:             string(itemsJSON),
-		Subtotal:          models.NewMoney(roundCents(subtotal)),
+		Subtotal:          subtotal,
 		TaxRate:           input.TaxRate,
-		TaxAmount:         models.NewMoney(roundCents(taxAmount)),
-		TotalAmount:       models.NewMoney(roundCents(totalAmount)),
+		TaxAmount:         taxAmount,
+		TotalAmount:       totalAmount,
 		AmountPaid:        models.NewMoney(0),
-		BalanceDue:        models.NewMoney(roundCents(totalAmount)),
+		BalanceDue:        totalAmount,
 		Notes:             strings.TrimSpace(input.Notes),
 		PaymentTerms:      paymentTerms,
 		Status:            status,
 		CategoryAccountID: catID,
 	}
 	if status == "PAID" {
-	invoice.AmountPaid = invoice.TotalAmount
-	invoice.BalanceDue = models.NewMoney(roundCents(0))
+		invoice.AmountPaid = invoice.TotalAmount
+		invoice.BalanceDue = models.NewMoney(0)
 	}
 
 	if err := db.DB.Create(&invoice).Error; err != nil {
@@ -338,33 +339,37 @@ func UpdateInvoice(c fiber.Ctx) error {
 	}
 
 	if len(input.Items) > 0 {
-		var subtotal float64
+		var subtotal models.Money
 		for _, it := range input.Items {
-			lineAmt := it.Quantity * it.UnitPrice
-			if it.Amount.Dollars() > 0 {
-				lineAmt = it.Amount.Dollars()
+			lineAmt := models.NewMoney(it.Quantity * it.UnitPrice)
+			if it.Amount.Cents > 0 {
+				lineAmt = it.Amount
 			}
-			subtotal += lineAmt
+			subtotal = subtotal.Add(lineAmt)
 		}
-		invoice.Subtotal = models.NewMoney(roundCents(subtotal))
+		invoice.Subtotal = subtotal
 		invoice.TaxRate = input.TaxRate
-		invoice.TaxAmount = models.NewMoney(roundCents(subtotal * (input.TaxRate / 100.0)))
-		invoice.TotalAmount = models.NewMoney(roundCents(invoice.Subtotal.Dollars() + invoice.TaxAmount.Dollars()))
+		var taxAmount models.Money
+		if input.TaxRate > 0 {
+			taxAmount = subtotal.PercentOf(input.TaxRate)
+		}
+		invoice.TaxAmount = taxAmount
+		invoice.TotalAmount = subtotal.Add(taxAmount)
 		itemsJSON, _ := json.Marshal(input.Items)
 		invoice.Items = string(itemsJSON)
 	}
 
 	if invoice.Status == "PAID" {
 		invoice.AmountPaid = invoice.TotalAmount
-		invoice.BalanceDue = models.NewMoney(roundCents(0))
-	} else if invoice.AmountPaid.Dollars() > 0 {
-		invoice.BalanceDue = models.NewMoney(roundCents(invoice.TotalAmount.Dollars() - invoice.AmountPaid.Dollars()))
-		if invoice.BalanceDue.Dollars() <= 0 {
+		invoice.BalanceDue = models.NewMoney(0)
+	} else if invoice.AmountPaid.Cents > 0 {
+		invoice.BalanceDue = invoice.TotalAmount.Sub(invoice.AmountPaid)
+		if invoice.BalanceDue.Cents <= 0 {
 			invoice.Status = "PAID"
-			invoice.BalanceDue = models.NewMoney(roundCents(0))
+			invoice.BalanceDue = models.NewMoney(0)
 		}
 	} else {
-		invoice.AmountPaid = models.NewMoney(roundCents(0))
+		invoice.AmountPaid = models.NewMoney(0)
 		invoice.BalanceDue = invoice.TotalAmount
 	}
 
@@ -468,16 +473,15 @@ func MatchInvoicePayment(c fiber.Ctx) error {
 		}
 	}()
 
-	// 1. Update Invoice
-	paymentAmt := tx.Amount.Dollars()
-	newPaid := roundCents(invoice.AmountPaid.Dollars() + paymentAmt)
-	if newPaid >= invoice.TotalAmount.Dollars() {
+	// 1. Update Invoice using exact integer-cent Money API
+	newPaid := invoice.AmountPaid.Add(tx.Amount)
+	if newPaid.Cents >= invoice.TotalAmount.Cents {
 		invoice.AmountPaid = invoice.TotalAmount
 		invoice.BalanceDue = models.NewMoney(0)
 		invoice.Status = "PAID"
 	} else {
-		invoice.AmountPaid = models.NewMoney(newPaid)
-		invoice.BalanceDue = models.NewMoney(roundCents(invoice.TotalAmount.Dollars() - newPaid))
+		invoice.AmountPaid = newPaid
+		invoice.BalanceDue = invoice.TotalAmount.Sub(newPaid)
 		invoice.Status = "PARTIALLY_PAID"
 	}
 	invoice.BankTransactionID = &tx.ID
