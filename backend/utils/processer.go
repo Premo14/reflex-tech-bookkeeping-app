@@ -340,41 +340,54 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 		scriptUrl = "http://file-processor:8081/process"
 	}
 
-	file, err := os.Open(filePath)
+	var resp *client.Response
+	var err error
+	maxRetries := 2
+
+	// Fetch active EXPENSE categories once to build dynamic prompt
+	var dynamicPrompt string
+	if accounts, fetchErr := FetchActiveExpenseAccounts(); fetchErr == nil {
+		dynamicPrompt = BuildReceiptPrompt(accounts)
+	}
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("⏳ Retrying AI receipt processing (attempt %d/%d) after error: %v", attempt, maxRetries, err)
+			time.Sleep(3 * time.Second)
+		}
+
+		file, openErr := os.Open(filePath)
+		if openErr != nil {
+			return openErr
+		}
+
+		req := client.AcquireRequest()
+		formFile := client.AcquireFile(func(f *client.File) {
+			f.SetFieldName("document")
+			f.SetName(filepath.Base(filePath))
+			f.SetReader(file)
+		})
+
+		if dynamicPrompt != "" {
+			req.SetFormData("prompt", dynamicPrompt)
+		}
+		req.AddFiles(formFile)
+
+		resp, err = req.Post(scriptUrl)
+		client.ReleaseFile(formFile)
+		client.ReleaseRequest(req)
+		file.Close()
+
+		if err == nil && resp.StatusCode() == 200 {
+			break
+		}
+		if err == nil && resp.StatusCode() != 200 {
+			err = fmt.Errorf("AI script failed with status %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+	}
+
 	if err != nil {
 		return err
-	}
-	defer file.Close()
-
-	// Acquire a new request from Fiber v3
-	req := client.AcquireRequest()
-	defer client.ReleaseRequest(req)
-
-	// Create a form file field named "document"
-	formFile := client.AcquireFile(func(f *client.File) {
-		f.SetFieldName("document")         // form field name expected by the server
-		f.SetName(filepath.Base(filePath)) // filename sent to server
-		f.SetReader(file)                  // reading from the os.Open file
-	})
-	defer client.ReleaseFile(formFile)
-
-	// Fetch only active EXPENSE categories to build a hardened dynamic prompt
-	if accounts, err := FetchActiveExpenseAccounts(); err == nil {
-		dynamicPrompt := BuildReceiptPrompt(accounts)
-		req.SetFormData("prompt", dynamicPrompt)
-	}
-
-	// Attach the file to the request
-	req.AddFiles(formFile)
-
-	// Send the POST request
-	resp, err := req.Post(scriptUrl)
-	if err != nil {
-		return err
-	}
-
-	if resp.StatusCode() != 200 {
-		return fmt.Errorf("AI script failed with status %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 
 	// Clean AI response body isolating JSON object
