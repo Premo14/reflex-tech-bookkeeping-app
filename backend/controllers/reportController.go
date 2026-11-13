@@ -1030,31 +1030,23 @@ type CashFlowReportData struct {
 	Periods            []CashFlowPeriod `json:"periods"`
 }
 
-// GetCashFlowSummary calculates monthly cash inflows vs outflows and liquidity trends.
-// Excludes LIABILITY accounts (e.g. credit cards) and internal transfers between ASSET accounts
-// so that only true Cash and Cash Equivalent flows are measured without double-counting.
-func GetCashFlowSummary(c fiber.Ctx) error {
-	startDate := c.Query("startDate")
-	endDate := c.Query("endDate")
+type CashFlowRawTx struct {
+	Date   time.Time
+	Amount models.Money
+}
 
-	query := db.DB.Table("bank_transactions bt").
-		Select("bt.*").
-		Joins("LEFT JOIN chart_accounts bank_ca ON bank_ca.id = bt.chart_account_id").
-		Joins("LEFT JOIN chart_accounts cat_ca ON cat_ca.id = bt.category_account_id").
-		Where(inBooksClauseBT).
-		Where("COALESCE(bank_ca.type, 'ASSET') != 'LIABILITY'").
-		Where("COALESCE(cat_ca.type, '') != 'ASSET'")
-	query = ApplyDateRange(query, "bt.date", startDate, endDate)
+type CashFlowBuilderInput struct {
+	StartDate    string
+	EndDate      string
+	Transactions []CashFlowRawTx
+}
 
-	var txs []models.BankTransaction
-	if err := query.Order("bt.date ASC").Scan(&txs).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch cash flow data"})
-	}
-
+// BuildCashFlowData compiles monthly cash inflows vs outflows and liquidity trends using exact integer cents.
+func BuildCashFlowData(input CashFlowBuilderInput) CashFlowReportData {
 	monthMap := make(map[string]*CashFlowPeriod)
 	var monthKeys []string
 
-	for _, tx := range txs {
+	for _, tx := range input.Transactions {
 		mKey := tx.Date.Format("2006-01")
 		period, exists := monthMap[mKey]
 		if !exists {
@@ -1066,11 +1058,11 @@ func GetCashFlowSummary(c fiber.Ctx) error {
 			monthKeys = append(monthKeys, mKey)
 		}
 
-		if tx.Amount.Dollars() > 0 {
-			period.CashIn = period.CashIn.Add(models.NewMoney(roundCents(tx.Amount.Dollars())))
+		if tx.Amount.Cents > 0 {
+			period.CashIn = period.CashIn.Add(tx.Amount)
 			period.InflowCount++
-		} else if tx.Amount.Dollars() < 0 {
-			period.CashOut = period.CashOut.Add(models.NewMoney(roundCents(math.Abs(tx.Amount.Dollars()))))
+		} else if tx.Amount.Cents < 0 {
+			period.CashOut = period.CashOut.Add(tx.Amount.Abs())
 			period.OutflowCount++
 		}
 	}
@@ -1078,51 +1070,77 @@ func GetCashFlowSummary(c fiber.Ctx) error {
 	sort.Strings(monthKeys)
 
 	var periods []CashFlowPeriod
-	var totalIn, totalOut float64
-	var runningTotal float64
+	var totalInCents, totalOutCents int64
+	var runningTotalCents int64
 
 	for _, k := range monthKeys {
 		p := monthMap[k]
-		p.CashIn = models.NewMoney(roundCents(p.CashIn.Dollars()))
-		p.CashOut = models.NewMoney(roundCents(p.CashOut.Dollars()))
-		p.NetCashFlow = models.NewMoney(roundCents(p.CashIn.Dollars() - p.CashOut.Dollars()))
-		runningTotal += p.NetCashFlow.Dollars()
-		p.RunningCashTotal = models.NewMoney(roundCents(runningTotal))
+		p.NetCashFlow = models.Money{Cents: p.CashIn.Cents - p.CashOut.Cents}
+		runningTotalCents += p.NetCashFlow.Cents
+		p.RunningCashTotal = models.Money{Cents: runningTotalCents}
 
-		totalIn += p.CashIn.Dollars()
-		totalOut += p.CashOut.Dollars()
+		totalInCents += p.CashIn.Cents
+		totalOutCents += p.CashOut.Cents
 		periods = append(periods, *p)
 	}
 
-	totalIn = roundCents(totalIn)
-	totalOut = roundCents(totalOut)
-	netCash := roundCents(totalIn - totalOut)
+	netCashCents := totalInCents - totalOutCents
 
-	avgIn := 0.0
-	avgOut := 0.0
+	avgInCents := int64(0)
+	avgOutCents := int64(0)
 	if len(periods) > 0 {
-		avgIn = roundCents(totalIn / float64(len(periods)))
-		avgOut = roundCents(totalOut / float64(len(periods)))
+		avgInCents = int64(math.Round(float64(totalInCents) / float64(len(periods))))
+		avgOutCents = int64(math.Round(float64(totalOutCents) / float64(len(periods))))
 	}
 
 	savingsRate := 0.0
-	if totalIn > 0 {
-		savingsRate = roundCents((netCash / totalIn) * 100.0)
+	if totalInCents > 0 {
+		savingsRate = math.Round((float64(netCashCents)/float64(totalInCents))*10000.0) / 100.0
 	}
+
+	return CashFlowReportData{
+		StartDate:          input.StartDate,
+		EndDate:            input.EndDate,
+		TotalCashIn:        models.Money{Cents: totalInCents},
+		TotalCashOut:       models.Money{Cents: totalOutCents},
+		NetCashFlow:        models.Money{Cents: netCashCents},
+		AvgMonthlyInflow:   models.Money{Cents: avgInCents},
+		AvgMonthlyOutflow:  models.Money{Cents: avgOutCents},
+		SavingsRatePercent: savingsRate,
+		Periods:            periods,
+	}
+}
+
+// GetCashFlowSummary calculates monthly cash inflows vs outflows and liquidity trends.
+// Excludes LIABILITY accounts (e.g. credit cards) and internal transfers between ASSET accounts
+// so that only true Cash and Cash Equivalent flows are measured without double-counting.
+func GetCashFlowSummary(c fiber.Ctx) error {
+	startDate := c.Query("startDate")
+	endDate := c.Query("endDate")
+
+	query := db.DB.Table("bank_transactions bt").
+		Select("bt.date, bt.amount").
+		Joins("LEFT JOIN chart_accounts bank_ca ON bank_ca.id = bt.chart_account_id").
+		Joins("LEFT JOIN chart_accounts cat_ca ON cat_ca.id = bt.category_account_id").
+		Where(inBooksClauseBT).
+		Where("COALESCE(bank_ca.type, 'ASSET') != 'LIABILITY'").
+		Where("COALESCE(cat_ca.type, '') != 'ASSET'")
+	query = ApplyDateRange(query, "bt.date", startDate, endDate)
+
+	var txs []CashFlowRawTx
+	if err := query.Order("bt.date ASC").Scan(&txs).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch cash flow data"})
+	}
+
+	report := BuildCashFlowData(CashFlowBuilderInput{
+		StartDate:    startDate,
+		EndDate:      endDate,
+		Transactions: txs,
+	})
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status": "success",
-		"report": CashFlowReportData{
-			StartDate:          startDate,
-			EndDate:            endDate,
-			TotalCashIn:        models.NewMoney(totalIn),
-			TotalCashOut:       models.NewMoney(totalOut),
-			NetCashFlow:        models.NewMoney(netCash),
-			AvgMonthlyInflow:   models.NewMoney(roundCents(avgIn)),
-			AvgMonthlyOutflow:  models.NewMoney(roundCents(avgOut)),
-			SavingsRatePercent: savingsRate,
-			Periods:            periods,
-		},
+		"report": report,
 	})
 }
 

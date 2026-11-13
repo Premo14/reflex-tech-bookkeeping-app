@@ -467,6 +467,8 @@ export default function ReportsModal({
       [sanitizeCSV("Total Outflow Analyzed"), sanitizeCSV(vendorSpendReport.totalSpend.toFixed(2))],
       [sanitizeCSV("Unique Payees / Vendors"), sanitizeCSV(vendorSpendReport.totalVendors.toString())],
       [sanitizeCSV("Top 5 Payee Concentration"), sanitizeCSV(`${vendorSpendReport.top5Percent.toFixed(1)}%`)],
+      [sanitizeCSV("Contractors >= $600 (1099-NEC)"), sanitizeCSV((vendorSpendReport.contractorsOver600 || 0).toString())],
+      [sanitizeCSV("Total 1099-NEC Spend"), sanitizeCSV((vendorSpendReport.total1099Spend || 0).toFixed(2))],
       [],
       [
         sanitizeCSV("RANK"),
@@ -476,6 +478,7 @@ export default function ReportsModal({
         sanitizeCSV("TRANSACTIONS"),
         sanitizeCSV("AVG TICKET"),
         sanitizeCSV("PRIMARY CATEGORY"),
+        sanitizeCSV("1099-NEC REQUIRED"),
       ],
     ];
 
@@ -488,6 +491,7 @@ export default function ReportsModal({
         sanitizeCSV(v.transactionCount.toString()),
         sanitizeCSV(v.averageSpend.toFixed(2)),
         sanitizeCSV(v.primaryCategoryName || "Uncategorized"),
+        sanitizeCSV(v.requires1099 ? "YES (>= $600)" : "NO"),
       ]);
     });
 
