@@ -1,11 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -874,5 +881,92 @@ func TestDetectMIME(t *testing.T) {
 				t.Errorf("detectMIME(%q) = %q, want prefix %q", tt.name, mime, tt.wantPrefix)
 			}
 		})
+	}
+}
+
+func TestResolveUploadMIME_MultipartSniffing(t *testing.T) {
+	cases := []struct {
+		name      string
+		filename  string
+		payload   []byte
+		wantMIME  string
+		wantValid bool
+	}{
+		{"Go CreateFormFile JPEG", "receipt.jpg", []byte("\xff\xd8\xff\xe0\x00\x10JFIF"), "image/jpeg", true},
+		{"Go CreateFormFile PNG", "receipt.png", []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), "image/png", true},
+		{"Go CreateFormFile PDF", "receipt.pdf", []byte("%PDF-1.7\n"), "application/pdf", true},
+		{"Go CreateFormFile HEIC", "receipt.heic", []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c'}, "image/heic", true},
+		{"Disguised plain text as PDF", "evil.pdf", []byte("not really a pdf, just plain text"), "text/plain", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var body bytes.Buffer
+			w := multipart.NewWriter(&body)
+			fw, err := w.CreateFormFile("document", tc.filename)
+			if err != nil {
+				t.Fatalf("CreateFormFile: %v", err)
+			}
+			_, _ = fw.Write(tc.payload)
+			w.Close()
+
+			mr := multipart.NewReader(&body, w.Boundary())
+			form, err := mr.ReadForm(1 << 20)
+			if err != nil {
+				t.Fatalf("ReadForm: %v", err)
+			}
+			defer form.RemoveAll()
+
+			fh := form.File["document"][0]
+			gotMIME, err := resolveUploadMIME(fh)
+			if err != nil {
+				t.Fatalf("resolveUploadMIME error: %v", err)
+			}
+			if gotMIME != tc.wantMIME {
+				t.Errorf("resolveUploadMIME() = %q, want %q", gotMIME, tc.wantMIME)
+			}
+			err = validateUpload(int64(len(tc.payload)), gotMIME)
+			if (err == nil) != tc.wantValid {
+				t.Errorf("validateUpload(%q) err=%v, wantValid=%v", gotMIME, err, tc.wantValid)
+			}
+		})
+	}
+}
+
+func TestResizeImage_TallReceiptHeightCap(t *testing.T) {
+	tmp := t.TempDir()
+	inPath := filepath.Join(tmp, "tall.png")
+	outPath := filepath.Join(tmp, "out.jpg")
+
+	img := image.NewRGBA(image.Rect(0, 0, 800, 4000))
+	img.Set(10, 10, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+	f, err := os.Create(inPath)
+	if err != nil {
+		t.Fatalf("create input png: %v", err)
+	}
+	if err := png.Encode(f, img); err != nil {
+		f.Close()
+		t.Fatalf("encode png: %v", err)
+	}
+	f.Close()
+
+	if err := resizeImage(inPath, outPath); err != nil {
+		t.Fatalf("resizeImage error: %v", err)
+	}
+
+	outFile, err := os.Open(outPath)
+	if err != nil {
+		t.Fatalf("open output jpg: %v", err)
+	}
+	defer outFile.Close()
+	cfg, _, err := image.DecodeConfig(outFile)
+	if err != nil {
+		t.Fatalf("DecodeConfig: %v", err)
+	}
+	if cfg.Height > 2400 || cfg.Width > 800 {
+		t.Errorf("resized dimensions (%dx%d) exceed max 800x2400", cfg.Width, cfg.Height)
+	}
+	if cfg.Height != 2400 || cfg.Width != 480 {
+		t.Errorf("resized dimensions = %dx%d, want 480x2400", cfg.Width, cfg.Height)
 	}
 }

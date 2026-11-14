@@ -4,7 +4,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"os/exec"
@@ -49,15 +51,51 @@ const (
 )
 
 // detectMIME reads up to 512 bytes from r and returns the detected MIME type.
-func detectMIME(r interface {
-	Read(p []byte) (int, error)
-}) (string, error) {
+func detectMIME(r io.Reader) (string, error) {
 	var buf [512]byte
 	n, err := r.Read(buf[:])
-	if err != nil && err.Error() != "EOF" {
+	if err != nil && err != io.EOF {
 		return "", err
 	}
 	return http.DetectContentType(buf[:n]), nil
+}
+
+// resolveUploadMIME inspects actual magic bytes from the multipart file header so
+// standard Go multipart uploads (which default to application/octet-stream) succeed
+// while rejecting non-receipt payloads.
+func resolveUploadMIME(fileHeader *multipart.FileHeader) (string, error) {
+	headerMIME := strings.ToLower(strings.TrimSpace(strings.Split(fileHeader.Header.Get("Content-Type"), ";")[0]))
+	f, err := fileHeader.Open()
+	if err != nil {
+		return headerMIME, err
+	}
+	defer f.Close()
+
+	sniffed, err := detectMIME(f)
+	if err != nil {
+		return headerMIME, err
+	}
+	sniffed = strings.ToLower(strings.TrimSpace(strings.Split(sniffed, ";")[0]))
+
+	// Accept sniffed magic bytes directly when recognized as a supported receipt format.
+	if sniffed == allowedPDFMIME || sniffed == allowedImgMIME || sniffed == allowedImgAltMIME ||
+		sniffed == "image/webp" || sniffed == "image/bmp" {
+		return sniffed, nil
+	}
+
+	// ISO BMFF / TIFF formats (e.g. .heic/.heif/.tiff) sniff as application/octet-stream in net/http.
+	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
+	if sniffed == "application/octet-stream" && (ext == ".heic" || ext == ".heif" || ext == ".tif" || ext == ".tiff") {
+		if ext == ".tif" || ext == ".tiff" {
+			return "image/tiff", nil
+		}
+		return "image/heic", nil
+	}
+
+	if sniffed != "" && sniffed != "application/octet-stream" {
+		return sniffed, nil
+	}
+	return headerMIME, nil
 }
 
 // validateUpload checks that the uploaded file meets size and MIME constraints.
@@ -66,14 +104,13 @@ func validateUpload(size int64, mime string) error {
 	if size > maxUploadSize {
 		return fmt.Errorf("file too large: %d bytes (max %d)", size, maxUploadSize)
 	}
-	if mime == allowedPDFMIME {
+	normalized := strings.ToLower(strings.TrimSpace(strings.Split(mime, ";")[0]))
+	switch normalized {
+	case allowedPDFMIME, allowedImgMIME, allowedImgAltMIME, "image/webp", "image/bmp", "image/tiff", "image/heic":
 		return nil
+	default:
+		return fmt.Errorf("unsupported MIME type: %q (expected PDF or JPEG/PNG/WEBP/BMP/TIFF/HEIC image)", mime)
 	}
-	// Image validation: check JPEG or PNG MIME types
-	if mime == allowedImgMIME || mime == allowedImgAltMIME {
-		return nil
-	}
-	return fmt.Errorf("unsupported MIME type: %q (expected %q PDF or %q/%q image)", mime, allowedPDFMIME, allowedImgMIME, allowedImgAltMIME)
 }
 
 const defaultTextPrompt = `You are a receipt data extractor. The following is raw OCR text extracted from a receipt.
@@ -124,7 +161,13 @@ Rules:
 - Leave amount as 0 if it cannot be determined.`
 
 func main() {
-	fasthttp.ListenAndServe(":8081", routeHandler)
+	srv := &fasthttp.Server{
+		Handler:            routeHandler,
+		MaxRequestBodySize: maxUploadSize + (1 << 20), // match 20MB upload cap + multipart overhead
+		ReadTimeout:        5 * time.Minute,
+		WriteTimeout:       6 * time.Minute,
+	}
+	log.Fatal(srv.ListenAndServe(":8081"))
 }
 
 func ollamaURL() string {
@@ -388,9 +431,8 @@ func resizeImage(inputPath, outputPath string) error {
 		ratio := float64(newWidth) / float64(width)
 		newHeight := int(float64(height) * ratio)
 		if newHeight > receiptMaxHeight {
-			// Recalculate width to fit height cap
-			newWidth = int(float64(receiptMaxHeight) / ratio)
-			img = imaging.Resize(img, newWidth, 0, imaging.Lanczos)
+			// Scale down by max height to preserve aspect ratio without upscaling width.
+			img = imaging.Resize(img, 0, receiptMaxHeight, imaging.Lanczos)
 		} else {
 			img = imaging.Resize(img, newWidth, 0, imaging.Lanczos)
 		}
@@ -497,8 +539,13 @@ func process(ctx *fasthttp.RequestCtx) {
 	originalName := strings.ToLower(fileHeader.Filename)
 	isPDF := strings.HasSuffix(originalName, ".pdf")
 
-	// Validate MIME type from multipart header (more reliable than extension alone).
-	mime := fileHeader.Header.Get("Content-Type")
+	// Sniff actual file bytes rather than trusting multipart Content-Type alone,
+	// because Go's multipart.Writer.CreateFormFile sends application/octet-stream.
+	mime, err := resolveUploadMIME(fileHeader)
+	if err != nil {
+		ctx.Error(fmt.Sprintf("Failed to inspect upload: %v", err), fasthttp.StatusBadRequest)
+		return
+	}
 	if err := validateUpload(fileHeader.Size, mime); err != nil {
 		ctx.Error(fmt.Sprintf("Upload rejected: %v", err), fasthttp.StatusBadRequest)
 		return
@@ -558,21 +605,14 @@ func process(ctx *fasthttp.RequestCtx) {
 				visionPrompt = "You are a receipt data extractor. Look at these receipt PDF pages carefully and extract the expense details.\nReturn ONLY a valid JSON object with no explanation or markdown:\n{\n  \"timestamp\": \"\",\n  \"vendor\": \"\",\n  \"description\": \"\",\n  \"amount\": 0.00,\n  \"taxAmount\": 0.00,\n  \"currencyCode\": \"USD\",\n  \"tender\": \"CARD\",\n  \"chartAccountId\": null\n}\nRules:\n- timestamp must be RFC3339 format. Leave as \"\" if no date is found. NEVER invent a date.\n- amount must be the final total paid as a positive number.\n- vendor should be the store/business name.\n- Leave amount as 0 if it cannot be determined."
 			}
 
-			// Append garbled pdftotext output as context, but do NOT embed base64 image data here.
-			// Base64 images are passed via the Images field in OllamaVisionMultiRequest.
+			// Append garbled pdftotext output as context; images are sent strictly via Images[].
 			if extracted != "" {
 				visionPrompt = visionPrompt + "\n\nRaw pdftotext output (may be garbled for scanned PDFs, rely on visual inspection):\n" + extracted
 			}
 
-			// Combine all page images into a single multi-image prompt
-			promptParts := []string{visionPrompt}
-			for _, img := range images {
-				promptParts = append(promptParts, img)
-			}
-
 			response, err := callOllamaVisionMulti(OllamaVisionMultiRequest{
 				Model:   "qwen2.5vl:3b",
-				Prompt:  strings.Join(promptParts, "\n"),
+				Prompt:  visionPrompt,
 				Images:  images,
 				Stream:  false,
 				Format:  "json",
