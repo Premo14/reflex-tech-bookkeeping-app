@@ -61,13 +61,13 @@ func Connect() {
 		&models.AppSetting{},
 		&models.BankStatement{},
 		&models.BankTransaction{},
+		&models.Invoice{},
 		&models.Expense{},
 		&models.Receipt{},
 		&models.ExpenseBankTransaction{},
 		&models.PeriodAuditLog{},
 		&models.ItemAuditLog{},
 		&models.BankRule{},
-		&models.Invoice{},
 	)
 
 	// Drop legacy unique constraint on receipts.file_hash so shared receipts (allowDuplicate=true)
@@ -153,8 +153,8 @@ func Connect() {
 		"1010", "1020", "1030", "1100", "1200", "1300",
 		"2010", "2020", "2030", "2100", "2510",
 		"3010", "3020", "3110",
-		"4010", "4110", "4210",
-		"5010", "5020", "5030", "5050", "5080", "5090", "5110", "5210", "5310", "5410", "5910",
+		"4010", "4090", "4110", "4210",
+		"5000", "5010", "5015", "5020", "5025", "5030", "5040", "5050", "5060", "5070", "5080", "5090", "5110", "5120", "5210", "5310", "5410", "5510", "5610", "5710", "5720", "5810", "5910",
 	}
 	DB.Model(&models.ChartAccount{}).Where("code IN ?", defaultCodes).Update("is_default", true)
 
@@ -241,21 +241,37 @@ func Connect() {
 	// Migration: Backfill default Schedule C tax line mappings on standard accounts if empty
 	defaultScheduleCMapping := map[string]string{
 		"4010": "Line 1 - Gross receipts or sales",
+		"4090": "Line 2 - Returns and allowances",
 		"4110": "Line 1 - Gross receipts or sales",
 		"4210": "Line 6 - Other income",
+		"5000": "Line 4 - Cost of goods sold",
 		"5010": "Line 20b - Rent or lease (other business property)",
+		"5015": "Line 20a - Rent or lease (vehicles, machinery, and equipment)",
 		"5020": "Line 26 - Wages",
+		"5025": "Line 14 - Employee benefit programs",
 		"5030": "Line 25 - Utilities",
+		"5040": "Line 21 - Repairs and maintenance",
 		"5050": "Line 18 - Office expense",
+		"5060": "Line 22 - Supplies",
+		"5070": "Line 30 - Expenses for business use of your home",
 		"5080": "Line 15 - Insurance (other than health)",
 		"5090": "Line 24b - Deductible meals (50%)",
 		"5110": "Line 17 - Legal and professional services",
+		"5120": "Line 11 - Contract labor",
 		"5210": "Line 27a - Other expenses (Software & online services)",
 		"5310": "Line 8 - Advertising",
 		"5410": "Line 24a - Travel",
+		"5510": "Line 9 - Car and truck expenses",
+		"5610": "Line 23 - Taxes and licenses",
+		"5710": "Line 16b - Other interest",
+		"5720": "Line 13 - Depreciation and section 179 expense deduction",
+		"5810": "Line 10 - Commissions and fees",
 		"5910": "Line 27a - Other expenses (Bank & merchant fees)",
 	}
 	for code, schedLine := range defaultScheduleCMapping {
 		DB.Exec(`UPDATE chart_accounts SET schedule_c_line = ? WHERE code = ? AND (schedule_c_line IS NULL OR schedule_c_line = '')`, schedLine, code)
 	}
+
+	// Seed default automated bank categorization rules
+	SeedDefaultBankRules()
 }

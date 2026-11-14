@@ -162,6 +162,10 @@ func (m *Money) UnmarshalJSON(data []byte) error {
 
 // MustParseMoney parses a dollar string like "1234.56" and returns Money.
 func MustParseMoney(s string) Money {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return Money{}
+	}
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return Money{}
