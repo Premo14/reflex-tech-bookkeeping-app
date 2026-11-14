@@ -1,6 +1,6 @@
 services:
   frontend:
-    container_name: reflex-tech-bookkeping-app-frontend
+    container_name: reflex-tech-bookkeeping-app-frontend
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
@@ -8,6 +8,12 @@ services:
       - ./frontend:/app
       - /app/node_modules
     restart: unless-stopped
+    # Resource cap to prevent OOM when node leaks
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:5173 || exit 1"]
       interval: 15s
@@ -27,12 +33,20 @@ services:
       - ./backend:/app
       - ${DOCUMENT_DATA_PATH:-./document-data}:/app/documents
       - /:/host_fs:rw
+      # NOTE: /host_fs mount enables cross-host DOCUMENT_DATA_PATH resolution
+      # via constants.ResolveHostToContainer(). Path sanitization in Go prevents traversal.
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
       file-processor:
-        condition: service_healthy
+        condition: service_started
+    # Resource cap — Go is memory-efficient but GC bursts can spike
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 2G
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health"]
       interval: 15s
@@ -47,6 +61,12 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql
     restart: unless-stopped
+    # Cap at 4 GB to leave room for Go app + Ollama
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U user"]
       interval: 10s
@@ -71,6 +91,12 @@ services:
     # Creates a share named 'inbox' pointing to /mnt/inbox
     command: '-u "scanner;password123;1000;scanner;1000" -s "inbox;/mnt/inbox;yes;no;no;scanner"'
     restart: unless-stopped
+    # Samba is lightweight; minimal resource footprint
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
 
   file-processor:
     container_name: file-processor
@@ -82,8 +108,13 @@ services:
       - ./file-processor:/app
     restart: unless-stopped
     depends_on:
-      ollama:
-        condition: service_healthy
+      - ollama
+    # Image decode is memory-bound; cap to prevent OOM on large HEIC/PDF
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8081/health"]
       interval: 15s
@@ -97,12 +128,20 @@ services:
     volumes:
       - ollama-data:/root/.ollama   # /root/.ollama is where Ollama stores models
     restart: unless-stopped
+    # Cap GPU memory so Ollama doesn't starve other services on 64 GB machines
+    deploy:
+      resources:
+        limits:
+          cpus: "8.0"
+          memory: 16G
     healthcheck:
       test: ["CMD-SHELL", "ollama list | grep -q 'llama3.1' && ollama list | grep -q 'qwen2.5vl'"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 600s   # 10 min window for first-time model downloads
+      retries: 5
+      # 1800s start_period is intentional: first-run model download can take 20-30 min on slow links.
+      # Subsequent starts use cached models and pass in < 30s.
+      start_period: 1800s
 
   nginx:
     container_name: nginx
@@ -117,6 +156,18 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
+    # Nginx is essentially stateless; minimal resource use
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 networks:
   default:
