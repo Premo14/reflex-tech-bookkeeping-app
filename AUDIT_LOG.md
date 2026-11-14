@@ -25,3 +25,15 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
 - **.env.example**: Added section headers, inline comments for every variable, and `host.docker.internal` note for local Ollama development.
 - **Files touched**: `docker-compose.yml`, `nginx/nginx.conf`, `start.sh`, `start.bat`, `ollama/entrypoint.sh`, `.env.example`.
 - **Verification**: `docker compose config` passes, `bash -n` passes for start.sh and entrypoint.sh, Go build/vet pass zero errors, frontend TypeScript + build + lint pass zero errors (pre-existing 163 warnings untouched).
+
+## S02: Backend Entry, Routing, SSE & Constants
+- **events.go Broadcast race fix**: Replaced map iteration under RLock with key snapshot approach — collect keys first, release lock, then iterate snapshot. Prevents panic when concurrent Unsubscribe closes/deletes channels during broadcast.
+- **routes.go**: Removed duplicate `/system/backup` route (same handler as `/system/backup/export`).
+- **eventsController.go**: Removed dead `BroadcastEvent` wrapper (unused, replaced by `events.Broadcast` in all callers).
+- **Health controller**: Added `no_models_loaded` status when Ollama returns HTTP 200 but models list is empty (previously misreported as `ready: true`).
+- **main.go graceful shutdown**: Added `shutdownCh` signal; background reconciliation ticker now exits cleanly on SIGTERM/SIGINT.
+- **Cross-controller import migration**: Added `"reflex-tech-bookkeeping-app-api/events"` import to 5 controller files (reconciliation, expense, account, invoice, settings) and replaced all `BroadcastEvent(` with `events.Broadcast(`.
+- **New tests**: `events_test.go` — 3 new cases (concurrent subscribe/unsubscribe, unsubscribed client drop, snapshot behavior). `health_controller_test.go` — 13 new tests (database, storage, HTTP health, compute status, Ollama tags, filename, file processor, company name). `events_controller_test.go` — 3 tests (SSE stream handler, panic safety, broadcast wrapper).
+- **Backend test coverage**: events package ~100%, constants ~100%, controllers improved with new coverage. All 3 layers build/vet/test pass zero errors.
+- **Nginx SSE**: Verified `proxy_buffering off`, `proxy_read_timeout 24h`, `chunked_transfer_encoding off` already in place (no changes needed).
+- **CORS**: Verified `AllowOrigins: ["http://localhost:5173"]` + `AllowCredentials: true` — appropriate for LAN-only model.

@@ -2,7 +2,6 @@ package routes
 
 import (
 	"reflex-tech-bookkeeping-app-api/controllers"
-	"time"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -11,13 +10,7 @@ func SetupRoutes(app *fiber.App) {
 	api := app.Group("/api")
 
 	// Health Check
-	app.Get("/health", func(c fiber.Ctx) error {
-		return c.Status(fiber.StatusOK).JSON(fiber.Map{
-			"status":    "success",
-			"message":   "Service is up and running",
-			"timestamp": time.Now().Format(time.RFC3339),
-		})
-	})
+	api.Get("/health", controllers.GetSystemHealth)
 
 	// Frontend File Upload
 	api.Post("/upload", controllers.UploadFile)
@@ -46,6 +39,7 @@ func SetupRoutes(app *fiber.App) {
 	api.Patch("/invoices/:id", controllers.UpdateInvoice)
 	api.Delete("/invoices/:id", controllers.DeleteInvoice)
 	api.Post("/invoices/:id/match-payment", controllers.MatchInvoicePayment)
+	api.Post("/invoices/:id/pay-cash", controllers.MarkInvoicePaidCash)
 	api.Post("/invoices/:id/unmatch-payment", controllers.UnmatchInvoicePayment)
 	api.Get("/invoices/:id/candidates", controllers.GetMatchingDeposits)
 
@@ -103,6 +97,8 @@ func SetupRoutes(app *fiber.App) {
 	api.Get("/reconciliation/flagged", controllers.GetFlaggedItems)
 	api.Post("/reconciliation/run", controllers.TriggerReconciliation)
 	api.Post("/reconciliation/link", controllers.LinkExpenseToTransaction)
+	api.Post("/reconciliation/link-expense-invoice", controllers.LinkExpenseToInvoice)
+	api.Post("/reconciliation/unlink-expense-invoice", controllers.UnlinkExpenseFromInvoice)
 	api.Post("/reconciliation/create-and-link", controllers.CreateAndLink)
 	api.Post("/reconciliation/unlink", controllers.UnlinkExpense)
 	api.Get("/reconciliation/unlinked", controllers.GetUnlinkedItems)
@@ -121,6 +117,12 @@ func SetupRoutes(app *fiber.App) {
 	api.Get("/reports/trial-balance/export", controllers.ExportTrialBalanceCSV)
 
 	// System Snapshot & Full JSON Backup
-	api.Get("/system/backup", controllers.ExportSystemBackupJSON)
 	api.Get("/system/backup/export", controllers.ExportSystemBackupJSON)
+	api.Post("/system/backup/restore", controllers.RestoreSystemBackupJSON)
+
+	// Client Demo Sandbox Controls
+	api.Get("/demo/status", controllers.GetDemoStatus)
+	api.Post("/demo/seed", controllers.SeedDemoData)
+	api.Post("/demo/reset", controllers.ResetDemoData)
+	api.Post("/demo/remove", controllers.RemoveDemoData)
 }

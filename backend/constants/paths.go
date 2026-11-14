@@ -1,6 +1,7 @@
 package constants
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,9 +19,6 @@ var (
 )
 
 func init() {
-	// Set umask to 0 so all created dirs and files have wide-open 0777/0666 permissions
-	syscall.Umask(0)
-
 	currentContainerDir = "/app/documents"
 	currentHostPath = os.Getenv("DOCUMENT_DATA_PATH")
 	if currentHostPath == "" {
@@ -51,8 +49,15 @@ func DetectHostHomeDir() string {
 // NormalizeDropboxHostPath ensures that the folder name is ALWAYS "document-data".
 // If the user supplies a parent path like "/home/user/Desktop", it appends "document-data".
 func NormalizeDropboxHostPath(hostPath string) string {
-	cleaned := filepath.Clean(strings.TrimSpace(hostPath))
+	trimmed := strings.TrimSpace(hostPath)
+	cleaned := filepath.Clean(trimmed)
 	if cleaned == "" || cleaned == "." || cleaned == "./document-data" || cleaned == "document-data" {
+		return "./document-data"
+	}
+
+	// Security guard: reject any path traversal attempt (.. after clean means original had ..)
+	if filepath.Base(trimmed) == ".." || strings.Contains(trimmed, "/..") {
+		log.Printf("NormalizeDropboxHostPath: rejecting path with traversal: %s", hostPath)
 		return "./document-data"
 	}
 
@@ -95,8 +100,12 @@ func ResolveHostToContainer(hostPath string) string {
 	return cleaned
 }
 
-// copyFile copies a single file and ensures 0666 permissions
+// copyFile copies a single file and ensures 0666 permissions.
+// Sets umask to 0 temporarily so the file is created with 0666 regardless of session umask.
 func copyFile(src, dst string) error {
+	oldUmask := syscall.Umask(0)
+	defer syscall.Umask(oldUmask)
+
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -115,8 +124,62 @@ func copyFile(src, dst string) error {
 	return os.Chmod(dst, 0666)
 }
 
-// copyDir recursively copies a directory and its contents
+// SafeMove moves a file from src to dst. It first attempts atomic os.Rename.
+// If that fails with EXDEV (cross-device/mount-boundary move), it falls back to
+// copyFile + chmod + remove, ensuring 0666 permissions on the destination.
+func SafeMove(src, dst string) error {
+	if src == dst {
+		return nil
+	}
+
+	// Ensure destination parent directory exists
+	if err := os.MkdirAll(filepath.Dir(dst), 0777); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	// Try atomic rename first; capture error for EXDEV detection
+	renameErr := os.Rename(src, dst)
+	if renameErr == nil {
+		_ = os.Chmod(dst, 0666)
+		return nil
+	}
+
+	// Rename failed — check if it's cross-device (EXDEV) or another error
+	var errno syscall.Errno
+	if errors.As(renameErr, &errno) && errno == syscall.EXDEV {
+		log.Printf("Cross-device move detected (%s -> %s), using copy+remove fallback.\n", src, dst)
+	}
+
+	// Fall back to copy + remove
+	if err := copyFile(src, dst); err != nil {
+		return fmt.Errorf("safe move copy failed: %w", err)
+	}
+
+	if err := os.Chmod(dst, 0666); err != nil {
+		return fmt.Errorf("failed to chmod destination: %w", err)
+	}
+
+	if err := os.Remove(src); err != nil {
+		// File is already copied to destination; source removal failed
+		// File exists at destination — caller can decide if this is recoverable
+		log.Printf("Warning: failed to remove source file %s after successful copy to %s: %v\n", src, dst, err)
+	}
+
+	return nil
+}
+
+// copyDir recursively copies a directory and its contents.
+// Max depth is capped at 64 to prevent runaway recursion (Zip Slip / deep-dir attacks).
+const maxCopyDepth = 64
+
 func copyDir(src, dst string) error {
+	return copyDirDepth(src, dst, 0)
+}
+
+func copyDirDepth(src, dst string, depth int) error {
+	if depth > maxCopyDepth {
+		return fmt.Errorf("copy depth limit exceeded (%d) — possible directory recursion attack", maxCopyDepth)
+	}
 	if err := os.MkdirAll(dst, 0777); err != nil {
 		return err
 	}
@@ -132,7 +195,7 @@ func copyDir(src, dst string) error {
 		dstPath := filepath.Join(dst, entry.Name())
 
 		if entry.IsDir() {
-			if err := copyDir(srcPath, dstPath); err != nil {
+			if err := copyDirDepth(srcPath, dstPath, depth+1); err != nil {
 				return err
 			}
 		} else {

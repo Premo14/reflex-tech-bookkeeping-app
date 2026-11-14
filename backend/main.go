@@ -3,9 +3,14 @@ package main
 import (
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
+
 	"reflex-tech-bookkeeping-app-api/constants"
+	"reflex-tech-bookkeeping-app-api/controllers"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/routes"
@@ -15,10 +20,29 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/cors"
 )
 
-func main() {
+// shutdownCh is closed on SIGTERM/SIGINT so background goroutines can exit cleanly.
+var shutdownCh = make(chan struct{})
 
+func main() {
 	db.Connect()
-	go utils.RunReconciliation()
+
+	// 15-minute background reconciliation & overdue sweep ticker
+	go func() {
+		controllers.SweepOverdueInvoices()
+		utils.RunReconciliation()
+
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				controllers.SweepOverdueInvoices()
+				utils.RunReconciliation()
+			case <-shutdownCh:
+				return
+			}
+		}
+	}()
 
 	// Initialize dynamic dropbox location from DB settings or environment
 	var dropboxSetting models.AppSetting
@@ -44,12 +68,17 @@ func main() {
 		log.Fatal("Failed to start the watcher:", err)
 	}
 
-	app := fiber.New()
+	app := fiber.New(fiber.Config{
+		BodyLimit: 50 << 20, // 50 MB — max image + bank statement upload size
+	})
 
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: []string{"http://localhost:5173"},
-		AllowHeaders: []string{"Origin, Content-Type, Accept"},
+		AllowOrigins:     []string{"http://localhost:5173"},
+		AllowHeaders:     []string{"Origin, Content-Type, Accept, Authorization"},
+		AllowCredentials: true,
 	}))
+
+	routes.SetupRoutes(app)
 
 	// Expose the processed/ folder so the frontend can display receipt images dynamically
 	app.Get("/api/images/*", func(c fiber.Ctx) error {
@@ -64,7 +93,19 @@ func main() {
 		return c.SendFile(cleanTarget)
 	})
 
-	routes.SetupRoutes(app)
+	// Graceful shutdown on SIGTERM/SIGINT
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigCh
+		log.Println("Shutting down server...")
+		close(shutdownCh) // signal background goroutines to exit
+		_ = app.Shutdown()
+	}()
 
-	log.Fatal(app.Listen(":8080"))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	log.Fatal(app.Listen(":" + port))
 }

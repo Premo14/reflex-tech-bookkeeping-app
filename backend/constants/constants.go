@@ -25,7 +25,12 @@ var allowedReceiptExt = map[string]struct{}{
 
 // Checks if extension is allowed by receipts
 func IsAllowedReceiptExt(ext string) bool {
-	_, ok := allowedReceiptExt[strings.ToLower(ext)]
+	ext = strings.ToLower(strings.TrimSpace(ext))
+	// Ensure extension starts with a dot (reject bare names like "png")
+	if len(ext) == 0 || ext[0] != '.' {
+		return false
+	}
+	_, ok := allowedReceiptExt[ext]
 	return ok
 }
 
@@ -40,11 +45,15 @@ var allowedBankStatementExt = map[string]struct{}{
 	".ofx": {},
 	".qfx": {},
 	".qbo": {},
-	".csv": {},
 }
 
 // Checks if extension is allowed by bank statements
 func IsAllowedBankStatementExt(ext string) bool {
-	_, ok := allowedBankStatementExt[strings.ToLower(ext)]
+	ext = strings.ToLower(strings.TrimSpace(ext))
+	// Ensure extension starts with a dot (reject bare names like "ofx")
+	if len(ext) == 0 || ext[0] != '.' {
+		return false
+	}
+	_, ok := allowedBankStatementExt[ext]
 	return ok
 }
