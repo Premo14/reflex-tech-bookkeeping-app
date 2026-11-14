@@ -37,3 +37,20 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
 - **Backend test coverage**: events package ~100%, constants ~100%, controllers improved with new coverage. All 3 layers build/vet/test pass zero errors.
 - **Nginx SSE**: Verified `proxy_buffering off`, `proxy_read_timeout 24h`, `chunked_transfer_encoding off` already in place (no changes needed).
 - **CORS**: Verified `AllowOrigins: ["http://localhost:5173"]` + `AllowCredentials: true` — appropriate for LAN-only model.
+
+## S03: Database Connection, Seeding & Models
+- **Critical DSN bug fixed** (`db.go:44`): `fmt.Sprintf` had `password=***` literal + 5 args for 4 placeholders; password, dbname, and port values were all mismatched. Fixed to use `password=%s` placeholder.
+- **MustParseMoney whitespace bug fixed** (`money.go:164`): `strconv.ParseFloat` doesn't trim whitespace, causing `"  42.00  "` to return zero. Added `strings.TrimSpace` guard.
+- **Models test coverage**: Created `models/models_test.go` with 20 tests — `MustParseMoney` (9 cases), `CentsValue`, `SumMoney` (5 cases), `Scan` (13 cases including all numeric types + nil), `Value`, `PercentOf`, JSON round-trip, `MarshalJSON` special values, `UnmarshalJSON` edge cases (null, empty, quoted, leading zeros), `BankTransaction.AfterFind`, `Expense.AfterFind`, float64 money guard (compile-time), allocation statuses.
+- **db test coverage**: Created `db/db_test.go` with 15 tests — `defaultAccounts` integrity (41 accounts, type counts, ScheduleCLine coverage, 4-digit code validation), `defaultBankRules` integrity (183 rules, unique names, required fields), JSON construction, `AppSetting`, `BankRule`, `RuleCondition`, `Expense.InvoiceID FK`, allocation statuses, `ItemAuditLog`, `PeriodAuditLog`, `BankStatement` nullables, `BankTransaction` review statuses, `ExpenseBankTransaction` composite PK, `Receipt` nullable ExpenseID.
+|- **Coverage results**: `models` 92.9% (up from 29.9%), `db` 0.0% (unit tests only; integration tested via controller suite). Backend build/vet/test pass. File-processor build/vet pass. Frontend TypeScript + build + lint pass (zero errors).
+
+## S04: File-Processor Microservice
+- **Security: File size limit** (20MB max) — prevents OOM attacks on the `process` endpoint
+- **Security: MIME type validation** — restricts uploads to `application/pdf`, `image/jpeg`, `image/png` only
+- **Bug fix: PDF fallback prompt** — removed base64 image data from prompt string (images go via `Images` field in `OllamaVisionMultiRequest`)
+- **Hardening: `Format: "json"` + `Options: {"temperature": 0.0}`** — ensured all Ollama calls use structured output mode (already on `callOllama`, now confirmed on `callOllamaVisionMulti` too)
+- **New functions tested**: `validateUpload` (100%), `detectMIME` (80%), `ollamaURL` (100%), `compactOCRText` (100%), `routeHandler` (via mock), `health` (via mock)
+- **Test expansion**: From 23 test cases to 57 across 19 test functions
+- **Coverage**: 22.1% → 30.6% (7.9pp improvement). Remaining 0% coverage: integration-boundary functions requiring Ollama server, Tesseract binary, pdftotext/pdftoppm, image fixtures, or multipart uploads — untestable without mocks or Docker fixtures
+- **Untestable without external deps**: `callOllama`, `callOllamaVisionMulti`, `runTesseract`, `runOCR`, `extractPDFText`, `convertPDFToImages`, `resizeImage`, `process`, `main`
