@@ -389,9 +389,11 @@ func jsonValid(s string, expectedKeys []string) bool {
 	return true
 }
 
+var execCmd = exec.Command
+
 // runTesseract runs Tesseract OCR on the given image file and returns the extracted text.
 func runTesseract(imagePath string) (string, error) {
-	cmd := exec.Command("tesseract", imagePath, "stdout", "--psm", "6")
+	cmd := execCmd("tesseract", imagePath, "stdout", "--psm", "6")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("tesseract: %w", err)
@@ -457,7 +459,7 @@ func runOCR(imagePath string) (string, error) {
 
 // extractPDFText attempts lossless text extraction from a digital PDF via pdftotext.
 func extractPDFText(pdfPath string) string {
-	cmd := exec.Command("pdftotext", "-layout", pdfPath, "-")
+	cmd := execCmd("pdftotext", "-layout", pdfPath, "-")
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -469,7 +471,7 @@ func extractPDFText(pdfPath string) string {
 // returning the paths of all generated page files.
 func convertPDFToImages(pdfPath, baseFileName string) ([]string, error) {
 	// 300 DPI gives Tesseract dramatically better accuracy on receipt numbers & dates
-	cmd := exec.Command("pdftoppm", "-png", "-r", "300", pdfPath, baseFileName)
+	cmd := execCmd("pdftoppm", "-png", "-r", "300", pdfPath, baseFileName)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("pdftoppm: %v — %s", err, string(out))
 	}
@@ -739,7 +741,7 @@ func process(ctx *fasthttp.RequestCtx) {
 
 func health(ctx *fasthttp.RequestCtx) {
 	// Verify Tesseract is available and working
-	cmd := exec.Command("tesseract", "--version")
+	cmd := execCmd("tesseract", "--version")
 	if err := cmd.Run(); err != nil {
 		log.Printf("Health check failed: tesseract error: %v", err)
 		ctx.Error(fmt.Sprintf("Service unhealthy: tesseract failed: %v", err), fasthttp.StatusInternalServerError)

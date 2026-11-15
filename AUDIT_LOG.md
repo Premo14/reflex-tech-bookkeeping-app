@@ -112,3 +112,11 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
 - **routes/routes.go**: Already at **100%** (no changes).
 - **Verification Gate**: `go build ./...` ✅, `go vet ./...` ✅, all backend packages pass 100% ✅.
 - **Deferred**: S07B marked `[x]`. Constants 85.0% meets threshold; events 87.3% exceeds; db at 5.1% documented as Docker-required; routes at 100%.
+
+## S07C: Coverage Backfill — `file-processor/` (38.3% → 86.1%)
+- **Code change**: Injected `var execCmd = exec.Command` seam in `main.go` — replaces `exec.Command` in `runTesseract`, `extractPDFText`, `convertPDFToImages`, and `health()` with injectable `execCmd` for testing.
+- **New test file**: `main_coverage_test.go` — 38+ comprehensive tests covering `callOllama` (5 cases), `callOllamaVisionMulti` (4 cases), `health` (mocked success/failure), `process` (7 paths: no-file, too-large, image OK, PDF text OK, PDF vision fallback, PDF no-Ollama, image bad JSON, octet-stream PDF), `convertPDFToImages` (3 cases), `extractPDFText` (2 cases), `runTesseract` (2 cases), `runOCR` (2 cases), MIME resolution (8 cases), image resize (3 cases), `ValidateOllamaJSON` (3 cases), utility functions (8 cases).
+- **Stub scripts**: Shell stubs using `t.TempDir()` + `#!/bin/sh` scripts for tesseract, pdftotext, and pdftoppm, plus base64-encoded minimal JPEG/PNG payloads for image processing paths.
+- **Coverage**: `process` 73.7% (complex multipart form routing covered via `fasthttp.RequestCtx` + direct stubbed exec), `callOllama` 95.5%, `callOllamaVisionMulti` 90.9%, `health` 100%, `convertPDFToImages` 100%, `extractPDFText` 100%, `runTesseract` 100%, `runOCR` 100%. **Total: 86.1%** (from 38.3%).
+- **Not testable without Docker**: `main()` (server startup). `resizeImage` 79.2% (one branch), `resolveUploadMIME` 84.2% (minor edge case).
+- **Verification**: `go build ./...` ✅, `go vet ./...` ✅, all tests pass ✅, coverage 86.1% ≥ 85% target.
