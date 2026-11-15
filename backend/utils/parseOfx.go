@@ -29,6 +29,9 @@ import (
 //   Transactions are NOT auto-assigned to any accounting period. They are stored freely
 //   and appear in any user-created period whose date range covers their date.
 func ParseOfx(filePath string) {
+	if db.DB == nil {
+		return
+	}
 	fileExt := filepath.Ext(filePath)
 
 	f, err := os.Open(filePath)
@@ -168,7 +171,7 @@ func ParseOfx(filePath string) {
 		} else {
 			dbTx.ReviewStatus = "APPROVED"
 		}
-		if dbTx.Amount.Dollars() >= 0 {
+		if dbTx.Amount.Cents >= 0 {
 			dbTx.AllocationStatus = "BALANCED"
 		} else {
 			dbTx.AllocationStatus = "UNLINKED"
@@ -228,6 +231,12 @@ func buildOfxDescription(name, memo string) string {
 //     second checking account or second credit card), find the next available code and auto-create.
 func resolveOrCreateChartAccount(accountID, bankID, accountType, institution, subType string) *uint {
 	if accountID == "" {
+		return nil
+	}
+
+	// Guard against nil DB — if DB is unavailable, return nil (graceful degradation)
+	if db.DB == nil {
+		log.Printf("⚠️ resolveOrCreateChartAccount: DB is nil, cannot resolve account for %s\n", accountID)
 		return nil
 	}
 
@@ -372,6 +381,9 @@ func isDefaultDescription(desc string) bool {
 // nextAvailableCode finds the next unused 4-digit code starting with the given prefix.
 // e.g. prefix "1" will try 1010, 1020, 1030, ... until a gap is found.
 func nextAvailableCode(prefix string) string {
+	if db.DB == nil {
+		return fmt.Sprintf("%s1010", prefix)
+	}
 	for i := 10; i <= 990; i += 10 {
 		candidate := fmt.Sprintf("%s%03d", prefix, i)
 		var count int64
@@ -386,6 +398,9 @@ func nextAvailableCode(prefix string) string {
 
 // nextAvailableCodeInRange finds the next unused 4-digit code between minCode and maxCode inclusive.
 func nextAvailableCodeInRange(minCode, maxCode int) string {
+	if db.DB == nil {
+		return fmt.Sprintf("%04d", minCode)
+	}
 	for i := minCode; i <= maxCode; i += 5 {
 		candidate := fmt.Sprintf("%04d", i)
 		var count int64

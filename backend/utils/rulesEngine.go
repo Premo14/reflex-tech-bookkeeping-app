@@ -217,6 +217,9 @@ func ApplyBankRulesToTransaction(tx *models.BankTransaction, db *gorm.DB) (*mode
 // ApplyAllRulesToExisting runs active rules against all unlinked or uncategorized bank transactions
 // in open accounting periods.
 func ApplyAllRulesToExisting(db *gorm.DB) (int, error) {
+	if db == nil {
+		return 0, fmt.Errorf("nil database")
+	}
 	var rules []models.BankRule
 	if err := db.Where("active = true").Order("priority ASC, id ASC").Find(&rules).Error; err != nil {
 		return 0, err

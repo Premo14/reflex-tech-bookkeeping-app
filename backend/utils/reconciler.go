@@ -20,6 +20,9 @@ var reconciliationMutex sync.Mutex
 // pass 2: recursive subset-sum for split expenses
 // pass 3: recalculates status flags
 func RunReconciliation() {
+	if db.DB == nil {
+		return
+	}
 	reconciliationMutex.Lock()
 	defer reconciliationMutex.Unlock()
 
@@ -408,9 +411,34 @@ func getBalanceSheetAccountIDs() map[uint]bool {
 	return ids
 }
 
+// sumConfirmedTxAbsCentsForExpense sums exact integer cents across all non-deleted confirmed
+// bank transactions linked to expenseID (avoiding raw SQL SUM float/cents mismatch).
+func sumConfirmedTxAbsCentsForExpense(expenseID uint) int64 {
+	var txs []models.BankTransaction
+	db.DB.Select("bank_transactions.id, bank_transactions.amount").
+		Joins("JOIN expense_bank_transactions ebt ON ebt.bank_transaction_id = bank_transactions.id").
+		Where("ebt.expense_id = ? AND ebt.status = 'confirmed' AND COALESCE(bank_transactions.review_status, '') NOT IN ('IGNORED', 'DELETED')", expenseID).
+		Find(&txs)
+	return sumTransactionAbsCents(txs)
+}
+
+// sumConfirmedExpenseAbsCentsForTx sums exact integer cents across all non-deleted confirmed
+// expenses linked to txID (avoiding raw SQL SUM float/cents mismatch).
+func sumConfirmedExpenseAbsCentsForTx(txID uint) int64 {
+	var exps []models.Expense
+	db.DB.Select("expenses.id, expenses.amount").
+		Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
+		Where("ebt.bank_transaction_id = ? AND ebt.status = 'confirmed' AND COALESCE(expenses.review_status, '') NOT IN ('IGNORED', 'DELETED')", txID).
+		Find(&exps)
+	return sumExpenseAbsCents(exps)
+}
+
 // UpdateAllocationStatuses verifies tx amount equals sum of attached confirmed expenses.
 // Positive/zero-amount transactions (deposits/income/memos) and balance-sheet transfers auto-balance.
 func UpdateAllocationStatuses() {
+	if db.DB == nil {
+		return
+	}
 	balanceSheetAccountIDs := getBalanceSheetAccountIDs()
 
 	// First, prune any suggested links that touch balanced/confirmed items or cash expenses
@@ -477,12 +505,7 @@ func UpdateAllocationStatuses() {
 
 				if otherTxCount > 1 {
 					// N:1 split: multiple bank transactions paying for 1 expense
-					// Use integer cents for exact comparison.
-					var sumOtherCents int64
-					db.DB.Model(&models.BankTransaction{}).
-						Joins("JOIN expense_bank_transactions ebt ON ebt.bank_transaction_id = bank_transactions.id").
-						Where("ebt.expense_id = ? AND ebt.status = 'confirmed' AND COALESCE(bank_transactions.review_status, '') NOT IN ('IGNORED', 'DELETED')", singleExp.ID).
-						Select("COALESCE(SUM(ABS(bank_transactions.amount)), 0)").Scan(&sumOtherCents)
+					sumOtherCents := sumConfirmedTxAbsCentsForExpense(singleExp.ID)
 
 					if sumOtherCents > singleExp.Amount.Abs().Cents {
 						status = "OVER_ALLOCATED"
@@ -543,12 +566,7 @@ func UpdateAllocationStatuses() {
 			}
 		} else if countConfirmed > 1 {
 			// N:1 split: multiple bank transactions funding this single expense
-			// Use integer cents for exact comparison.
-			var sumTxCents int64
-			db.DB.Model(&models.BankTransaction{}).
-				Joins("JOIN expense_bank_transactions ebt ON ebt.bank_transaction_id = bank_transactions.id").
-				Where("ebt.expense_id = ? AND ebt.status = 'confirmed' AND COALESCE(bank_transactions.review_status, '') NOT IN ('IGNORED', 'DELETED')", exp.ID).
-				Select("COALESCE(SUM(ABS(bank_transactions.amount)), 0)").Scan(&sumTxCents)
+			sumTxCents := sumConfirmedTxAbsCentsForExpense(exp.ID)
 
 			expCents := exp.Amount.Abs().Cents
 			if expCents == sumTxCents {
@@ -568,12 +586,7 @@ func UpdateAllocationStatuses() {
 				txCents := tx.Amount.Abs().Cents
 				expCents := exp.Amount.Abs().Cents
 
-				// Total confirmed expenses linked to this bank transaction (integer cents).
-				var sumExpCents int64
-				db.DB.Model(&models.Expense{}).
-					Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
-					Where("ebt.bank_transaction_id = ? AND ebt.status = 'confirmed' AND COALESCE(expenses.review_status, '') NOT IN ('IGNORED', 'DELETED')", tx.ID).
-					Select("COALESCE(SUM(expenses.amount), 0)").Scan(&sumExpCents)
+				sumExpCents := sumConfirmedExpenseAbsCentsForTx(tx.ID)
 
 				if expCents > txCents {
 					// Expense is larger than the single bank transaction linked to it

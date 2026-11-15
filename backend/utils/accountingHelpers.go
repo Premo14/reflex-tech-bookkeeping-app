@@ -9,6 +9,9 @@ import (
 
 // IsDateInClosedPeriod checks whether the given date is on or before the BooksClosedDate setting.
 func IsDateInClosedPeriod(date time.Time) bool {
+	if db.DB == nil {
+		return false
+	}
 	var setting models.AppSetting
 	if err := db.DB.Where("key = ?", "BooksClosedDate").First(&setting).Error; err != nil {
 		return false // Setting doesn't exist, so nothing is closed

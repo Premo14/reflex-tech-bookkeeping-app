@@ -3,71 +3,218 @@ package db
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"reflex-tech-bookkeeping-app-api/models"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
-// ---- SeedChartOfAccounts: test with PostgreSQL via Docker ----
-
-// TestSeedChartOfAccounts requires a running PostgreSQL database.
-// Skip in CI/local without Docker.
-func TestSeedChartOfAccounts_CreateNew(t *testing.T) {
-	t.Skip("SeedChartOfAccounts requires PostgreSQL DB connection; tested in production")
-}
-
-func TestSeedChartOfAccounts_IdempotentUpdate(t *testing.T) {
-	t.Skip("Requires PostgreSQL")
-}
-
-func TestSeedChartOfAccounts_UpdateMissingScheduleCLine(t *testing.T) {
-	t.Skip("Requires PostgreSQL")
-}
-
-func TestSeedChartOfAccounts_UpdateMissingIsDefault(t *testing.T) {
-	t.Skip("Requires PostgreSQL")
-}
-
-// ---- SeedDefaultBankRules: test with PostgreSQL ----
-
-func TestSeedDefaultBankRules_CreateNew(t *testing.T) {
-	t.Skip("Requires PostgreSQL")
-}
-
-func TestSeedDefaultBankRules_Idempotent(t *testing.T) {
-	t.Skip("Requires PostgreSQL")
-}
-
-func TestSeedDefaultBankRules_JSONConditions(t *testing.T) {
-	t.Skip("Requires PostgreSQL")
-}
-
-func TestSeedDefaultBankRules_AccountIDMapping(t *testing.T) {
-	t.Skip("Requires PostgreSQL")
-}
-
-func TestSeedDefaultBankRules_NoDuplicateNames(t *testing.T) {
-	t.Skip("Requires PostgreSQL")
-}
-
-// ---- DB connectivity test ----
-
-func TestDB_PackageImport(t *testing.T) {
-	// Verify the db package imports correctly and global DB is nil
-	// (no actual connection established yet)
-	if DB != nil {
-		t.Log("DB is already connected (expected in production)")
+func openTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("failed to open sqlite test db: %v", err)
 	}
-	// nil check passes — package imports successfully
+	return gdb
 }
 
-// ---- Seed data integrity ----
+// ---- Nil DB safety ----
 
-func TestSeedChartOfAccounts_TypeCoverage(t *testing.T) {
-	t.Skip("Requires PostgreSQL")
+func TestDB_NilGuards(t *testing.T) {
+	oldDB := DB
+	DB = nil
+	defer func() { DB = oldDB }()
+
+	InitSchemaAndSeed(nil)
+	SeedChartOfAccounts()
+	SeedDefaultBankRules()
 }
 
-func TestSeedChartOfAccounts_ExpenseScheduleCLines(t *testing.T) {
-	t.Skip("Requires PostgreSQL")
+// ---- Fresh schema migration + idempotent seeding ----
+
+func TestInitSchemaAndSeed_FreshAndIdempotent(t *testing.T) {
+	oldDB := DB
+	defer func() { DB = oldDB }()
+
+	gdb := openTestDB(t)
+	InitSchemaAndSeed(gdb)
+
+	var accounts []models.ChartAccount
+	if err := gdb.Find(&accounts).Error; err != nil {
+		t.Fatalf("failed to query chart_accounts: %v", err)
+	}
+	if len(accounts) != len(defaultAccounts) {
+		t.Fatalf("seeded %d chart accounts, want %d", len(accounts), len(defaultAccounts))
+	}
+
+	var rules []models.BankRule
+	if err := gdb.Find(&rules).Error; err != nil {
+		t.Fatalf("failed to query bank_rules: %v", err)
+	}
+	if len(rules) != len(defaultBankRules) {
+		t.Fatalf("seeded %d bank rules, want %d", len(rules), len(defaultBankRules))
+	}
+	for _, r := range rules {
+		if r.CategoryAccountID == nil || *r.CategoryAccountID == 0 {
+			t.Errorf("rule %q missing mapped CategoryAccountID", r.Name)
+		}
+		var conds []models.RuleCondition
+		if err := json.Unmarshal([]byte(r.ConditionsJSON), &conds); err != nil || len(conds) == 0 {
+			t.Errorf("rule %q has invalid conditions JSON: %v", r.Name, err)
+		}
+	}
+
+	// Second run must remain strictly idempotent
+	InitSchemaAndSeed(gdb)
+	var afterAccounts, afterRules int64
+	gdb.Model(&models.ChartAccount{}).Count(&afterAccounts)
+	gdb.Model(&models.BankRule{}).Count(&afterRules)
+	if int(afterAccounts) != len(defaultAccounts) {
+		t.Errorf("idempotent re-seed accounts = %d, want %d", afterAccounts, len(defaultAccounts))
+	}
+	if int(afterRules) != len(defaultBankRules) {
+		t.Errorf("idempotent re-seed rules = %d, want %d", afterRules, len(defaultBankRules))
+	}
+}
+
+func TestSeedChartOfAccounts_UpdatesMissingMetadata(t *testing.T) {
+	oldDB := DB
+	defer func() { DB = oldDB }()
+
+	gdb := openTestDB(t)
+	gdb.AutoMigrate(&models.ChartAccount{})
+	gdb.Create(&models.ChartAccount{
+		Code:          "5050",
+		Name:          "Office Supplies",
+		Type:          "EXPENSE",
+		ScheduleCLine: "",
+		IsDefault:     false,
+		Active:        true,
+	})
+	DB = gdb
+
+	SeedChartOfAccounts()
+
+	var updated models.ChartAccount
+	if err := gdb.Where("code = ?", "5050").First(&updated).Error; err != nil {
+		t.Fatalf("failed to load updated account: %v", err)
+	}
+	if updated.ScheduleCLine == "" {
+		t.Errorf("expected empty ScheduleCLine on 5050 to be backfilled")
+	}
+	if !updated.IsDefault {
+		t.Errorf("expected IsDefault on 5050 to be updated to true")
+	}
+}
+
+func TestInitSchemaAndSeed_LegacyMigrationsAndClosedDates(t *testing.T) {
+	oldDB := DB
+	defer func() { DB = oldDB }()
+
+	gdb := openTestDB(t)
+	gdb.SetupJoinTable(&models.Expense{}, "BankTransactions", &models.ExpenseBankTransaction{})
+	gdb.SetupJoinTable(&models.BankTransaction{}, "Expenses", &models.ExpenseBankTransaction{})
+	gdb.AutoMigrate(
+		&models.ChartAccount{},
+		&models.AppSetting{},
+		&models.BankStatement{},
+		&models.BankTransaction{},
+		&models.Invoice{},
+		&models.Expense{},
+		&models.Receipt{},
+		&models.ExpenseBankTransaction{},
+		&models.PeriodAuditLog{},
+		&models.ItemAuditLog{},
+		&models.BankRule{},
+	)
+
+	// Seed legacy account codes & redundant 2040/5137 account
+	bankAcc := models.ChartAccount{Code: "1010", Name: "Business Checking", Type: "ASSET", Description: "Business checking account", Active: true}
+	cc2020 := models.ChartAccount{Code: "2020", Name: "Business Credit Card", Type: "LIABILITY", Description: "5137", Active: true}
+	cc2040 := models.ChartAccount{Code: "2040", Name: "Old CC", Type: "LIABILITY", Description: "5137", Active: true}
+	expAcc := models.ChartAccount{Code: "5060", Name: "Travel & Meals", Type: "EXPENSE", Active: true}
+	gdb.Create(&bankAcc)
+	gdb.Create(&cc2020)
+	gdb.Create(&cc2040)
+	gdb.Create(&expAcc)
+	// Legacy renumbered codes (only those that don't clash with SeedChartOfAccounts codes or get migrated cleanly)
+	gdb.Create(&models.ChartAccount{Code: "2035", Name: "Business Line of Credit", Type: "LIABILITY", Active: true})
+	gdb.Create(&models.ChartAccount{Code: "3030", Name: "Owner Draw", Type: "EQUITY", Active: true})
+	gdb.Create(&models.ChartAccount{Code: "4020", Name: "Consulting Service Fee", Type: "REVENUE", Active: true})
+	gdb.Create(&models.ChartAccount{Code: "4030", Name: "Bank Interest Income", Type: "REVENUE", Active: true})
+
+	// BooksClosedDate at 2025-12-31
+	gdb.Create(&models.AppSetting{Key: "BooksClosedDate", Value: "2025-12-31"})
+
+	// Bank statement referencing 2040 so 2040->2020 merge & ofx_account_id backfill both trigger
+	stmt := models.BankStatement{AccountID: "5137", BankID: "Chase", DocumentURI: "processed/s.ofx", FileExt: ".ofx", ChartAccountID: &cc2040.ID}
+	gdb.Create(&stmt)
+
+	// Transactions: legacy expense-as-bank account, closed vs open PENDING, legacy allocation statuses
+	closedDate := time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC)
+	openDate := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	tx1 := models.BankTransaction{Date: closedDate, Description: "Closed Pending", Amount: models.NewMoney(-10), FITID: "M-1", ChartAccountID: &expAcc.ID, ReviewStatus: "PENDING", AllocationStatus: "MATCHED"}
+	tx2 := models.BankTransaction{Date: openDate, Description: "Open Pending", Amount: models.NewMoney(-20), FITID: "M-2", ChartAccountID: &cc2040.ID, ReviewStatus: "PENDING", AllocationStatus: "PARTIALLY_LINKED"}
+	tx3 := models.BankTransaction{Date: openDate, Description: "Unmatched", Amount: models.NewMoney(-30), FITID: "M-3", ChartAccountID: &bankAcc.ID, AllocationStatus: "UNMATCHED"}
+	gdb.Create(&tx1)
+	gdb.Create(&tx2)
+	gdb.Create(&tx3)
+
+	// Expenses: uppercase tender, invalid asset chart_account_id, open PENDING
+	exp1 := models.Expense{Timestamp: openDate, Vendor: "Coffee", Amount: models.NewMoney(5), Tender: " CASH ", ChartAccountID: &bankAcc.ID, ReviewStatus: "PENDING", AllocationStatus: "UNLINKED"}
+	exp2 := models.Expense{Timestamp: closedDate, Vendor: "Old", Amount: models.NewMoney(12), Tender: "card", ChartAccountID: &cc2040.ID, ReviewStatus: "PENDING", AllocationStatus: "PARTIAL MATCH"}
+	gdb.Create(&exp1)
+	gdb.Create(&exp2)
+
+	InitSchemaAndSeed(gdb)
+
+	var gotTx1, gotTx2, gotTx3 models.BankTransaction
+	gdb.First(&gotTx1, tx1.ID)
+	gdb.First(&gotTx2, tx2.ID)
+	gdb.First(&gotTx3, tx3.ID)
+	if gotTx1.CategoryAccountID == nil || *gotTx1.CategoryAccountID != expAcc.ID || gotTx1.ChartAccountID != nil {
+		t.Errorf("tx1 legacy category migration failed: chart=%v cat=%v", gotTx1.ChartAccountID, gotTx1.CategoryAccountID)
+	}
+	if gotTx1.ReviewStatus != "PENDING" || gotTx1.AllocationStatus != "BALANCED" {
+		t.Errorf("tx1 closed/status = (%s, %s), want (PENDING, BALANCED)", gotTx1.ReviewStatus, gotTx1.AllocationStatus)
+	}
+	if gotTx2.ReviewStatus != "APPROVED" || gotTx2.AllocationStatus != "PARTIALLY_ALLOCATED" {
+		t.Errorf("tx2 open/status = (%s, %s), want (APPROVED, PARTIALLY_ALLOCATED)", gotTx2.ReviewStatus, gotTx2.AllocationStatus)
+	}
+	if gotTx2.ChartAccountID == nil || *gotTx2.ChartAccountID != cc2020.ID {
+		t.Errorf("tx2 should be reassigned from 2040 to 2020 (%d), got %v", cc2020.ID, gotTx2.ChartAccountID)
+	}
+	if gotTx3.AllocationStatus != "UNLINKED" {
+		t.Errorf("tx3 status = %s, want UNLINKED", gotTx3.AllocationStatus)
+	}
+
+	var gotExp1, gotExp2 models.Expense
+	gdb.First(&gotExp1, exp1.ID)
+	gdb.First(&gotExp2, exp2.ID)
+	if gotExp1.Tender != "cash" || gotExp1.AllocationStatus != "BALANCED" || gotExp1.ReviewStatus != "APPROVED" || gotExp1.ChartAccountID != nil {
+		t.Errorf("exp1 normalization failed: tender=%q alloc=%q review=%q acct=%v", gotExp1.Tender, gotExp1.AllocationStatus, gotExp1.ReviewStatus, gotExp1.ChartAccountID)
+	}
+	if gotExp2.ReviewStatus != "PENDING" || gotExp2.AllocationStatus != "PARTIALLY_ALLOCATED" {
+		t.Errorf("exp2 migration failed: review=%q alloc=%q", gotExp2.ReviewStatus, gotExp2.AllocationStatus)
+	}
+
+	var migrated2020, migratedLOC, migratedDraw, migratedSvc, migratedInt models.ChartAccount
+	gdb.First(&migrated2020, cc2020.ID)
+	if migrated2020.OfxAccountID == nil || *migrated2020.OfxAccountID != "5137" || migrated2020.Description != "OFX ID: 5137" {
+		t.Errorf("2020 OFX backfill failed: ofx=%v desc=%q", migrated2020.OfxAccountID, migrated2020.Description)
+	}
+	for code, target := range map[string]*models.ChartAccount{
+		"2030": &migratedLOC, "3110": &migratedDraw, "4110": &migratedSvc, "4210": &migratedInt,
+	} {
+		if err := gdb.Where("code = ?", code).First(target).Error; err != nil {
+			t.Errorf("expected migrated code %s to exist: %v", code, err)
+		}
+	}
 }
 
 func TestSeedChartOfAccounts_UniqueCodes(t *testing.T) {
@@ -150,52 +297,12 @@ func TestDefaultBankRules_Categories(t *testing.T) {
 	}
 }
 
-// ---- DB global: nil check after package import ----
+// ---- DB global check ----
 
-func TestDB_GlobalNil(t *testing.T) {
-	// DB should be nil before Connect() is called
+func TestDB_GlobalInit(t *testing.T) {
 	if DB != nil {
-		// In production after main(), DB is non-nil
-		// In tests before Connect(), DB is nil
-		// This is informational only
 		t.Logf("DB is connected (value: %v)", DB)
 	}
-}
-
-// ---- SeedChartOfAccounts: log output test ----
-
-func TestLogOutput_SeedChartOfAccounts(t *testing.T) {
-	// SeedChartOfAccounts logs "Ensuring standard Chart of Accounts..."
-	// We can't easily test this without a DB, so verify no crash on nil DB
-	// This tests the nil DB path
-	oldDB := DB
-	DB = nil
-	defer func() { DB = oldDB }()
-
-	// Should panic or log — in production it would work with a real DB
-	// Here we just verify the function signature is correct
-	// The nil DB will cause a panic in DB.Where()
-	defer func() {
-		r := recover()
-		if r != nil {
-			// Expected: nil DB causes panic
-			_ = r
-		}
-	}()
-	SeedChartOfAccounts()
-}
-
-func TestLogOutput_SeedDefaultBankRules(t *testing.T) {
-	// Same nil-DB test for SeedDefaultBankRules
-	oldDB := DB
-	DB = nil
-	defer func() { DB = oldDB }()
-
-	defer func() {
-		r := recover()
-		_ = r
-	}()
-	SeedDefaultBankRules()
 }
 
 // ---- seedEntry struct verification ----

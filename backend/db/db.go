@@ -48,6 +48,18 @@ func Connect() {
 		log.Fatal("Failed to connect to database.", err)
 	}
 
+	InitSchemaAndSeed(DB)
+}
+
+// InitSchemaAndSeed sets up GORM join tables, migrates models, runs idempotent
+// schema/data migrations, creates ledger indexes, and seeds default COA + rules.
+func InitSchemaAndSeed(database *gorm.DB) {
+	if database == nil {
+		return
+	}
+	DB = database
+	isPostgres := database.Dialector != nil && database.Dialector.Name() == "postgres"
+
 	// Tell GORM to use the custom join table struct for both sides of the many2many.
 	// This must happen before AutoMigrate so that GORM creates the join table with
 	// the Status column rather than a plain pivot table with just the two FK columns.
@@ -72,7 +84,9 @@ func Connect() {
 
 	// Drop legacy unique constraint on receipts.file_hash so shared receipts (allowDuplicate=true)
 	// and re-uploads of receipts from soft-deleted expenses do not fail with SQLSTATE 23505.
-	DB.Exec(`ALTER TABLE receipts DROP CONSTRAINT IF EXISTS uni_receipts_file_hash`)
+	if isPostgres {
+		DB.Exec(`ALTER TABLE receipts DROP CONSTRAINT IF EXISTS uni_receipts_file_hash`)
+	}
 	DB.Exec(`DROP INDEX IF EXISTS uni_receipts_file_hash`)
 
 	// Migration: bank transactions used to store their category (REVENUE/EXPENSE account)
@@ -98,15 +112,17 @@ func Connect() {
 	}
 
 	// Migration: rename reconciliation_status column to allocation_status and migrate status values
-	DB.Exec(`DO $$ 
-	BEGIN 
-		IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'bank_transactions' AND column_name = 'reconciliation_status') THEN
-			ALTER TABLE bank_transactions RENAME COLUMN reconciliation_status TO allocation_status;
-		END IF;
-		IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'expenses' AND column_name = 'reconciliation_status') THEN
-			ALTER TABLE expenses RENAME COLUMN reconciliation_status TO allocation_status;
-		END IF;
-	END $$;`)
+	if isPostgres {
+		DB.Exec(`DO $$ 
+		BEGIN 
+			IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'bank_transactions' AND column_name = 'reconciliation_status') THEN
+				ALTER TABLE bank_transactions RENAME COLUMN reconciliation_status TO allocation_status;
+			END IF;
+			IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'expenses' AND column_name = 'reconciliation_status') THEN
+				ALTER TABLE expenses RENAME COLUMN reconciliation_status TO allocation_status;
+			END IF;
+		END $$;`)
+	}
 
 	DB.Exec(`UPDATE bank_transactions SET allocation_status = 'BALANCED' WHERE allocation_status LIKE 'M%' OR allocation_status = 'LINKED'`)
 	DB.Exec(`UPDATE bank_transactions SET allocation_status = 'UNLINKED' WHERE allocation_status LIKE 'UNM%'`)
@@ -134,19 +150,19 @@ func Connect() {
 	// Order is critical to avoid violating the unique constraint on code:
 	// - 5110 Software moves to 5210 before 5100 Professional Services can take 5110.
 	// - 2030 Bank Loan moves to 2510 before 2035 Line of Credit can take 2030.
-	DB.Exec(`UPDATE chart_accounts SET code = '2510' WHERE code = '2030' AND name ILIKE '%Loan%'`)
+	DB.Exec(`UPDATE chart_accounts SET code = '2510' WHERE code = '2030' AND LOWER(name) LIKE '%loan%'`)
 
 	// Performance & Scalability Indexes for Enterprise Ledgers
 	DB.Exec(`CREATE INDEX IF NOT EXISTS idx_bt_review_status_date ON bank_transactions(review_status, date)`)
 	DB.Exec(`CREATE INDEX IF NOT EXISTS idx_exp_review_status_time ON expenses(review_status, timestamp)`)
 	DB.Exec(`CREATE INDEX IF NOT EXISTS idx_bt_accounts ON bank_transactions(chart_account_id, category_account_id)`)
-	DB.Exec(`UPDATE chart_accounts SET code = '2030' WHERE code = '2035' AND name ILIKE '%Credit%'`)
-	DB.Exec(`UPDATE chart_accounts SET code = '3110' WHERE code = '3030' AND name ILIKE '%Draw%'`)
-	DB.Exec(`UPDATE chart_accounts SET code = '4110' WHERE code = '4020' AND (name ILIKE '%Service%' OR name ILIKE '%Fee%')`)
-	DB.Exec(`UPDATE chart_accounts SET code = '4210' WHERE code = '4030' AND name ILIKE '%Interest%'`)
-	DB.Exec(`UPDATE chart_accounts SET code = '5310' WHERE code = '5040' AND (name ILIKE '%Advertising%' OR name ILIKE '%Marketing%')`)
-	DB.Exec(`UPDATE chart_accounts SET code = '5410' WHERE code = '5060' AND (name ILIKE '%Travel%' OR name ILIKE '%Transportation%')`)
-	DB.Exec(`UPDATE chart_accounts SET code = '5910' WHERE code = '5070' AND (name ILIKE '%Bank%' OR name ILIKE '%Fee%')`)
+	DB.Exec(`UPDATE chart_accounts SET code = '2030' WHERE code = '2035' AND LOWER(name) LIKE '%credit%'`)
+	DB.Exec(`UPDATE chart_accounts SET code = '3110' WHERE code = '3030' AND LOWER(name) LIKE '%draw%'`)
+	DB.Exec(`UPDATE chart_accounts SET code = '4110' WHERE code = '4020' AND (LOWER(name) LIKE '%service%' OR LOWER(name) LIKE '%fee%')`)
+	DB.Exec(`UPDATE chart_accounts SET code = '4210' WHERE code = '4030' AND LOWER(name) LIKE '%interest%'`)
+	DB.Exec(`UPDATE chart_accounts SET code = '5310' WHERE code = '5040' AND (LOWER(name) LIKE '%advertising%' OR LOWER(name) LIKE '%marketing%')`)
+	DB.Exec(`UPDATE chart_accounts SET code = '5410' WHERE code = '5060' AND (LOWER(name) LIKE '%travel%' OR LOWER(name) LIKE '%transportation%')`)
+	DB.Exec(`UPDATE chart_accounts SET code = '5910' WHERE code = '5070' AND (LOWER(name) LIKE '%bank%' OR LOWER(name) LIKE '%fee%')`)
 
 	// Migration: ensure standard default accounts have is_default = true
 	defaultCodes := []string{
@@ -223,12 +239,17 @@ func Connect() {
 		}
 	}
 
-	// Migration: backfill ofx_account_id on chart_accounts from bank_statements
-	DB.Exec(`UPDATE chart_accounts ca
-		SET ofx_account_id = bs.account_id
-		FROM bank_statements bs
-		WHERE bs.chart_account_id = ca.id
-		AND (ca.ofx_account_id IS NULL OR ca.ofx_account_id = '')`)
+	// Migration: backfill ofx_account_id on chart_accounts from bank_statements (portable correlated subquery)
+	DB.Exec(`UPDATE chart_accounts
+		SET ofx_account_id = (
+			SELECT bs.account_id
+			FROM bank_statements bs
+			WHERE bs.chart_account_id = chart_accounts.id
+			ORDER BY bs.id
+			LIMIT 1
+		)
+		WHERE (ofx_account_id IS NULL OR ofx_account_id = '')
+		AND EXISTS (SELECT 1 FROM bank_statements bs WHERE bs.chart_account_id = chart_accounts.id)`)
 
 	// Set OFX ID description on adopted statement accounts
 	DB.Exec(`UPDATE chart_accounts
