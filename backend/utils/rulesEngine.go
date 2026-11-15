@@ -2,6 +2,7 @@ package utils
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"regexp"
 	"strconv"
@@ -26,24 +27,24 @@ func EvaluateCondition(cond models.RuleCondition, tx models.BankTransaction) boo
 		return evaluateStringOperator(val, op, targetVal)
 
 	case "amount":
-		txAmt := math.Abs(tx.Amount.Dollars())
-		targetAmt, err := strconv.ParseFloat(strings.ReplaceAll(targetVal, "$", ""), 64)
+		txAmt := tx.Amount.Abs().Cents
+		targetFloat, err := strconv.ParseFloat(strings.ReplaceAll(targetVal, "$", ""), 64)
 		if err != nil {
 			return false
 		}
-		targetAmt = math.Abs(targetAmt)
+		targetCents := int64(math.Round(math.Abs(targetFloat * 100)))
 
 		switch op {
 		case "equals", "equals_amount", "eq", "==":
-			return math.Abs(txAmt-targetAmt) < 0.005
+			return txAmt == targetCents
 		case "greater_than", "gt", ">":
-			return txAmt > targetAmt
+			return txAmt > targetCents
 		case "greater_than_or_equal", "gte", ">=":
-			return txAmt >= targetAmt-0.005
+			return txAmt >= targetCents
 		case "less_than", "lt", "<":
-			return txAmt < targetAmt
+			return txAmt < targetCents
 		case "less_than_or_equal", "lte", "<=":
-			return txAmt <= targetAmt+0.005
+			return txAmt <= targetCents
 		default:
 			return false
 		}
@@ -138,6 +139,9 @@ func EvaluateRule(rule models.BankRule, tx models.BankTransaction) bool {
 // If a match is found, the transaction is mutated in-memory with the rule's actions.
 // Returns the matched rule and whether any fields were modified.
 func ApplyBankRulesToTransaction(tx *models.BankTransaction, db *gorm.DB) (*models.BankRule, bool) {
+	if db == nil {
+		return nil, false
+	}
 	var rules []models.BankRule
 	if err := db.Where("active = true").Order("priority ASC, id ASC").Find(&rules).Error; err != nil {
 		return nil, false
@@ -302,6 +306,9 @@ func ApplyAllRulesToExisting(db *gorm.DB) (int, error) {
 
 // TestRulePreview tests a rule against existing transactions and returns the count and up to 10 sample matches.
 func TestRulePreview(rule models.BankRule, db *gorm.DB) (int, []models.BankTransaction, error) {
+	if db == nil {
+		return 0, nil, fmt.Errorf("nil database")
+	}
 	var transactions []models.BankTransaction
 	if err := db.Where("COALESCE(review_status, '') != 'DELETED'").Order("date DESC").Limit(500).Find(&transactions).Error; err != nil {
 		return 0, nil, err

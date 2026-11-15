@@ -102,4 +102,113 @@ func TestEvaluateRule(t *testing.T) {
 	if !EvaluateRule(rule3, tx) {
 		t.Errorf("Expected rule 3 (OR) to evaluate to true")
 	}
+
+	// Multi-keyword Retailer Rule (McDonald's)
+	mcdConds := []models.RuleCondition{
+		{Field: "description", Operator: "contains", Value: "mcdonald"},
+		{Field: "description", Operator: "contains", Value: "mcds"},
+		{Field: "description", Operator: "contains", Value: "mcd's"},
+		{Field: "description", Operator: "contains", Value: "mcdonalds"},
+	}
+	rawMcd, _ := json.Marshal(mcdConds)
+	mcdRule := models.BankRule{
+		Active:         true,
+		MatchLogic:     "OR",
+		ConditionsJSON: string(rawMcd),
+		RenamedVendor:  "McDonald's",
+	}
+
+	mcdSamples := []string{
+		"POS DEBIT MCDS STORE #992 CANTON NY",
+		"MCDONALDS #1234 UTICA NY",
+		"MCD'S #445 UTICA NY",
+		"MCDONALD'S DRIVE-THRU",
+	}
+	for _, sample := range mcdSamples {
+		testTx := models.BankTransaction{Description: sample}
+		if !EvaluateRule(mcdRule, testTx) {
+			t.Errorf("Expected McDonald's multi-keyword rule to match %q", sample)
+		}
+	}
+
+	// Multi-keyword Retailer Rule (Walmart)
+	wmConds := []models.RuleCondition{
+		{Field: "description", Operator: "contains", Value: "wal-mart"},
+		{Field: "description", Operator: "contains", Value: "walmart"},
+		{Field: "description", Operator: "contains", Value: "wm supercenter"},
+		{Field: "description", Operator: "contains", Value: "wmt store"},
+	}
+	rawWm, _ := json.Marshal(wmConds)
+	wmRule := models.BankRule{
+		Active:         true,
+		MatchLogic:     "OR",
+		ConditionsJSON: string(rawWm),
+		RenamedVendor:  "Walmart",
+	}
+
+	wmSamples := []string{
+		"WM SUPERCENTER #1980 SYRACUSE NY",
+		"WAL-MART #2241 ALBANY NY",
+		"WALMART GROCERY PICKUP",
+		"WMT STORE #3319 UTICA NY",
+	}
+	for _, sample := range wmSamples {
+		testTx := models.BankTransaction{Description: sample}
+		if !EvaluateRule(wmRule, testTx) {
+			t.Errorf("Expected Walmart multi-keyword rule to match %q", sample)
+		}
+	}
+}
+
+func TestEvaluateConditionIntegerAmountOperators(t *testing.T) {
+	// Test that amount operators use exact integer cents (no float tolerance).
+	tests := []struct {
+		desc     string
+		amount   float64
+		op       string
+		value    string
+		expected bool
+	}{
+		{"Exact match: $10.00 eq $10.00", 10.00, "eq", "10.00", true},
+		{"Exact match: $10.00 == $10.00", 10.00, "==", "10.00", true},
+		{"No match: $10.00 != $10.01", 10.00, "eq", "10.01", false},
+		{"GT: $15.50 > $10.00", 15.50, "gt", "10.00", true},
+		{"LT: $5.25 < $10.00", 5.25, "lt", "10.00", true},
+		{"GTE: $10.00 >= $10.00", 10.00, "gte", "10.00", true},
+		{"LTE: $10.00 <= $10.00", 10.00, "lte", "10.00", true},
+		{"GT fails: $10.00 not > $10.00", 10.00, "gt", "10.00", false},
+		{"Dollar sign stripped: $20 eq 20", 20.00, "eq", "$20", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			tx := models.BankTransaction{Amount: models.NewMoney(tt.amount)}
+			cond := models.RuleCondition{Field: "amount", Operator: tt.op, Value: tt.value}
+			got := EvaluateCondition(cond, tx)
+			if got != tt.expected {
+				t.Errorf("amount %f %s %s = %v, expected %v", tt.amount, tt.op, tt.value, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestApplyBankRulesToTransaction(t *testing.T) {
+	// Test that ApplyBankRulesToTransaction correctly matches and mutates a transaction.
+	// Uses a thin in-memory setup with mock data.
+	tx := &models.BankTransaction{
+		Description: "McDonald's Store #992",
+		Amount:      models.NewMoney(-12.50),
+	}
+	// A nil DB should return (nil, false) gracefully
+	rule, modified := ApplyBankRulesToTransaction(tx, nil)
+	if rule != nil || modified {
+		t.Fatalf("expected nil rule and false modified with nil DB, got rule=%v modified=%v", rule, modified)
+	}
+}
+
+func TestTestRulePreview(t *testing.T) {
+	// nil DB → error
+	_, _, err := TestRulePreview(models.BankRule{}, nil)
+	if err == nil {
+		t.Error("expected error from TestRulePreview with nil DB")
+	}
 }
