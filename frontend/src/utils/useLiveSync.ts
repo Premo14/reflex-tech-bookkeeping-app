@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-type EventCallback = (payload: any) => void;
+type EventCallback = (payload: unknown) => void;
 
 class LiveSyncManager {
   private static instance: LiveSyncManager;
@@ -65,7 +65,7 @@ class LiveSyncManager {
     }
   }
 
-  private dispatch(type: string, payload: any) {
+  private dispatch(type: string, payload: unknown) {
     const set = this.listeners.get(type);
     if (set) {
       set.forEach((cb) => {
@@ -104,16 +104,17 @@ class LiveSyncManager {
  */
 export function useLiveEvent(
   events: string | string[],
-  callback: (payload: any) => void
+  callback: (payload: unknown) => void
 ) {
   const cbRef = useRef(callback);
   useEffect(() => {
     cbRef.current = callback;
   });
 
+  const eventKey = Array.isArray(events) ? events.join(",") : events;
   useEffect(() => {
     const manager = LiveSyncManager.getInstance();
-    const eventList = Array.isArray(events) ? events : [events];
+    const eventList = eventKey ? eventKey.split(",") : [];
 
     const unsubs = eventList.map((type) =>
       manager.subscribe(type, (payload) => {
@@ -124,5 +125,5 @@ export function useLiveEvent(
     return () => {
       unsubs.forEach((unsub) => unsub());
     };
-  }, [Array.isArray(events) ? events.join(",") : events]);
+  }, [eventKey]);
 }

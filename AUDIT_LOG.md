@@ -216,3 +216,9 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
 - **Tooltip.tsx & index.css**: Added `@keyframes tooltipIn` + `.animate-tooltip-in` inside `@media (prefers-reduced-motion)` blocks, plus `focusin`/`focusout` keyboard focus listeners and scroll/resize/Escape dismissal.
 - **ConfirmDialog.tsx, Pagination.tsx, LoadingSpinner.tsx**: Added `useId()`, `role="dialog"`, `aria-modal="true"`, `surface-glass` + `.glow-border-rose`, `onCancelRef`, and glowing confirm `<Button>` in `ConfirmDialog` (94.44%); converted `Pagination` to `<nav aria-label="Pagination">`, `Button` primitives, and `font-mono tabular-nums` (100%); added `motion-reduce` fallback on `LoadingSpinner` (100%).
 - **Verification**: `npm run build` ✅, `npm run lint` (0 errors) ✅, `RemainingUIPrimitives.test.tsx` + `CorePrimitives.test.tsx` passing ✅ (`src/components/ui` ≥ 90%).
+
+## S15A: Frontend Types, Core Utils & SSE Hook
+- **formatCurrency.ts**: Created canonical USD/ISO currency formatter (`formatCurrency`, `formatCents`, `formatFixedDollars`, integer-cent `toCents`/`fromCents` with IEEE-754 `1e-12` ULP protection and `-0` normalization) reusing cached `Intl.NumberFormat` instances (`100%` coverage).
+- **matchConfidence.ts**: Replaced naked `.toFixed(2)` strings with `formatCurrency`, added `absExp > 0` division-by-zero guard on tip variance, and guarded invalid/empty dates so `diffDays` never evaluates as `NaN` (`96.22%` coverage).
+- **vendorUtils.ts & useLiveSync.ts**: Added `ACH WITHDRAWAL` prefix cleanup in `extractCleanVendor` (`100%` coverage); replaced all `any` types with `unknown` and fixed React `useEffect` `exhaustive-deps` warnings in `useLiveSync.ts` (`86.15%` coverage).
+- **Verification**: `npm run build` ✅, `eslint src/utils src/types` (0 errors, 0 warnings) ✅, `CoreUtils.test.tsx` (12/12 passing; `src/utils` **93.95%** statements / **95.71%** lines) ✅.

@@ -16,7 +16,7 @@ export function extractCleanVendor(description: string): string {
     /^(pos\s+(purchase|debit)?\s*)/i,
     /^(checkcard\s*)/i,
     /^(recurring\s+payment\s*)/i,
-    /^(ach\s+(debit|credit|payment|transfer)\s*)/i,
+    /^(ach\s+(debit|credit|withdrawal|deposit|payment|transfer)\s*)/i,
     /^(online\s+(banking\s+)?transfer\s*(to|from)?\s*)/i,
   ];
 

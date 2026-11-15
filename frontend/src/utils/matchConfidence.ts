@@ -3,6 +3,8 @@
  * between a bank transaction and an expense/receipt, matching Ramp & Keeper Tax style UX.
  */
 
+import { formatCurrency } from "./formatCurrency";
+
 export interface MatchScoreResult {
   score: number;        // 0 to 100
   label: "Guaranteed Match" | "High Confidence" | "Likely Match" | "Suggested";
@@ -24,17 +26,23 @@ export function computeMatchScore(
   const exactAmount = diffAmt < 0.005;
 
   let tipVariance = false;
-  if (!exactAmount && absTx > absExp) {
+  if (!exactAmount && absExp > 0 && absTx > absExp) {
     const tipPct = (absTx - absExp) / absExp;
     if (tipPct <= 0.15) {
       tipVariance = true;
     }
   }
 
-  // Date difference in days
+  // Date difference in days (guard against missing or malformed date strings)
   const txDate = new Date(txDateStr);
   const expDate = new Date(expDateStr);
-  const diffDays = Math.round(Math.abs(txDate.getTime() - expDate.getTime()) / (1000 * 3600 * 24));
+  const hasValidDates =
+    Boolean(txDateStr && expDateStr) &&
+    Number.isFinite(txDate.getTime()) &&
+    Number.isFinite(expDate.getTime());
+  const diffDays = hasValidDates
+    ? Math.round(Math.abs(txDate.getTime() - expDate.getTime()) / (1000 * 3600 * 24))
+    : Number.POSITIVE_INFINITY;
 
   // Vendor / Description similarity
   const cleanVendor = (expVendor || "").toLowerCase().replace(/[^a-z0-9]/g, " ").trim();
@@ -56,11 +64,10 @@ export function computeMatchScore(
 
   if (exactAmount) {
     points += 50;
-    reasons.push(`Exact amount ($${absExp.toFixed(2)})`);
+    reasons.push(`Exact amount (${formatCurrency(absExp)})`);
   } else if (tipVariance) {
     points += 35;
-    const diff = (absTx - absExp).toFixed(2);
-    reasons.push(`Tip adjusted (+$${diff} / within 15%)`);
+    reasons.push(`Tip adjusted (+${formatCurrency(absTx - absExp)} / within 15%)`);
   }
 
   if (diffDays === 0) {
