@@ -1,4 +1,4 @@
-// React imported implicitly in Vite
+import { Button } from './Button';
 
 interface PaginationProps {
   currentPage: number;
@@ -10,24 +10,28 @@ export default function Pagination({ currentPage, totalPages, onPageChange }: Pa
   if (totalPages <= 1) return null;
 
   return (
-    <div className="flex items-center justify-center space-x-2 mt-4 py-2">
-      <button
+    <nav aria-label="Pagination" className="flex items-center justify-center gap-2 mt-4 py-2">
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
         onClick={() => onPageChange(currentPage - 1)}
         disabled={currentPage <= 1}
-        className="px-3 py-1 rounded bg-zinc-800 text-zinc-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-zinc-700 transition text-sm"
       >
         Prev
-      </button>
-      <span className="text-zinc-400 text-sm">
+      </Button>
+      <span className="text-zinc-400 text-xs font-mono tabular-nums px-2">
         Page {currentPage} of {totalPages}
       </span>
-      <button
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
         onClick={() => onPageChange(currentPage + 1)}
         disabled={currentPage >= totalPages}
-        className="px-3 py-1 rounded bg-zinc-800 text-zinc-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-zinc-700 transition text-sm"
       >
         Next
-      </button>
-    </div>
+      </Button>
+    </nav>
   );
 }

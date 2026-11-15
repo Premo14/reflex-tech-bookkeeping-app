@@ -26,7 +26,7 @@ export const LoadingSpinner: React.FC<LoadingSpinnerProps> = ({
 
   return (
     <svg
-      className={`animate-spin shrink-0 ${sizeClass} ${isCustomColor ? color : ''} ${className}`}
+      className={`animate-spin motion-reduce:animate-[spin_3s_linear_infinite] shrink-0 ${sizeClass} ${isCustomColor ? color : ''} ${className}`}
       fill="none"
       viewBox="0 0 24 24"
       aria-label="Loading"

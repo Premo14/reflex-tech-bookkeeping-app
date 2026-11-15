@@ -391,8 +391,25 @@ export function TooltipProvider({
       }
     };
 
+    const handleFocusIn = (e: FocusEvent) => {
+      const found = findTooltipElement(e.target as Node);
+      if (found) {
+        clearTimer();
+        pendingTargetRef.current = found.element;
+        show(found.element, found.text, found.position, 0);
+      }
+    };
+
+    const handleFocusOut = (e: FocusEvent) => {
+      if (activeTargetRef.current && e.target === activeTargetRef.current) {
+        hide();
+      }
+    };
+
     document.addEventListener("pointermove", handlePointerMove, { passive: true });
     document.addEventListener("pointerdown", handlePointerDown, { passive: true });
+    document.addEventListener("focusin", handleFocusIn);
+    document.addEventListener("focusout", handleFocusOut);
     document.addEventListener("mouseleave", hide);
     window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
     window.addEventListener("resize", handleResize);
@@ -401,6 +418,8 @@ export function TooltipProvider({
     return () => {
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("focusin", handleFocusIn);
+      document.removeEventListener("focusout", handleFocusOut);
       document.removeEventListener("mouseleave", hide);
       window.removeEventListener("scroll", handleScroll, { capture: true });
       window.removeEventListener("resize", handleResize);
