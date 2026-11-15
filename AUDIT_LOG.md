@@ -200,3 +200,12 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
   - Added nil-DB guards in `IsDateInClosedPeriod`, `RunReconciliation`, `UpdateAllocationStatuses`, `ApplyAllRulesToExisting`, and `ParseOfx`, and switched `parseOfx.go` deposit check from `.Dollars() >= 0` to `.Cents >= 0`.
   - Created `utils/utils_db_coverage_test.go` exercising `UpdateAllocationStatuses`, `RunReconciliation` (Pass 1/2/4), `FindTransactionMatchCandidates`, `FindExpenseMatchCandidates`, `ApplyBankRulesToTransaction`, `ApplyAllRulesToExisting`, `TestRulePreview`, `ParseOfx`, `processFile` (mock AI extraction + warnings + duplicate detection), and `SeedDemoDataset`/`ResetDemoDataset`/`RemoveDemoDataset`.
 - **Verification**: `go build ./...` ✅, `go vet ./...` ✅, `go test -count=1 ./...` ✅ (`constants` 85.0%, `controllers` 90.3%, `db` 79.1%, `events` 87.3%, `models` 89.0%, `routes` 100.0%, `utils` 85.5%; **backend global total: 87.9%**).
+
+## S13: Frontend Design System & Core Glowing Touchpoints
+- **index.css**: Added `color-scheme: dark`, all `STYLE_GUIDE.md` `.glow-*` and `.glow-border-*` halo classes, `.surface-glass`, `.touch-glow-*` hover + `:active` tap elevation utilities, and `@media (prefers-reduced-motion)` compliant spatial animation / fade fallbacks.
+- **Button, Badge, Card, Modal**:
+  - `Button.tsx`: Added `'purple'` & `'cyan'` variants, optional `glow` prop mapping to semantic `.glow-*` tokens, `.touch-glow-*` hover/tap halos, `motion-safe:active:scale-[0.97]`, `aria-busy`, and `:focus-visible` outlines.
+  - `Badge.tsx`: Added `'cyan'` variant, optional `glow` prop, and `inline-flex items-center` alignment.
+  - `Card.tsx`: Added `glowColor` prop (`.glow-border-*` when active, `.touch-glow-*` on hover/tap), `motion-safe:active:scale-[0.99]`, and keyboard `:focus-visible` indicator.
+  - `Modal.tsx`: Replaced static `"modal-dialog-title"` with `useId()`, added `onCloseRef` to prevent listener/scroll-lock churn across re-renders, fixed JSDOM-compatible focus-trap element discovery, and added responsive padding + close button tap/glow polish.
+- **Verification**: `eslint.config.js` updated to ignore generated `coverage/`; `npm run build` ✅, `npm run lint` (0 errors) ✅, `vitest` (`Badge` 100%, `Button` 100%, `Card` 100%, `LoadingSpinner` 100%, `Modal` 93.44%) ✅.
