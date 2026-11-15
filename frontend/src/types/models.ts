@@ -53,6 +53,8 @@ export interface Expense {
   status?: string;
   chartAccountId?: number;
   chartAccount?: ChartAccount;
+  invoiceId?: number;
+  invoice?: Invoice;
   bankTransactions?: BankTransaction[];
   receipts?: Receipt[];
   reconciliationStatus?: string;
@@ -95,6 +97,7 @@ export interface BankTransaction {
   exclusionReason?: string;
   exclusionNote?: string;
   hasSuggestions?: boolean;
+  suggestedExpenseId?: number;
   deletedAt?: string;
   notes?: string;
   expenses?: Expense[];
@@ -181,6 +184,7 @@ export interface TransactionDetailResponse {
   transaction: BankTransaction;
   confirmedExpenses: Expense[];
   suggestedExpenses: Expense[];
+  suggestedExpenseCandidates?: ScoredExpenseCandidate[];
   linkedInvoice?: Invoice | null;
   suggestedInvoices?: Invoice[];
 }
@@ -190,6 +194,7 @@ export interface ExpenseDetailResponse {
   expense: Expense;
   confirmedTransactions: BankTransaction[];
   suggestedTransactions: BankTransaction[];
+  suggestedTransactionCandidates?: ScoredTransactionCandidate[];
 }
 
 export interface TransactionFilters {
@@ -415,6 +420,7 @@ export interface Invoice {
   bankTransaction?: BankTransaction;
   categoryAccountId?: number;
   categoryAccount?: ChartAccount;
+  linkedExpenses?: Expense[];
   createdAt: string;
   updatedAt: string;
 }
@@ -448,11 +454,20 @@ export interface CreateInvoiceInput {
   categoryAccountId?: number;
 }
 
-export interface ScoredDepositCandidate {
-  transaction: BankTransaction;
+export interface MatchScoreMeta {
   score: number;
   reason: string;
 }
+
+export interface ScoredTransactionCandidate extends MatchScoreMeta {
+  transaction: BankTransaction;
+}
+
+export interface ScoredExpenseCandidate extends MatchScoreMeta {
+  expense: Expense;
+}
+
+export type ScoredDepositCandidate = ScoredTransactionCandidate;
 
 // -------------------------------------------------------------
 // Extended Reports Types
