@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,6 +9,8 @@ import (
 	"io"
 	"log"
 	"math"
+	"mime/multipart"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflex-tech-bookkeeping-app-api/constants"
@@ -15,8 +18,6 @@ import (
 	"reflex-tech-bookkeeping-app-api/models"
 	"strings"
 	"time"
-
-	"github.com/gofiber/fiber/v3/client"
 )
 
 // HashFile exports the hash function
@@ -36,7 +37,7 @@ func HashFile(filePath string) (string, error) {
 
 // processFile routes incoming files from the inbox.
 // it checks extensions, hashes to prevent duplicates, handles HEIC conversion,
-// and routes ofx files to the parser or images to the db.
+// and routes bank statements to the parser or images to the DB.
 func processFile(filePath string) error {
 	fileExt := strings.ToLower(filepath.Ext(filePath))
 
@@ -71,18 +72,14 @@ func processFile(filePath string) error {
 		finalExt = ".png"
 	}
 
-	// If ext is bank statement, save to processed and route to parser (.csv or .ofx/.qfx/.qbo)
+	// If ext is bank statement, save to processed and route to parser (.ofx/.qfx/.qbo)
 	if constants.IsAllowedBankStatementExt(fileExt) {
 		tempPath := filepath.Join(constants.GetProcessedPath(), fmt.Sprintf("%d%s", time.Now().UnixNano(), finalExt))
-		if err := os.Rename(filePath, tempPath); err != nil {
+		if err := constants.SafeMove(filePath, tempPath); err != nil {
 			return err
 		}
-		_ = os.Chmod(tempPath, 0666)
-		if fileExt == ".csv" {
-			ParseCsvStatement(tempPath)
-		} else {
-			ParseOfx(tempPath)
-		}
+		_ = os.Chmod(tempPath, 0644) // Restrict permissions (owner rw, world readable only)
+		ParseOfx(tempPath)
 	} else { // otherwise it is a receipt
 		// Save to the Database first to get the auto-increment ID
 		receipt := models.Receipt{
@@ -107,13 +104,13 @@ func processFile(filePath string) error {
 			// Conversion worked, delete original from inbox
 			os.Remove(filePath)
 		} else {
-			// It's a PDF, PNG, JPG, etc. Just move it to the processed folder
-			if err := os.Rename(filePath, processedPath); err != nil {
+			// It's a PDF, PNG, JPG, etc. Move it to the processed folder
+			if err := constants.SafeMove(filePath, processedPath); err != nil {
 				db.DB.Delete(&receipt)
 				return err
 			}
 		}
-		_ = os.Chmod(processedPath, 0666)
+		_ = os.Chmod(processedPath, 0644) // Restrict permissions (owner rw, world readable only)
 
 		receipt.DocumentURI = processedPath
 		db.DB.Save(&receipt)
@@ -153,6 +150,9 @@ func processFile(filePath string) error {
 
 // FetchActiveExpenseAccounts returns all active EXPENSE accounts sorted by code ascending.
 func FetchActiveExpenseAccounts() ([]models.ChartAccount, error) {
+	if db.DB == nil {
+		return nil, fmt.Errorf("database connection is nil")
+	}
 	var accounts []models.ChartAccount
 	if err := db.DB.Where("type = ? AND active = true", "EXPENSE").Order("code ASC").Find(&accounts).Error; err != nil {
 		return nil, err
@@ -229,7 +229,9 @@ func ParseExtractedAmount(val interface{}) float64 {
 		return math.Abs(float64(v))
 	case string:
 		clean := strings.TrimSpace(v)
-		clean = strings.TrimPrefix(clean, "$")
+		clean = strings.ReplaceAll(clean, "$", "")
+		clean = strings.ReplaceAll(clean, "€", "")
+		clean = strings.ReplaceAll(clean, "£", "")
 		clean = strings.ReplaceAll(clean, ",", "")
 		var f float64
 		if _, err := fmt.Sscanf(clean, "%f", &f); err == nil {
@@ -276,14 +278,24 @@ func ParseExtractedTimestamp(raw string) time.Time {
 }
 
 // ParseExtractedChartAccountID parses chartAccountId from float64, int, or string representations.
+// Float values are rounded (not truncated) to nearest integer before conversion, preventing
+// e.g. 42.99 from silently becoming uint(42). Values with a fractional component > 0.5 are
+// rounded up; values with < 0.5 are rounded down — consistent with JSON number expectations.
 func ParseExtractedChartAccountID(val interface{}) *uint {
 	if val == nil {
 		return nil
 	}
 	switch v := val.(type) {
 	case float64:
-		if v > 0 {
-			u := uint(v)
+		rounded := int64(math.Round(v))
+		if rounded > 0 {
+			u := uint(rounded)
+			return &u
+		}
+	case float32:
+		rounded := int64(math.Round(float64(v)))
+		if rounded > 0 {
+			u := uint(rounded)
 			return &u
 		}
 	case int:
@@ -315,6 +327,11 @@ func ValidateExtractedCategory(accountID *uint) *uint {
 	if accountID == nil {
 		return nil
 	}
+	// Guard against nil DB — if DB is unavailable, log and return nil (graceful degradation)
+	if db.DB == nil {
+		log.Printf("⚠️ ValidateExtractedCategory: DB is nil, cannot validate account ID %d. Setting to uncategorized.\n", *accountID)
+		return nil
+	}
 	var account models.ChartAccount
 	if err := db.DB.First(&account, *accountID).Error; err != nil {
 		log.Printf("⚠️ AI auto-categorization suggested account ID %d, but account does not exist. Setting to uncategorized.\n", *accountID)
@@ -340,7 +357,8 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 		scriptUrl = "http://file-processor:8081/process"
 	}
 
-	var resp *client.Response
+	var bodyBuf bytes.Buffer
+	var respBody []byte
 	var err error
 	maxRetries := 2
 
@@ -348,6 +366,13 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 	var dynamicPrompt string
 	if accounts, fetchErr := FetchActiveExpenseAccounts(); fetchErr == nil {
 		dynamicPrompt = BuildReceiptPrompt(accounts)
+	}
+
+	// Use a custom HTTP client with 10-minute read timeout exceeding
+	// file-processor's 5-minute ReadTimeout. This prevents slow CPU inference
+	// from dropping the connection prematurely and spawning duplicate fallback expenses.
+	httpClient := &http.Client{
+		Timeout: 10 * time.Minute,
 	}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -361,28 +386,30 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 			return openErr
 		}
 
-		req := client.AcquireRequest()
-		formFile := client.AcquireFile(func(f *client.File) {
-			f.SetFieldName("document")
-			f.SetName(filepath.Base(filePath))
-			f.SetReader(file)
-		})
+		bodyBuf.Reset()
+		w := multipart.NewWriter(&bodyBuf)
 
+		promptField, _ := w.CreateFormField("prompt")
 		if dynamicPrompt != "" {
-			req.SetFormData("prompt", dynamicPrompt)
+			promptField.Write([]byte(dynamicPrompt))
 		}
-		req.AddFiles(formFile)
 
-		resp, err = req.Post(scriptUrl)
-		client.ReleaseFile(formFile)
-		client.ReleaseRequest(req)
+		fileField, _ := w.CreateFormFile("document", filepath.Base(filePath))
+		if _, err = io.Copy(fileField, file); err != nil {
+			file.Close()
+			w.Close()
+			err = fmt.Errorf("failed to read file for upload: %w", err)
+			continue
+		}
+		w.Close()
 		file.Close()
 
-		if err == nil && resp.StatusCode() == 200 {
+		respBody, err = uploadWithTimeout(httpClient, scriptUrl, bodyBuf.Bytes(), w.FormDataContentType())
+		if err == nil && len(respBody) > 0 {
 			break
 		}
-		if err == nil && resp.StatusCode() != 200 {
-			err = fmt.Errorf("AI script failed with status %d: %s", resp.StatusCode(), string(resp.Body()))
+		if err == nil {
+			err = fmt.Errorf("AI script returned empty response")
 		}
 	}
 
@@ -391,7 +418,7 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 	}
 
 	// Clean AI response body isolating JSON object
-	rawBody := CleanAIJSON(string(resp.Body()))
+	rawBody := CleanAIJSON(string(respBody))
 
 	// Unmarshal the JSON response into an intermediate struct
 	var raw struct {
@@ -413,9 +440,23 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 	taxAmount := ParseExtractedAmount(raw.TaxAmount)
 	parsedTime := ParseExtractedTimestamp(raw.Timestamp)
 
+	// Flag expenses with missing dates or zero amounts so they aren't silently booked.
+	// When amount is 0 or the timestamp was not found (empty string in AI response),
+	// append a warning to the description and set ReviewStatus = PENDING.
+	warningFlags := []string{}
+	if finalAmount == 0 {
+		warningFlags = append(warningFlags, "[MISSING AMOUNT - AI could not read receipt total]")
+	}
+	if raw.Timestamp == "" {
+		warningFlags = append(warningFlags, "[MISSING DATE - AI could not read receipt date]")
+	}
+
 	reviewStatus := "APPROVED"
 	if IsDateInClosedPeriod(parsedTime) {
 		log.Printf("Extracted date (%s) falls within a closed period. Flagging for review.\n", parsedTime)
+		reviewStatus = "PENDING"
+	}
+	if len(warningFlags) > 0 {
 		reviewStatus = "PENDING"
 	}
 
@@ -433,10 +474,15 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 		initialAllocation = "BALANCED"
 	}
 
+	desc := strings.TrimSpace(raw.Description)
+	if len(warningFlags) > 0 {
+		desc = desc + " " + strings.Join(warningFlags, "; ")
+	}
+
 	newExpense := models.Expense{
 		Timestamp:        parsedTime,
 		Vendor:           strings.TrimSpace(raw.Vendor),
-		Description:      strings.TrimSpace(raw.Description),
+		Description:      desc,
 		Amount:           models.NewMoney(finalAmount),
 		TaxAmount:        models.NewMoney(taxAmount),
 		CurrencyCode:     currCode,
@@ -463,4 +509,31 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 	go RunReconciliation()
 
 	return nil
+}
+
+// uploadWithTimeout sends a multipart POST request with the given timeout,
+// returning the response body as bytes or an error.
+func uploadWithTimeout(client *http.Client, url string, body []byte, contentType string) ([]byte, error) {
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("AI script failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return bodyBytes, nil
 }

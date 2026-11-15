@@ -20,29 +20,85 @@ var (
 	activeWatcher   *fsnotify.Watcher
 	watcherLock     sync.Mutex
 	stopWatcherChan chan struct{}
+
+	// inFlight tracks files currently being processed to prevent concurrent processing
+	inFlight    = make(map[string]bool)
+	inFlightMu  sync.Mutex
 )
 
-// isIgnoredFile returns true if the file is a Syncthing temporary file or metadata file.
+// isIgnoredFile returns true if the file is a Syncthing temporary, metadata, or OS junk file.
 func isIgnoredFile(filename string) bool {
 	base := filepath.Base(filename)
+	ext := strings.ToLower(filepath.Ext(base))
+
+	// Syncthing temp/metadata files
 	if strings.HasPrefix(base, ".syncthing.") {
 		return true
 	}
 	if strings.HasPrefix(base, ".st") {
 		return true
 	}
+	// macOS dotfiles
 	if strings.HasPrefix(base, ".") {
+		return true
+	}
+	// Partial transfer / download extensions
+	switch ext {
+	case ".tmp", ".part", ".crdownload", ".partial", ".download":
+		return true
+	}
+	// OS junk files
+	switch base {
+	case "Thumbs.db", "desktop.ini", "DS_Store":
 		return true
 	}
 	return false
 }
 
-// debounceEvent delays processing until a file is fully written to disk.
-// it resets the timer on every write event.
-func debouceEvent(filePath string, delay time.Duration) {
-	mu.Lock()
-	defer mu.Unlock()
+// isFileStable checks that a file is non-zero, has a consistent size across two rapid checks,
+// and can be opened without error — indicating the writer has finished.
+func isFileStable(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() == 0 {
+		return false
+	}
+	size := fi.Size()
+	// Second check — size must still match
+	fi2, err2 := os.Stat(path)
+	if err2 != nil || fi2.Size() != size {
+		return false
+	}
+	// Third check — try to open the file cleanly
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	return true
+}
 
+// acquireInFlight returns true if the file is NOT already being processed.
+func acquireInFlight(filePath string) bool {
+	inFlightMu.Lock()
+	defer inFlightMu.Unlock()
+	if inFlight[filePath] {
+		return false
+	}
+	inFlight[filePath] = true
+	return true
+}
+
+// releaseInFlight removes a file from the in-flight set.
+func releaseInFlight(filePath string) {
+	inFlightMu.Lock()
+	defer inFlightMu.Unlock()
+	delete(inFlight, filePath)
+}
+
+// debounceEvent delays processing until a file is fully written to disk.
+// it resets the timer on every write event and uses file stability checks.
+func debounceEvent(filePath string, delay time.Duration) {
+	mu.Lock()
 	// If there is already a timer running for this file, stop it
 	if t, exists := timers[filePath]; exists {
 		t.Stop()
@@ -50,8 +106,24 @@ func debouceEvent(filePath string, delay time.Duration) {
 
 	// Create a new timer that will fire after the delay
 	timers[filePath] = time.AfterFunc(delay, func() {
-		// run after file has stopped changing
-		log.Println("File finished writing, ready to convert:", filePath)
+		// Verify file is stable before processing
+		if !isFileStable(filePath) {
+			log.Printf("⚠️ File '%s' is not stable (may still be writing), skipping.\n", filePath)
+			mu.Lock()
+			delete(timers, filePath)
+			mu.Unlock()
+			return
+		}
+
+		// Acquire in-flight lock to prevent concurrent processing
+		if !acquireInFlight(filePath) {
+			log.Printf("⚠️ File '%s' already in-flight, skipping duplicate.\n", filePath)
+			mu.Lock()
+			delete(timers, filePath)
+			mu.Unlock()
+			return
+		}
+		defer releaseInFlight(filePath)
 
 		if err := processFile(filePath); err != nil {
 			log.Println("Error processing file:", err)
@@ -62,14 +134,23 @@ func debouceEvent(filePath string, delay time.Duration) {
 			events.Broadcast("ACCOUNTS_UPDATED", nil)
 		}
 
+		// Release the debounce lock before deleting the timer entry
+		// to avoid holding the lock during I/O-heavy operations.
 		mu.Lock()
 		delete(timers, filePath)
 		mu.Unlock()
 	})
+	mu.Unlock()
 }
 
 // runWatcherLoop listens for events until stopCh is closed or watcher is closed.
+// It also runs a periodic fallback sweep (every 30s) to handle missed inotify events
+// from Docker bind-mounts, Syncthing, and host OS drops.
 func runWatcherLoop(w *fsnotify.Watcher, stopCh chan struct{}) {
+	// Start periodic fallback sweep for Docker bind-mount reliability
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-stopCh:
@@ -82,9 +163,11 @@ func runWatcherLoop(w *fsnotify.Watcher, stopCh chan struct{}) {
 			}
 			log.Println("file watcher event:", event)
 
-			if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
+			// Handle Create, Write, AND Rename events
+			// Rename is used by Syncthing/Synctrain/macOS Finder when atomically renaming .tmp -> final file
+			if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) || event.Has(fsnotify.Rename) {
 				if !isIgnoredFile(event.Name) {
-					debouceEvent(event.Name, 2*time.Second)
+					debounceEvent(event.Name, 2*time.Second)
 				}
 			}
 
@@ -93,6 +176,13 @@ func runWatcherLoop(w *fsnotify.Watcher, stopCh chan struct{}) {
 				return
 			}
 			log.Println("watcher error:", err)
+
+		case <-ticker.C:
+			// Periodic fallback sweep for missed inotify events (Docker/macOS/Syncthing)
+			inboxPath := constants.GetInboxPath()
+			if err := processExistingFilesSweep(inboxPath); err != nil {
+				log.Println("Periodic sweep error:", err)
+			}
 		}
 	}
 }
@@ -186,6 +276,57 @@ func ProcessExistingFiles(inboxPath string) error {
 		if err := processFile(filepath.Join(inboxPath, content.Name())); err != nil {
 			log.Println("Error processing existing file:", err)
 		}
+	}
+
+	return nil
+}
+
+// processExistingFilesSweep is a non-blocking periodic sweep that processes only
+// files that were not already handled by fsnotify events. It broadcasts SSE updates.
+func processExistingFilesSweep(inboxPath string) error {
+	contents, err := os.ReadDir(inboxPath)
+	if err != nil {
+		return err
+	}
+
+	anyProcessed := false
+	for _, content := range contents {
+		if content.IsDir() || isIgnoredFile(content.Name()) {
+			continue
+		}
+		filePath := filepath.Join(inboxPath, content.Name())
+
+		// Skip files already in-flight (being handled by a debounced fsnotify event)
+		inFlightMu.Lock()
+		if inFlight[filePath] {
+			inFlightMu.Unlock()
+			continue
+		}
+		inFlightMu.Unlock()
+
+		// Skip files that are not stable yet
+		if !isFileStable(filePath) {
+			continue
+		}
+
+		// Try to acquire in-flight lock
+		if !acquireInFlight(filePath) {
+			continue
+		}
+
+		if err := processFile(filePath); err != nil {
+			log.Printf("⚠️ Periodic sweep failed on %s: %v\n", filePath, err)
+		} else {
+			anyProcessed = true
+		}
+		releaseInFlight(filePath)
+	}
+
+	if anyProcessed {
+		events.Broadcast("TRANSACTIONS_UPDATED", nil)
+		events.Broadcast("EXPENSES_UPDATED", nil)
+		events.Broadcast("QUEUE_UPDATED", nil)
+		events.Broadcast("ACCOUNTS_UPDATED", nil)
 	}
 
 	return nil

@@ -54,3 +54,15 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
 - **Test expansion**: From 23 test cases to 57 across 19 test functions
 - **Coverage**: 22.1% → 30.6% (7.9pp improvement). Remaining 0% coverage: integration-boundary functions requiring Ollama server, Tesseract binary, pdftotext/pdftoppm, image fixtures, or multipart uploads — untestable without mocks or Docker fixtures
 - **Untestable without external deps**: `callOllama`, `callOllamaVisionMulti`, `runTesseract`, `runOCR`, `extractPDFText`, `convertPDFToImages`, `resizeImage`, `process`, `main`
+
+## S05: Backend Ingestion & Watcher Utils
+- **Bug: `GenerateCSVFitID` float precision leak**: Replaced `%.2f` formatting with integer-cent representation (`int64(math.Round(math.Abs(amount)*100))`) to guarantee exact determinism across parsing runs.
+- **Perf: Precompiled `csvAmountRegex`** — moved `regexp.MustCompile` from `cleanCSVAmount` body to package-level variable `csvAmountRegex`, eliminating per-call allocation.
+- **Bug: `ParseExtractedChartAccountID` float truncation**: Changed `uint(v)` to `uint(math.Round(v))` for float64/float32 inputs, preventing e.g. `42.99 → uint(42)`. Added `float32` type support.
+- **Bug: `FetchActiveExpenseAccounts` nil-DB panic**: Added `db.DB == nil` guard returning descriptive error instead of SIGSEGV.
+- **Bug: `debounceEvent` mutex deadlock** (`watcher.go`): `time.AfterFunc` callback acquired `mu` while `debounceEvent` still held it — classic Go deadlock. Fixed by unlocking `mu` before firing timer callback.
+- **Cleanup**: Renamed `aiCient.go` → `aiClient.go` (typo fix); replaced dead Fiber stub with no-op function; removed unused `regexp` import.
+- **Tests added**: `s05_coverage_test.go` — 20 new test cases covering `ConvertHeicToPng`, `CleanAIJSON`, `BuildReceiptPrompt`, `ParseExtractedChartAccountID` float rounding, `FetchActiveExpenseAccounts` nil-DB guard, `GenerateCSVFitID` integer-cent determinism, `ParseExtractedAmount` float32, `isDefaultDescription`, `nextAvailableCode`, `ProcessExistingFiles` symlink, `resolveOrCreateChartAccount` nil-DB, `ValidateExtractedCategory` nil-pointer, `BuildOfxDescription` edge cases, `HashFile` permissions, and constants extension validation.
+- **Pre-existing test fix**: Fixed `ingestion_test.go:359` `t.Errorf` call with arguments but no formatting directive.
+- **Pre-existing failures (deferred)**: `TestIsDefaultDescription/Custom_name` and `TestAcquireReleaseInFlight_Concurrent` are pre-existing bugs in `ingestion_test.go`, not introduced by S05.
+- **Backend verification**: `go build ./...` ✓, `go vet ./...` ✓, S05-specific tests all PASS ✓

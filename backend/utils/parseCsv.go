@@ -21,6 +21,9 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// cleanCSVAmount regex — precompiled to avoid allocation per call
+var csvAmountRegex = regexp.MustCompile(`[^\d.-]`)
+
 // Supported date layout formats for CSV statement exports
 var csvDateFormats = []string{
 	"2006-01-02",
@@ -36,8 +39,14 @@ var csvDateFormats = []string{
 }
 
 // GenerateCSVFitID computes a deterministic SHA256 unique identifier for a CSV transaction.
+// Uses integer-cent representation (abs(amount)*100) to avoid float64 precision issues.
 func GenerateCSVFitID(txDate time.Time, desc string, amount float64, occurrenceIndex int, acctRef uint) string {
-	dupKey := fmt.Sprintf("%s|%s|%.2f", txDate.Format("2006-01-02"), strings.ToUpper(strings.TrimSpace(desc)), amount)
+	// Use integer cents to guarantee exact determinism across parsing runs.
+	cents := int64(math.Round(math.Abs(amount) * 100))
+	if amount < 0 {
+		cents = -cents
+	}
+	dupKey := fmt.Sprintf("%s|%s|%d", txDate.Format("2006-01-02"), strings.ToUpper(strings.TrimSpace(desc)), cents)
 	h := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d", dupKey, occurrenceIndex, acctRef)))
 	return fmt.Sprintf("CSV-%x", h[:8])
 }
@@ -74,8 +83,7 @@ func cleanCSVAmount(s string) (float64, error) {
 	}
 
 	// Remove currency symbols, commas, and whitespace
-	re := regexp.MustCompile(`[^\d.-]`)
-	cleaned := re.ReplaceAllString(s, "")
+	cleaned := csvAmountRegex.ReplaceAllString(s, "")
 
 	val, err := strconv.ParseFloat(cleaned, 64)
 	if err != nil {
@@ -287,7 +295,7 @@ func ParseCsvStatement(filePath string) {
 			if chartAccountID != nil {
 				acctRef = *chartAccountID
 			}
-			dupKey := fmt.Sprintf("%s|%s|%.2f", txDate.Format("2006-01-02"), strings.ToUpper(strings.TrimSpace(desc)), amount)
+			dupKey := fmt.Sprintf("%s|%s|%d", txDate.Format("2006-01-02"), strings.ToUpper(strings.TrimSpace(desc)), int64(math.Round(math.Abs(amount)*100)))
 			sameDayOccurrences[dupKey]++
 			occurrenceIndex := sameDayOccurrences[dupKey]
 			fitID = GenerateCSVFitID(txDate, desc, amount, occurrenceIndex, acctRef)
