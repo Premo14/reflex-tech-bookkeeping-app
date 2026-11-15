@@ -18,6 +18,29 @@ import (
 
 const booksClosedDateKey = "BooksClosedDate"
 
+// resolveSafeProcessedReceiptPath validates that uri resolves strictly inside constants.GetProcessedPath()
+// so path-traversal attempts (e.g. "../../etc/passwd") are blocked before filesystem reads or deletes.
+func resolveSafeProcessedReceiptPath(uri string) (string, bool) {
+	if strings.TrimSpace(uri) == "" {
+		return "", false
+	}
+	cleaned := filepath.Clean(uri)
+	processedDir := filepath.Clean(constants.GetProcessedPath())
+	if processedDir == "" || processedDir == "." {
+		return "", false
+	}
+	absFile, err1 := filepath.Abs(cleaned)
+	absDir, err2 := filepath.Abs(processedDir)
+	if err1 != nil || err2 != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(absDir, absFile)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return "", false
+	}
+	return absFile, true
+}
+
 // removeUnreferencedReceiptFile removes a physical receipt file if no database record
 // references it and its path stays safely inside the processed storage directory.
 func removeUnreferencedReceiptFile(uri string) {
@@ -29,14 +52,13 @@ func removeUnreferencedReceiptFile(uri string) {
 	if remainingCount > 0 {
 		return
 	}
-	cleaned := filepath.Clean(uri)
-	processedDir := filepath.Clean(constants.GetProcessedPath())
-	if processedDir != "" && cleaned != processedDir && !strings.HasPrefix(cleaned, processedDir+string(filepath.Separator)) {
+	safePath, ok := resolveSafeProcessedReceiptPath(uri)
+	if !ok {
 		fmt.Printf("Warning: refusing to delete receipt file outside processed dir: %s\n", uri)
 		return
 	}
-	if err := os.Remove(cleaned); err != nil && !os.IsNotExist(err) {
-		fmt.Printf("Warning: failed to delete physical receipt file %s: %v\n", cleaned, err)
+	if err := os.Remove(safePath); err != nil && !os.IsNotExist(err) {
+		fmt.Printf("Warning: failed to delete physical receipt file %s: %v\n", safePath, err)
 	}
 }
 

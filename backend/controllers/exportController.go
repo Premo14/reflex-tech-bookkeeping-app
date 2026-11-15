@@ -3,11 +3,12 @@ package controllers
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,9 +17,12 @@ import (
 	"time"
 
 	"reflex-tech-bookkeeping-app-api/db"
+	"reflex-tech-bookkeeping-app-api/events"
 	"reflex-tech-bookkeeping-app-api/models"
+	"reflex-tech-bookkeeping-app-api/utils"
 
 	"github.com/gofiber/fiber/v3"
+	"gorm.io/gorm"
 )
 
 // sanitizeCSVCell neutralizes CSV formula injection attacks by prefixing
@@ -42,6 +46,9 @@ func sanitizeCSVCell(v string) string {
 
 // ExportTransactionsCSV streams all bank transactions for the filtered range as CSV.
 func ExportTransactionsCSV(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 	accountId := c.Query("accountId")
@@ -51,19 +58,21 @@ func ExportTransactionsCSV(c fiber.Ctx) error {
 	query = ApplyDateRange(query, "date", startDate, endDate)
 
 	if accountId != "" {
-		if parsedID, err := strconv.ParseUint(accountId, 10, 32); err == nil {
-			accountIDs := GetAccountAndDescendantIDs(uint(parsedID))
-			query = query.Where("chart_account_id IN ? OR category_account_id IN ?", accountIDs, accountIDs)
-		} else {
-			query = query.Where("chart_account_id = ? OR category_account_id = ?", accountId, accountId)
+		parsedID, err := strconv.ParseUint(accountId, 10, 32)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid accountId"})
 		}
+		accountIDs := GetAccountAndDescendantIDs(uint(parsedID))
+		query = query.Where("chart_account_id IN ? OR category_account_id IN ?", accountIDs, accountIDs)
 	}
 
 	if search != "" {
+		like := "%" + strings.ToLower(search) + "%"
 		if val, err := strconv.ParseFloat(strings.TrimPrefix(search, "$"), 64); err == nil {
-			query = query.Where("description ILIKE ? OR notes ILIKE ? OR fit_id ILIKE ? OR ABS(amount) = ?", "%"+search+"%", "%"+search+"%", "%"+search+"%", math.Abs(val))
+			absDollars := models.NewMoney(val).Abs().Dollars()
+			query = query.Where("LOWER(description) LIKE ? OR LOWER(notes) LIKE ? OR LOWER(fit_id) LIKE ? OR ABS(ABS(amount) - ?) < 0.005", like, like, like, absDollars)
 		} else {
-			query = query.Where("description ILIKE ? OR notes ILIKE ? OR fit_id ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
+			query = query.Where("LOWER(description) LIKE ? OR LOWER(notes) LIKE ? OR LOWER(fit_id) LIKE ?", like, like, like)
 		}
 	}
 
@@ -107,7 +116,7 @@ func ExportTransactionsCSV(c fiber.Ctx) error {
 		}
 		allocStatus := tx.AllocationStatus
 		if allocStatus == "" {
-			if tx.Amount.Dollars() >= 0 {
+			if tx.Amount.Cents >= 0 {
 				allocStatus = "BALANCED"
 			} else {
 				allocStatus = "UNLINKED"
@@ -138,6 +147,9 @@ func ExportTransactionsCSV(c fiber.Ctx) error {
 
 // ExportExpensesCSV streams all expenses for the filtered range as CSV.
 func ExportExpensesCSV(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 	accountId := c.Query("accountId")
@@ -147,22 +159,24 @@ func ExportExpensesCSV(c fiber.Ctx) error {
 	query = ApplyDateRange(query, "timestamp", startDate, endDate)
 
 	if accountId != "" {
-		if parsedID, err := strconv.ParseUint(accountId, 10, 32); err == nil {
-			accountIDs := GetAccountAndDescendantIDs(uint(parsedID))
-			query = query.Where(
-				"chart_account_id IN ? OR id IN (SELECT ebt.expense_id FROM expense_bank_transactions ebt JOIN bank_transactions bt ON bt.id = ebt.bank_transaction_id WHERE ebt.status = 'confirmed' AND bt.chart_account_id IN ?)",
-				accountIDs, accountIDs,
-			)
-		} else {
-			query = query.Where("chart_account_id = ?", accountId)
+		parsedID, err := strconv.ParseUint(accountId, 10, 32)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid accountId"})
 		}
+		accountIDs := GetAccountAndDescendantIDs(uint(parsedID))
+		query = query.Where(
+			"chart_account_id IN ? OR id IN (SELECT ebt.expense_id FROM expense_bank_transactions ebt JOIN bank_transactions bt ON bt.id = ebt.bank_transaction_id WHERE ebt.status = 'confirmed' AND bt.chart_account_id IN ?)",
+			accountIDs, accountIDs,
+		)
 	}
 
 	if search != "" {
+		like := "%" + strings.ToLower(search) + "%"
 		if val, err := strconv.ParseFloat(strings.TrimPrefix(search, "$"), 64); err == nil {
-			query = query.Where("vendor ILIKE ? OR description ILIKE ? OR notes ILIKE ? OR amount = ?", "%"+search+"%", "%"+search+"%", "%"+search+"%", math.Abs(val))
+			absDollars := models.NewMoney(val).Abs().Dollars()
+			query = query.Where("LOWER(vendor) LIKE ? OR LOWER(description) LIKE ? OR LOWER(notes) LIKE ? OR ABS(amount - ?) < 0.005", like, like, like, absDollars)
 		} else {
-			query = query.Where("vendor ILIKE ? OR description ILIKE ? OR notes ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
+			query = query.Where("LOWER(vendor) LIKE ? OR LOWER(description) LIKE ? OR LOWER(notes) LIKE ?", like, like, like)
 		}
 	}
 
@@ -200,7 +214,7 @@ func ExportExpensesCSV(c fiber.Ctx) error {
 		}
 		allocStatus := exp.AllocationStatus
 		if allocStatus == "" {
-			if exp.Tender == "cash" || exp.Tender == "CASH" {
+			if strings.EqualFold(exp.Tender, "cash") {
 				allocStatus = "BALANCED"
 			} else {
 				allocStatus = "UNLINKED"
@@ -246,6 +260,9 @@ func sanitizePathSegment(s string) string {
 // ExportTaxPackZip bundles the Schedule C tax summary, full transaction register,
 // and all underlying receipt files organized by tax line into a single ZIP archive.
 func ExportTaxPackZip(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 	yearStr := c.Query("year")
@@ -254,6 +271,11 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 	if yearStr != "" {
 		if y, err := strconv.Atoi(yearStr); err == nil {
 			year = y
+		}
+	}
+	if year == 0 && startDate != "" {
+		if t, err := parseDateFlexible(startDate); err == nil {
+			year = t.Year()
 		}
 	}
 	if year == 0 {
@@ -299,8 +321,8 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 	_ = sw.Write([]string{"PART II: EXPENSES", "LINE NUMBER", "GROSS AMOUNT", "DEDUCTIBLE %", "ALLOWABLE DEDUCTION"})
 	for _, l := range report.ExpenseLines {
 		_ = sw.Write([]string{
-			l.LineName,
-			l.LineNumber,
+			sanitizeCSVCell(l.LineName),
+			sanitizeCSVCell(l.LineNumber),
 			fmt.Sprintf("%.2f", l.GrossAmount.Dollars()),
 			fmt.Sprintf("%.0f%%", l.DeductiblePercent),
 			fmt.Sprintf("%.2f", l.DeductibleAmount.Dollars()),
@@ -464,20 +486,29 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 				continue
 			}
 
-			// Read receipt file
-			fileData, readErr := os.ReadFile(filePath)
-			if readErr != nil {
-				// Note missing physical file in manifest
-				manifestBuf.WriteString(fmt.Sprintf("[MISSING] Expense ID %d (%s $%.2f) - %s (not found on disk)\n", e.ID, e.Vendor, e.Amount.Dollars(), filePath))
+			safePath, ok := resolveSafeProcessedReceiptPath(filePath)
+			if !ok {
+				manifestBuf.WriteString(fmt.Sprintf("[SKIPPED - INVALID PATH] Expense ID %d (%s) - path outside processed directory: %s\n", e.ID, sanitizeCSVCell(e.Vendor), filePath))
 				continue
 			}
 
-			ext := filepath.Ext(filePath)
-			if ext == "" {
-				ext = r.FileExt
+			// Read receipt file safely inside processed directory
+			fileData, readErr := os.ReadFile(safePath)
+			if readErr != nil {
+				// Note missing physical file in manifest
+				manifestBuf.WriteString(fmt.Sprintf("[MISSING] Expense ID %d (%s $%.2f) - %s (not found on disk)\n", e.ID, e.Vendor, e.Amount.Dollars(), safePath))
+				continue
 			}
-			if ext == "" {
+
+			ext := sanitizePathSegment(filepath.Ext(safePath))
+			if ext == "" || ext == "uncategorized" {
+				ext = sanitizePathSegment(r.FileExt)
+			}
+			if ext == "" || ext == "uncategorized" {
 				ext = ".png"
+			}
+			if !strings.HasPrefix(ext, ".") {
+				ext = "." + ext
 			}
 
 			var zipEntryName string
@@ -487,11 +518,14 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 				zipEntryName = fmt.Sprintf("Receipts/%s/REC_%d_pt%d_%s_$%.2f%s", folderName, e.ID, idx+1, cleanVendor, e.Amount.Dollars(), ext)
 			}
 
+			sum := sha256.Sum256(fileData)
+			hashHex := hex.EncodeToString(sum[:])
+
 			fReceipt, createErr := zw.Create(zipEntryName)
 			if createErr == nil {
 				_, _ = io.Copy(fReceipt, bytes.NewReader(fileData))
 				receiptCount++
-				manifestBuf.WriteString(fmt.Sprintf("[INCLUDED] %s -> %s\n", zipEntryName, filePath))
+				manifestBuf.WriteString(fmt.Sprintf("[INCLUDED] %s (sha256: %s)\n", zipEntryName, hashHex))
 			}
 		}
 	}
@@ -502,7 +536,9 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 		_, _ = fManifest.Write(manifestBuf.Bytes())
 	}
 
-	_ = zw.Close()
+	if err := zw.Close(); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to finalize tax pack archive"})
+	}
 
 	zipFilename := fmt.Sprintf("Tax_Pack_%d.zip", report.Year)
 	c.Set("Content-Type", "application/zip")
@@ -526,8 +562,16 @@ func ExportTrialBalanceCSV(c fiber.Ctx) error {
 	buf.WriteString("\xEF\xBB\xBF") // UTF-8 BOM
 	writer := csv.NewWriter(buf)
 
+	companyName := "Unnamed Company"
+	if db.DB != nil {
+		var setting models.AppSetting
+		if err := db.DB.Where("key = ?", "CompanyName").First(&setting).Error; err == nil && setting.Value != "" {
+			companyName = sanitizeCSVCell(setting.Value)
+		}
+	}
+
 	_ = writer.Write([]string{
-		fmt.Sprintf("Trial Balance — Reflex Technologies LLC (%s to %s)", report.StartDate, report.EndDate),
+		sanitizeCSVCell(fmt.Sprintf("Trial Balance — %s (%s to %s)", companyName, report.StartDate, report.EndDate)),
 	})
 	_ = writer.Write([]string{})
 	_ = writer.Write([]string{
@@ -648,4 +692,255 @@ func ExportSystemBackupJSON(c fiber.Ctx) error {
 	c.Set("Content-Type", "application/json; charset=utf-8")
 	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	return c.Send(raw)
+}
+
+// SystemBackupRestorePayload matches the schema created by ExportSystemBackupJSON
+type SystemBackupRestorePayload struct {
+	Version string `json:"version"`
+	Format  string `json:"format"`
+	Company string `json:"company"`
+	Data    struct {
+		Settings            []models.AppSetting             `json:"settings"`
+		ChartAccounts       []models.ChartAccount           `json:"chartAccounts"`
+		Transactions        []models.BankTransaction        `json:"transactions"`
+		Statements          []models.BankStatement          `json:"statements"`
+		Expenses            []models.Expense                `json:"expenses"`
+		Receipts            []models.Receipt                `json:"receipts"`
+		ReconciliationLinks []models.ExpenseBankTransaction `json:"reconciliationLinks"`
+		Invoices            []models.Invoice                `json:"invoices"`
+		BankRules           []models.BankRule               `json:"bankRules"`
+		AuditLogs           []models.ItemAuditLog           `json:"auditLogs"`
+	} `json:"data"`
+}
+
+// RestoreSystemBackupJSON restores the bookkeeping system state from a verified backup JSON file.
+func RestoreSystemBackupJSON(c fiber.Ctx) error {
+	const maxBackupBytes = 50 * 1024 * 1024
+	var rawBytes []byte
+
+	// Check if uploaded as multipart file
+	fileHeader, err := c.FormFile("backup")
+	if err == nil && fileHeader != nil {
+		file, openErr := fileHeader.Open()
+		if openErr != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to open uploaded backup file"})
+		}
+		defer file.Close()
+		rawBytes, err = io.ReadAll(io.LimitReader(file, maxBackupBytes+1))
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to read uploaded backup file"})
+		}
+		if len(rawBytes) > maxBackupBytes {
+			return c.Status(fiber.StatusRequestEntityTooLarge).JSON(fiber.Map{"error": "Backup file exceeds 50MB limit"})
+		}
+	} else {
+		rawBytes = c.Body()
+		if len(rawBytes) > maxBackupBytes {
+			return c.Status(fiber.StatusRequestEntityTooLarge).JSON(fiber.Map{"error": "Backup payload exceeds 50MB limit"})
+		}
+	}
+
+	if len(rawBytes) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Empty backup payload provided"})
+	}
+
+	var payload SystemBackupRestorePayload
+	if err := json.Unmarshal(rawBytes, &payload); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid backup JSON: " + err.Error(),
+		})
+	}
+
+	if payload.Format != "reflex_tech_bookkeeping_full_backup" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Unrecognized backup format. Expected 'reflex_tech_bookkeeping_full_backup'",
+		})
+	}
+
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
+	err = db.DB.Transaction(func(tx *gorm.DB) error {
+		// 1. Restore AppSettings
+		for _, s := range payload.Data.Settings {
+			if s.Key != "" {
+				if err := tx.Where("key = ?", s.Key).Assign(models.AppSetting{Value: s.Value}).FirstOrCreate(&models.AppSetting{Key: s.Key}).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		// 2. Restore ChartAccounts
+		for _, a := range payload.Data.ChartAccounts {
+			if a.Code != "" {
+				var existing models.ChartAccount
+				if res := tx.Where("code = ?", a.Code).First(&existing); res.Error == nil {
+					if err := tx.Model(&existing).Updates(map[string]interface{}{
+						"name":            a.Name,
+						"type":            a.Type,
+						"description":     a.Description,
+						"schedule_c_line": a.ScheduleCLine,
+						"active":          a.Active,
+						"is_default":      a.IsDefault,
+					}).Error; err != nil {
+						return err
+					}
+				} else {
+					if err := tx.Create(&a).Error; err != nil {
+						return err
+					}
+				}
+			}
+		}
+
+		// 3. Restore BankRules
+		for _, r := range payload.Data.BankRules {
+			var existing models.BankRule
+			if r.ID != 0 && tx.Where("id = ?", r.ID).First(&existing).Error == nil {
+				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&r).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Create(&r).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		// 4. Restore Invoices
+		for _, inv := range payload.Data.Invoices {
+			var existing models.Invoice
+			if inv.InvoiceNumber != "" && tx.Where("invoice_number = ?", inv.InvoiceNumber).First(&existing).Error == nil {
+				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&inv).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Create(&inv).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		// 5. Restore Bank Statements
+		for _, stmt := range payload.Data.Statements {
+			var existing models.BankStatement
+			if stmt.ID != 0 && tx.Where("id = ?", stmt.ID).First(&existing).Error == nil {
+				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&stmt).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Create(&stmt).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		// 6. Restore Bank Transactions
+		for _, bt := range payload.Data.Transactions {
+			var existing models.BankTransaction
+			if bt.FITID != "" && tx.Where("fit_id = ?", bt.FITID).First(&existing).Error == nil {
+				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&bt).Error; err != nil {
+					return err
+				}
+			} else if bt.ID != 0 && tx.Where("id = ?", bt.ID).First(&existing).Error == nil {
+				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&bt).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Create(&bt).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		// 7. Restore Expenses
+		for _, exp := range payload.Data.Expenses {
+			var existing models.Expense
+			if exp.ID != 0 && tx.Where("id = ?", exp.ID).First(&existing).Error == nil {
+				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&exp).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Create(&exp).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		// 8. Restore Receipts
+		for _, rec := range payload.Data.Receipts {
+			var existing models.Receipt
+			if rec.ID != 0 && tx.Where("id = ?", rec.ID).First(&existing).Error == nil {
+				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&rec).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Create(&rec).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		// 9. Restore Reconciliation Links
+		for _, l := range payload.Data.ReconciliationLinks {
+			var existing models.ExpenseBankTransaction
+			if tx.Where("expense_id = ? AND bank_transaction_id = ?", l.ExpenseID, l.BankTransactionID).First(&existing).Error == nil {
+				if err := tx.Model(&existing).Updates(map[string]interface{}{"status": l.Status}).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Create(&l).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		// 10. Restore Audit Logs
+		for _, al := range payload.Data.AuditLogs {
+			var existing models.ItemAuditLog
+			if al.ID != 0 && tx.Where("id = ?", al.ID).First(&existing).Error == nil {
+				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&al).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Create(&al).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to restore backup: " + err.Error(),
+		})
+	}
+
+	utils.RunReconciliation()
+
+	events.Broadcast("SETTINGS_UPDATED", nil)
+	events.Broadcast("ACCOUNTS_UPDATED", nil)
+	events.Broadcast("TRANSACTIONS_UPDATED", nil)
+	events.Broadcast("RECONCILIATION_UPDATED", nil)
+	events.Broadcast("QUEUE_UPDATED", nil)
+
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": "System backup successfully restored",
+		"restored": fiber.Map{
+			"settings":            len(payload.Data.Settings),
+			"chartAccounts":       len(payload.Data.ChartAccounts),
+			"transactions":        len(payload.Data.Transactions),
+			"statements":          len(payload.Data.Statements),
+			"expenses":            len(payload.Data.Expenses),
+			"receipts":            len(payload.Data.Receipts),
+			"reconciliationLinks": len(payload.Data.ReconciliationLinks),
+			"invoices":            len(payload.Data.Invoices),
+			"bankRules":           len(payload.Data.BankRules),
+			"auditLogs":           len(payload.Data.AuditLogs),
+		},
+	})
 }
