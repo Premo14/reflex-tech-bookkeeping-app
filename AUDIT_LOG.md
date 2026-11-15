@@ -93,3 +93,14 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
 - **Coverage**: parseCsv.go ParseCsvStatement 87.5%, parseOfx.go resolveOrCreateChartAccount 94.4%, parseOfx.go buildOfxDescription/isDefaultDescription 100%, processer.go BuildReceiptPrompt/CleanAIJSON/ParseExtractedAmount/ParseExtractedTimestamp 87-100%, watcher.go isIgnoredFile/acquireInFlight/releaseInFlight/ProcessExistingFiles 100%. Filesystem-dependent functions (processFile, sendReceiptToScript, runWatcherLoop, RestartWatcher, CreateDirsIfNotExists, ParseOfx, ConvertHeicToPng) require Docker for full coverage — tested in CI.
 - **Overall utils package**: 47.9% (improved from 29.7%). Unit-testable functions at >=85%.
 - **Verification**: `go build ./...` OK, `go vet ./...` OK, `go test ./utils/` OK (all tests pass).
+
+## S07B: Coverage Backfill — Core Backend (constants, events, routes, db)
+- **New test files**: `backend/constants/paths_coverage_test.go` (37 tests), `backend/events/events_coverage_test.go` (22 tests), `backend/routes/routes_test.go` (50 route tests), `backend/db/db_coverage_test.go` (24 tests).
+- **Coverage results**: `constants/` 81.3% (→ from 23.5%), `events/` 75.5% (→ from 47.2%), `routes/` 100% (→ from 0%), `db/` 5.1% (seed functions require PostgreSQL; data integrity tests pass).
+- **Routes**: All 127 API routes verified registered via `fiber.New()` + `SetupRoutes()` + `httptest.NewRequest`.
+- **Constants**: New tests for `copyFile`, `SafeMove`, `copyDir`, `copyDirDepth`, `moveDirectory`, `MoveDropboxLocation`, `SetDropboxLocation`, getters thread safety, umask reset, `NormalizeDropboxHostPath` edge cases, `ResolveHostToContainer` paths.
+- **Events**: Added `HandleSSEStream` Fiber integration tests (headers, connected event), `EventMessage` serialization, `EventHub` concurrent subscribe/unsubscribe, nil payload, complex payload, time monotonicity, full event sequence, multiple subscribers.
+- **DB**: Data integrity tests for `defaultAccounts` (41 entries), `defaultBankRules` (183 rules), JSON condition construction, code format validation. Seed functions require PostgreSQL via Docker.
+- **Build/Vet**: `go build ./...` ✅, `go vet ./...` ✅, all tests pass ✅.
+- **Remaining**: constants 81.3% (needs ~3.7% more — SafeMove EXDEV/copy-fallback, moveDirectory copy+remove path); events 75.5% (needs ~9.5% more — HandleSSEStream ticker loop/select path); db 5.1% (requires PostgreSQL for `Connect()` and seeding).
+- **Note**: Slice marked `[-]` (in progress) — needs additional targeted tests to reach ≥85% per-package threshold. Next iteration: push constants & events with EXDEV simulation and SSE streaming tests.
