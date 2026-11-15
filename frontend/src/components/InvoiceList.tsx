@@ -1,7 +1,10 @@
 import type { Invoice } from "../types/models";
 import { Card } from "./ui/Card";
 import { Badge } from "./ui/Badge";
+import { Button } from "./ui/Button";
 import { formatDate, formatPaymentTerms } from "../utils/dateUtils";
+import { formatCurrency, toCents } from "../utils/formatCurrency";
+import { matchesAmountQuery } from "../utils/ledgerStatus";
 
 interface InvoiceListProps {
   invoices: Invoice[];
@@ -29,21 +32,15 @@ export default function InvoiceList({
 
     if (searchQuery) {
       const q = searchQuery.toLowerCase().trim();
-      const numQuery = parseFloat(q.replace(/^\$/, ""));
-      const matchesAmount =
-        !isNaN(numQuery) && Math.abs((inv.totalAmount || 0) - numQuery) < 0.001;
-      const formattedAmt = (inv.totalAmount || 0).toFixed(2);
-
       const matchesText =
         (inv.invoiceNumber || "").toLowerCase().includes(q) ||
         (inv.clientName || "").toLowerCase().includes(q) ||
         (inv.clientEmail || "").toLowerCase().includes(q) ||
-        (inv.notes || "").toLowerCase().includes(q) ||
-        (inv.totalAmount || 0).toString().includes(q) ||
-        formattedAmt.includes(q) ||
-        matchesAmount;
+        (inv.notes || "").toLowerCase().includes(q);
 
-      if (!matchesText) return false;
+      if (!matchesText && !matchesAmountQuery(inv.totalAmount || 0, q)) {
+        return false;
+      }
     }
 
     return true;
@@ -52,23 +49,16 @@ export default function InvoiceList({
   const sortedInvoices = [...filteredInvoices].sort((a, b) => {
     let cmp: number;
     if (sortField === "amount") {
-      cmp = (a.totalAmount || 0) - (b.totalAmount || 0);
+      cmp = toCents(a.totalAmount || 0) - toCents(b.totalAmount || 0);
     } else if (sortField === "vendor" || sortField === "client") {
       cmp = (a.clientName || "").localeCompare(b.clientName || "");
     } else {
-      const dateA = new Date(a.issueDate || a.createdAt).getTime();
-      const dateB = new Date(b.issueDate || b.createdAt).getTime();
+      const dateA = new Date(a.issueDate || a.createdAt).getTime() || 0;
+      const dateB = new Date(b.issueDate || b.createdAt).getTime() || 0;
       cmp = dateA - dateB;
     }
     return sortOrder === "asc" ? cmp : -cmp;
   });
-
-  const formatMoney = (amount: number) => {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-    }).format(amount);
-  };
 
   const getStatusBadgeVariant = (
     status: string
@@ -91,7 +81,8 @@ export default function InvoiceList({
     return (
       <div className="text-center py-16 border border-dashed border-white/10 rounded-2xl bg-white/[0.02]">
         <svg
-          className="w-10 h-10 text-zinc-600 mx-auto mb-3"
+          aria-hidden="true"
+          className="w-10 h-10 text-zinc-500 mx-auto mb-3"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -104,19 +95,21 @@ export default function InvoiceList({
           />
         </svg>
         <p className="text-zinc-400 text-sm font-medium">No client invoices found.</p>
-        <p className="text-zinc-600 text-xs mt-1">
+        <p className="text-zinc-500 text-xs mt-1">
           {searchQuery
             ? "Try adjusting your search or status filter."
             : "Create your first professional invoice to bill clients."}
         </p>
         {onOpenCreate && (
-          <button
-            type="button"
+          <Button
+            variant="primary"
+            size="sm"
+            glow
             onClick={onOpenCreate}
-            className="mt-4 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-semibold transition-colors inline-flex items-center gap-1.5"
+            className="mt-4"
           >
             <span>+</span> Create New Invoice
-          </button>
+          </Button>
         )}
       </div>
     );
@@ -124,7 +117,7 @@ export default function InvoiceList({
 
   return (
     <div className="space-y-2.5">
-      {sortedInvoices.map((inv) => {
+      {sortedInvoices.map((inv, index) => {
         const isPaid = inv.status === "PAID";
         const hasDepositLink = !!inv.bankTransactionId;
 
@@ -132,20 +125,27 @@ export default function InvoiceList({
           <Card
             key={inv.id}
             onClick={() => onSelect(inv.id)}
-            className="p-3.5 hover:border-emerald-500/40 transition-all cursor-pointer group bg-zinc-900/60 border-white/5 relative overflow-hidden"
+            glowColor="emerald"
+            className="p-3.5 animate-card-cascade motion-reduce:animate-none hover:border-emerald-500/40 group bg-zinc-900/60 border-white/5 relative overflow-hidden"
+            style={{ animationDelay: `${Math.min(index, 10) * 45}ms` }}
           >
-            <div className="flex justify-between items-start gap-3">
+            <div className="flex justify-between items-start gap-3 w-full">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <span className="font-mono text-xs font-bold text-zinc-300 group-hover:text-emerald-400 transition-colors">
                     {inv.invoiceNumber || `INV-${inv.id}`}
                   </span>
-                  <Badge variant={getStatusBadgeVariant(inv.status)} size="sm">
+                  <Badge
+                    variant={getStatusBadgeVariant(inv.status)}
+                    size="sm"
+                    glow={inv.status === "OVERDUE"}
+                  >
                     {inv.status}
                   </Badge>
                   {hasDepositLink && (
                     <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded font-medium">
                       <svg
+                        aria-hidden="true"
                         className="w-3 h-3 text-emerald-400 shrink-0"
                         fill="none"
                         stroke="currentColor"
@@ -174,8 +174,8 @@ export default function InvoiceList({
                   {inv.paymentTerms && (
                     <>
                       <span>•</span>
-                      <span 
-                        className="text-zinc-400 font-medium cursor-help underline decoration-dotted decoration-zinc-600 hover:text-zinc-200 transition-colors" 
+                      <span
+                        className="text-zinc-400 font-medium cursor-help underline decoration-dotted decoration-zinc-600 hover:text-zinc-200 transition-colors"
                         title={`Payment terms: ${inv.paymentTerms} (${formatPaymentTerms(inv.paymentTerms)})`}
                         data-tooltip={`Payment terms: ${inv.paymentTerms} (${formatPaymentTerms(inv.paymentTerms)})`}
                       >
@@ -187,12 +187,12 @@ export default function InvoiceList({
               </div>
 
               <div className="text-right shrink-0">
-                <div className="text-sm font-bold text-white tracking-tight">
-                  {formatMoney(inv.totalAmount || 0)}
+                <div className="text-sm font-bold font-mono tabular-nums text-white tracking-tight">
+                  {formatCurrency(inv.totalAmount || 0)}
                 </div>
                 {inv.balanceDue !== undefined && inv.balanceDue > 0 && !isPaid && (
-                  <div className="text-[11px] text-amber-400 font-medium mt-0.5">
-                    Due: {formatMoney(inv.balanceDue)}
+                  <div className="text-[11px] text-amber-400 font-medium font-mono tabular-nums mt-0.5">
+                    Due: {formatCurrency(inv.balanceDue)}
                   </div>
                 )}
                 {isPaid && (
