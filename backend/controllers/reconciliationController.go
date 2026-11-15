@@ -2,20 +2,63 @@ package controllers
 
 import (
 	"errors"
-	"math"
+	"fmt"
 	"reflex-tech-bookkeeping-app-api/db"
+	"reflex-tech-bookkeeping-app-api/events"
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/utils"
-	"fmt"
-	"sync"
-	"time"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gofiber/fiber/v3"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+func broadcastReconciliationSync() {
+	events.Broadcast("EXPENSES_UPDATED", nil)
+	events.Broadcast("TRANSACTIONS_UPDATED", nil)
+	events.Broadcast("RECONCILIATION_UPDATED", nil)
+	events.Broadcast("SUMMARY_UPDATED", nil)
+	events.Broadcast("QUEUE_UPDATED", nil)
+}
+
+func normalizeOptionalID(id *uint) *uint {
+	if id != nil && *id == 0 {
+		return nil
+	}
+	return id
+}
+
+func sumLinkedExpenseAbsCents(d *gorm.DB, txID uint) int64 {
+	var items []models.Expense
+	d.Model(&models.Expense{}).
+		Select("expenses.amount").
+		Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
+		Where("ebt.bank_transaction_id = ? AND ebt.status = 'confirmed'", txID).
+		Find(&items)
+	var total int64
+	for _, item := range items {
+		total += item.Amount.Abs().Cents
+	}
+	return total
+}
+
+func sumLinkedTxAbsCents(d *gorm.DB, expID uint) int64 {
+	var items []models.BankTransaction
+	d.Model(&models.BankTransaction{}).
+		Select("bank_transactions.amount").
+		Joins("JOIN expense_bank_transactions ebt ON ebt.bank_transaction_id = bank_transactions.id").
+		Where("ebt.expense_id = ? AND ebt.status = 'confirmed'", expID).
+		Find(&items)
+	var total int64
+	for _, item := range items {
+		total += item.Amount.Abs().Cents
+	}
+	return total
+}
 
 // ReconciliationTriggerResponse returns the status of the reconciliation run.
 type ReconciliationTriggerResponse struct {
@@ -32,16 +75,23 @@ var (
 
 // TriggerReconciliation runs the matching/reconciliation engine on demand.
 func TriggerReconciliation(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	reconciliationMutex.Lock()
 	running := reconciliationRunning
-	reconciliationRunning = true
+	prevRun := reconciliationLastRun
+	if !running {
+		reconciliationRunning = true
+	}
 	reconciliationMutex.Unlock()
 
 	if running {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
-			"status": "success",
+			"status":    "success",
 			"runStatus": "running",
-			"message": "Reconciliation is already running. Please wait and try again.",
+			"message":   "Reconciliation is already running. Please wait and try again.",
 		})
 	}
 
@@ -51,23 +101,23 @@ func TriggerReconciliation(c fiber.Ctx) error {
 		reconciliationLastRun = time.Now()
 		reconciliationRunning = false
 		reconciliationMutex.Unlock()
-		BroadcastEvent("TRANSACTIONS_UPDATED", nil)
-		BroadcastEvent("EXPENSES_UPDATED", nil)
+		broadcastReconciliationSync()
 	}()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"status":     "success",
-		"runStatus":  "started",
-		"message":    "Reconciliation has been queued.",
-		"previousRun": reconciliationLastRun.Format(time.RFC3339),
+		"status":      "success",
+		"runStatus":   "started",
+		"message":     "Reconciliation has been queued.",
+		"previousRun": prevRun.Format(time.RFC3339),
 	})
 }
 
 // GetFlaggedItems fetches all UNLINKED BankTransactions and all orphaned Expenses.
-//
-// Optional query parameters:
-//   - ?periodId=123    filter to items within that period's date range
 func GetFlaggedItems(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 
@@ -100,6 +150,10 @@ func GetFlaggedItems(c fiber.Ctx) error {
 
 // LinkExpenseToTransaction manually forces an Expense to link to a BankTransaction.
 func LinkExpenseToTransaction(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	type LinkRequest struct {
 		ExpenseID              uint  `json:"expenseId"`
 		TransactionID          uint  `json:"transactionId"`
@@ -111,6 +165,7 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 	if err := c.Bind().JSON(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid payload"})
 	}
+	req.OverrideChartAccountID = normalizeOptionalID(req.OverrideChartAccountID)
 
 	var txToLink models.BankTransaction
 	if err := db.DB.Where("id = ?", req.TransactionID).First(&txToLink).Error; err != nil {
@@ -133,9 +188,10 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 		}
 	}
 
-	// Guard: pending/ignored
-	if txToLink.ReviewStatus == "PENDING" || txToLink.ReviewStatus == "IGNORED" || expenseToLink.ReviewStatus == "PENDING" || expenseToLink.ReviewStatus == "IGNORED" {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot link items that are pending review or ignored."})
+	// Guard: pending/ignored/deleted
+	if txToLink.ReviewStatus == "PENDING" || txToLink.ReviewStatus == "IGNORED" || txToLink.ReviewStatus == "DELETED" ||
+		expenseToLink.ReviewStatus == "PENDING" || expenseToLink.ReviewStatus == "IGNORED" || expenseToLink.ReviewStatus == "DELETED" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot link items that are pending review, ignored, or deleted."})
 	}
 
 	// Guard: neither side can be in a closed period
@@ -149,7 +205,7 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 	}
 
 	// Guard: deposits
-	if txToLink.Amount.Dollars() > 0 {
+	if txToLink.Amount.Cents > 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot link an expense to a deposit/income transaction."})
 	}
 
@@ -163,12 +219,11 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 	}
 
 	// Guard: M:N web. An expense linked to multiple transactions cannot link to a transaction linked to multiple expenses.
-	// If the expense is already linked to a transaction, and the target transaction is already linked to an expense, reject.
 	var txLinkCount int64
 	db.DB.Model(&models.ExpenseBankTransaction{}).Where("bank_transaction_id = ? AND status = 'confirmed'", req.TransactionID).Count(&txLinkCount)
 	var expLinkCount int64
 	db.DB.Model(&models.ExpenseBankTransaction{}).Where("expense_id = ? AND status = 'confirmed'", req.ExpenseID).Count(&expLinkCount)
-	
+
 	if txLinkCount > 0 && expLinkCount > 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot link this expense and transaction because both are already linked to other items. This would create a many-to-many relationship."})
 	}
@@ -183,36 +238,25 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 	}
 
 	if !req.Force {
-		txAmount := math.Abs(txToLink.Amount.Dollars())
+		txAbsCents := txToLink.Amount.Abs().Cents
+		expAbsCents := expenseToLink.Amount.Abs().Cents
 
 		// Determine split orientation:
-		// - 1:N split: One transaction split across multiple expenses (txLinkCount > 0 or expense is smaller than tx)
+		// - 1:N split: One transaction split across multiple expenses (txLinkCount > 0 or expense is smaller/equal than tx)
 		// - N:1 split: Multiple transactions funding one expense (expLinkCount > 0 or tx is smaller than expense)
-		is1toN := txLinkCount > 0 || (expLinkCount == 0 && expenseToLink.Amount.Dollars() <= txAmount+0.01)
+		is1toN := txLinkCount > 0 || (expLinkCount == 0 && expAbsCents <= txAbsCents)
 
 		if is1toN {
-			// Guard: over-allocation of the transaction.
-			var currentlyLinkedSum float64
-			db.DB.Model(&models.Expense{}).
-				Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
-				Where("ebt.bank_transaction_id = ? AND ebt.status = 'confirmed'", req.TransactionID).
-				Select("COALESCE(SUM(expenses.amount), 0)").Scan(&currentlyLinkedSum)
-
-			if currentlyLinkedSum+expenseToLink.Amount.Dollars() > txAmount+0.01 { // allow 1 cent floating point rounding
+			currentlyLinkedCents := sumLinkedExpenseAbsCents(db.DB, req.TransactionID)
+			if currentlyLinkedCents+expAbsCents > txAbsCents {
 				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 					"error":   "OVER_ALLOCATED",
 					"message": "This link would over-allocate the transaction. The transaction amount is less than the sum of the linked expenses.",
 				})
 			}
 		} else {
-			// Guard: over-allocation of the expense.
-			var currentlyLinkedTxSum float64
-			db.DB.Model(&models.BankTransaction{}).
-				Joins("JOIN expense_bank_transactions ebt ON ebt.bank_transaction_id = bank_transactions.id").
-				Where("ebt.expense_id = ? AND ebt.status = 'confirmed'", req.ExpenseID).
-				Select("COALESCE(SUM(ABS(bank_transactions.amount)), 0)").Scan(&currentlyLinkedTxSum)
-
-			if currentlyLinkedTxSum+txAmount > expenseToLink.Amount.Dollars()+0.01 { // allow 1 cent floating point rounding
+			currentlyLinkedTxCents := sumLinkedTxAbsCents(db.DB, req.ExpenseID)
+			if currentlyLinkedTxCents+txAbsCents > expAbsCents {
 				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 					"error":   "OVER_ALLOCATED",
 					"message": "This link would over-allocate the expense. The expense amount is less than the sum of the linked bank transactions.",
@@ -306,6 +350,7 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 	}
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status": "successfully linked receipt to expense",
@@ -314,6 +359,10 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 
 // UnlinkExpense removes a specific confirmed link between an Expense and a BankTransaction.
 func UnlinkExpense(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	type UnlinkRequest struct {
 		ExpenseID uint `json:"expenseId"`
 		// TransactionID is required because an expense can be linked to multiple
@@ -358,6 +407,7 @@ func UnlinkExpense(c fiber.Ctx) error {
 	}
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status": "successfully unlinked expense",
@@ -366,42 +416,76 @@ func UnlinkExpense(c fiber.Ctx) error {
 
 // MarkExpenseAsCash flags an Expense's tender as "cash" so it doesn't need reconciliation.
 func MarkExpenseAsCash(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	id := c.Params("id")
 
 	var expense models.Expense
-	result := db.DB.Where("id = ?", id).First(&expense)
-
-	if result.Error != nil {
+	if err := db.DB.Where("id = ?", id).First(&expense).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": "Expense not found",
 		})
 	}
-
+	if expense.ReviewStatus == "DELETED" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Cannot mark a deleted expense as cash.",
+		})
+	}
 	if utils.IsDateInClosedPeriod(expense.Timestamp) {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 			"error": "Cannot modify an expense in a closed accounting period.",
 		})
 	}
 
-	// Delete any bank transaction links for this expense since cash expenses are unlinked by definition
-	db.DB.Where("expense_id = ?", expense.ID).Delete(&models.ExpenseBankTransaction{})
-
-	expense.Tender = "cash"
-	expense.AllocationStatus = "BALANCED"
-	db.DB.Model(&expense).Updates(map[string]interface{}{
-		"tender":            "cash",
-		"allocation_status": "BALANCED",
-	})
+	if err := db.DB.Transaction(func(tx *gorm.DB) error {
+		// Delete any bank transaction links since cash expenses settle out-of-band
+		if err := tx.Where("expense_id = ?", expense.ID).Delete(&models.ExpenseBankTransaction{}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&expense).Updates(map[string]interface{}{
+			"tender":            "cash",
+			"allocation_status": "BALANCED",
+		}).Error
+	}); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to mark expense as cash"})
+	}
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status": "successfully marked expense tender as cash",
 	})
 }
 
+func unlinkedScoreOrder(dateCol string, absDollars float64, parsedDate *time.Time) clause.Expr {
+	if parsedDate != nil {
+		formattedDate := parsedDate.Format("2006-01-02 15:04:05")
+		if db.DB != nil && db.DB.Dialector.Name() == "sqlite" {
+			return clause.Expr{
+				SQL:  fmt.Sprintf("(ABS(ABS(amount) - ?) * 100) + ABS(JULIANDAY(%s) - JULIANDAY(?)) ASC", dateCol),
+				Vars: []interface{}{absDollars, formattedDate},
+			}
+		}
+		return clause.Expr{
+			SQL:  fmt.Sprintf("(ABS(ABS(amount) - ?) * 100) + ABS(EXTRACT(EPOCH FROM (%s - ?::timestamp)) / 86400.0) ASC", dateCol),
+			Vars: []interface{}{absDollars, formattedDate},
+		}
+	}
+	return clause.Expr{
+		SQL:  "ABS(ABS(amount) - ?) ASC",
+		Vars: []interface{}{absDollars},
+	}
+}
+
 // GetUnlinkedItems fetches unlinked items with pagination, search, and "best match" sorting.
 func GetUnlinkedItems(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	type QueryParam struct {
 		Search       string  `query:"search"`
 		Page         int     `query:"page"`
@@ -423,6 +507,8 @@ func GetUnlinkedItems(c fiber.Ctx) error {
 	limit := params.Limit
 	if limit < 1 {
 		limit = 50
+	} else if limit > 200 {
+		limit = 200
 	}
 	offset := (page - 1) * limit
 
@@ -439,16 +525,17 @@ func GetUnlinkedItems(c fiber.Ctx) error {
 	txQuery = ApplyDateRange(txQuery, "date", params.StartDate, params.EndDate)
 	expQuery = ApplyDateRange(expQuery, "timestamp", params.StartDate, params.EndDate)
 
-	// Search
+	// Search (case-insensitive portable LIKE + exact dollar lookup against decimal(12,2) column)
 	if params.Search != "" {
 		searchStr := strings.TrimSpace(params.Search)
-		// if search is a number, allow searching by exact absolute amount as well
+		searchLower := "%" + strings.ToLower(searchStr) + "%"
 		if val, err := strconv.ParseFloat(strings.TrimPrefix(searchStr, "$"), 64); err == nil {
-			txQuery = txQuery.Where("description ILIKE ? OR ABS(amount) = ?", "%"+searchStr+"%", math.Abs(val))
-			expQuery = expQuery.Where("vendor ILIKE ? OR description ILIKE ? OR ABS(amount) = ?", "%"+searchStr+"%", "%"+searchStr+"%", math.Abs(val))
+			targetDollars := models.NewMoney(val).Abs().Dollars()
+			txQuery = txQuery.Where("LOWER(description) LIKE ? OR ABS(ABS(amount) - ?) < 0.005", searchLower, targetDollars)
+			expQuery = expQuery.Where("LOWER(vendor) LIKE ? OR LOWER(description) LIKE ? OR ABS(ABS(amount) - ?) < 0.005", searchLower, searchLower, targetDollars)
 		} else {
-			txQuery = txQuery.Where("description ILIKE ?", "%"+searchStr+"%")
-			expQuery = expQuery.Where("vendor ILIKE ? OR description ILIKE ?", "%"+searchStr+"%", "%"+searchStr+"%")
+			txQuery = txQuery.Where("LOWER(description) LIKE ?", searchLower)
+			expQuery = expQuery.Where("LOWER(vendor) LIKE ? OR LOWER(description) LIKE ?", searchLower, searchLower)
 		}
 	}
 
@@ -459,10 +546,9 @@ func GetUnlinkedItems(c fiber.Ctx) error {
 	expQuery.Count(&totalExps)
 
 	// Sorting: Sort by match score if target amounts/dates are provided and user is not actively searching/filtering.
-	// Highest score = lowest distance.
 	isSearchingOrFiltering := params.Search != "" || params.StartDate != "" || params.EndDate != ""
 	if !isSearchingOrFiltering && (params.TargetAmount != 0 || params.TargetDate != "") {
-		absAmt := math.Abs(params.TargetAmount)
+		absDollars := models.NewMoney(params.TargetAmount).Abs().Dollars()
 
 		var parsedTargetDate *time.Time
 		if params.TargetDate != "" {
@@ -474,26 +560,8 @@ func GetUnlinkedItems(c fiber.Ctx) error {
 			}
 		}
 
-		if parsedTargetDate != nil {
-			formattedDate := parsedTargetDate.Format("2006-01-02 15:04:05")
-			txQuery = txQuery.Order(clause.Expr{
-				SQL:  "(ABS(ABS(amount) - ?) * 100) + ABS(EXTRACT(EPOCH FROM (date - ?::timestamp)) / 86400.0) ASC",
-				Vars: []interface{}{absAmt, formattedDate},
-			})
-			expQuery = expQuery.Order(clause.Expr{
-				SQL:  "(ABS(amount - ?) * 100) + ABS(EXTRACT(EPOCH FROM (timestamp - ?::timestamp)) / 86400.0) ASC",
-				Vars: []interface{}{absAmt, formattedDate},
-			})
-		} else {
-			txQuery = txQuery.Order(clause.Expr{
-				SQL:  "ABS(ABS(amount) - ?) ASC",
-				Vars: []interface{}{absAmt},
-			})
-			expQuery = expQuery.Order(clause.Expr{
-				SQL:  "ABS(amount - ?) ASC",
-				Vars: []interface{}{absAmt},
-			})
-		}
+		txQuery = txQuery.Order(unlinkedScoreOrder("date", absDollars, parsedTargetDate))
+		expQuery = expQuery.Order(unlinkedScoreOrder("timestamp", absDollars, parsedTargetDate))
 	} else {
 		txQuery = txQuery.Order("date DESC")
 		expQuery = expQuery.Order("timestamp DESC")
@@ -564,28 +632,34 @@ func ValidateCreateAndLinkRoles(itemType string, bankAcc *models.ChartAccount, c
 // CreateAndLink creates a new Transaction or Expense and immediately links it.
 // If any step fails, the creation is rolled back (atomic).
 func CreateAndLink(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	type createLinkReq struct {
-		Type                   string    `json:"type"`     // "transaction" or "receipt"
-		TargetID               uint      `json:"targetId"` // The ID of the item being linked to
-		OverrideChartAccountID *uint     `json:"overrideChartAccountId"`
-		// Payload for the new item
-		Timestamp         time.Time `json:"timestamp"` // for expense
-		Date              time.Time `json:"date"`      // for transaction
-		Vendor            string    `json:"vendor"`
-		Description       string    `json:"description"`
-		Amount            float64   `json:"amount"`
-		Tender            string    `json:"tender"`
-		TransactionType   string    `json:"transactionType"`
-		Notes             string    `json:"notes"`
-		ChartAccountID    *uint     `json:"chartAccountId"`    // Bank Account for transaction / Category for expense
-		CategoryAccountID *uint     `json:"categoryAccountId"` // Category for transaction
-		Force             bool      `json:"force"`
+		Type                   string       `json:"type"`     // "transaction" or "receipt"
+		TargetID               uint         `json:"targetId"` // The ID of the item being linked to
+		OverrideChartAccountID *uint        `json:"overrideChartAccountId"`
+		Timestamp              time.Time    `json:"timestamp"` // for expense
+		Date                   time.Time    `json:"date"`      // for transaction
+		Vendor                 string       `json:"vendor"`
+		Description            string       `json:"description"`
+		Amount                 models.Money `json:"amount"`
+		Tender                 string       `json:"tender"`
+		TransactionType        string       `json:"transactionType"`
+		Notes                  string       `json:"notes"`
+		ChartAccountID         *uint        `json:"chartAccountId"`    // Bank Account for transaction / Category for expense
+		CategoryAccountID      *uint        `json:"categoryAccountId"` // Category for transaction
+		Force                  bool         `json:"force"`
 	}
 
 	var req createLinkReq
 	if err := c.Bind().JSON(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid payload"})
 	}
+	req.ChartAccountID = normalizeOptionalID(req.ChartAccountID)
+	req.CategoryAccountID = normalizeOptionalID(req.CategoryAccountID)
+	req.OverrideChartAccountID = normalizeOptionalID(req.OverrideChartAccountID)
 
 	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
 	if req.Type != "transaction" && req.Type != "receipt" {
@@ -593,6 +667,9 @@ func CreateAndLink(c fiber.Ctx) error {
 	}
 	if req.TargetID == 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "targetId is required"})
+	}
+	if req.Amount.Cents == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "amount must be non-zero"})
 	}
 
 	// Validate category / override account if provided
@@ -633,12 +710,11 @@ func CreateAndLink(c fiber.Ctx) error {
 
 	err := db.DB.Transaction(func(tx *gorm.DB) error {
 		if req.Type == "transaction" {
-			// Creating an expense to link to an existing transaction
 			var existingTx models.BankTransaction
 			if err := tx.First(&existingTx, req.TargetID).Error; err != nil {
 				return errors.New("TARGET_NOT_FOUND")
 			}
-			if existingTx.ReviewStatus == "PENDING" || existingTx.ReviewStatus == "IGNORED" {
+			if existingTx.ReviewStatus == "PENDING" || existingTx.ReviewStatus == "IGNORED" || existingTx.ReviewStatus == "DELETED" {
 				return errors.New("TARGET_INVALID_STATUS")
 			}
 			if utils.IsDateInClosedPeriod(existingTx.Date) || utils.IsDateInClosedPeriod(req.Timestamp) {
@@ -647,27 +723,23 @@ func CreateAndLink(c fiber.Ctx) error {
 			if utils.IsCashTender(req.Tender) {
 				return errors.New("NO_CASH_LINKS")
 			}
-			if existingTx.Amount.Dollars() > 0 {
+			if existingTx.Amount.Cents > 0 {
 				return errors.New("NO_DEPOSIT_LINKS")
 			}
 
-			// Validate allocation
-			var linkedSum float64
-			tx.Model(&models.Expense{}).
-				Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
-				Where("ebt.bank_transaction_id = ? AND ebt.status = 'confirmed'", req.TargetID).
-				Select("COALESCE(SUM(expenses.amount), 0)").Scan(&linkedSum)
-			if !req.Force && linkedSum+req.Amount > math.Abs(existingTx.Amount.Dollars())+0.01 {
+			expAbs := req.Amount.Abs()
+			linkedCents := sumLinkedExpenseAbsCents(tx, req.TargetID)
+			if !req.Force && linkedCents+expAbs.Cents > existingTx.Amount.Abs().Cents {
 				return errors.New("OVER_ALLOCATED")
 			}
 
 			expense := models.Expense{
-				Timestamp:            req.Timestamp,
-				Vendor:               req.Vendor,
-				Description:          req.Description,
-				Amount:               models.NewMoney(roundCents(math.Abs(req.Amount))),
-				Tender:               utils.NormalizeTender(req.Tender),
-				ChartAccountID:       req.ChartAccountID,
+				Timestamp:        req.Timestamp,
+				Vendor:           req.Vendor,
+				Description:      req.Description,
+				Amount:           expAbs,
+				Tender:           utils.NormalizeTender(req.Tender),
+				ChartAccountID:   req.ChartAccountID,
 				Notes:            req.Notes,
 				AllocationStatus: "UNLINKED",
 				ReviewStatus:     "APPROVED",
@@ -677,17 +749,16 @@ func CreateAndLink(c fiber.Ctx) error {
 			}
 			newExpenseID = expense.ID
 			newTxID = req.TargetID
-			
-			// Category logic for 1:Many (Split transaction)
+
 			var txLinkCount int64
 			tx.Model(&models.ExpenseBankTransaction{}).Where("bank_transaction_id = ? AND status = 'confirmed'", req.TargetID).Count(&txLinkCount)
-			
+
 			if req.OverrideChartAccountID != nil {
 				existingTx.CategoryAccountID = req.OverrideChartAccountID
 				expense.ChartAccountID = req.OverrideChartAccountID
 				tx.Omit(clause.Associations).Save(&existingTx)
 				tx.Omit(clause.Associations).Save(&expense)
-			} else if txLinkCount == 0 { // 1:1
+			} else if txLinkCount == 0 {
 				if existingTx.CategoryAccountID != nil && expense.ChartAccountID != nil {
 					if *existingTx.CategoryAccountID != *expense.ChartAccountID {
 						return errors.New("CATEGORY_MISMATCH")
@@ -702,7 +773,7 @@ func CreateAndLink(c fiber.Ctx) error {
 					existingTx.CategoryAccountID = expense.ChartAccountID
 					tx.Omit(clause.Associations).Save(&existingTx)
 				}
-			} else { // 1:Many split
+			} else {
 				if expense.ChartAccountID == nil && existingTx.CategoryAccountID != nil {
 					if err := checkAccount(existingTx.CategoryAccountID, "EXPENSE"); err != nil {
 						return fmt.Errorf("transaction category error: %w", err)
@@ -711,14 +782,12 @@ func CreateAndLink(c fiber.Ctx) error {
 					tx.Omit(clause.Associations).Save(&expense)
 				}
 			}
-
 		} else if req.Type == "receipt" {
-			// Creating a transaction to link to an existing expense
 			var existingExp models.Expense
 			if err := tx.First(&existingExp, req.TargetID).Error; err != nil {
 				return errors.New("TARGET_NOT_FOUND")
 			}
-			if existingExp.ReviewStatus == "PENDING" || existingExp.ReviewStatus == "IGNORED" {
+			if existingExp.ReviewStatus == "PENDING" || existingExp.ReviewStatus == "IGNORED" || existingExp.ReviewStatus == "DELETED" {
 				return errors.New("TARGET_INVALID_STATUS")
 			}
 			if utils.IsDateInClosedPeriod(existingExp.Timestamp) || utils.IsDateInClosedPeriod(req.Date) {
@@ -727,20 +796,19 @@ func CreateAndLink(c fiber.Ctx) error {
 			if utils.IsCashTender(existingExp.Tender) {
 				return errors.New("NO_CASH_LINKS")
 			}
-			if req.Amount > 0 { // req.Amount is the amount of the transaction being created
-				return errors.New("NO_DEPOSIT_LINKS") // can't create a deposit to link to an expense
+			if req.Amount.Cents > 0 {
+				return errors.New("NO_DEPOSIT_LINKS")
 			}
-			
-			// Constraint: an expense with multiple receipt files may only link to one transaction.
+
 			var expLinkCount int64
 			tx.Model(&models.ExpenseBankTransaction{}).Where("expense_id = ? AND status = 'confirmed'", req.TargetID).Count(&expLinkCount)
-			
+
 			var receiptCount int64
 			tx.Model(&models.Receipt{}).Where("expense_id = ?", req.TargetID).Count(&receiptCount)
 			if receiptCount > 1 && expLinkCount > 0 {
 				return errors.New("MULTI_RECEIPT_SPLIT")
 			}
-			
+
 			effectiveCatID := req.CategoryAccountID
 			if effectiveCatID == nil {
 				effectiveCatID = existingExp.ChartAccountID
@@ -755,14 +823,12 @@ func CreateAndLink(c fiber.Ctx) error {
 			if txType == "" {
 				txType = "DEBIT"
 			}
-			// When creating a transaction to link to an expense, the transaction represents
-			// payment for that expense (an outflow of funds), which must always be negative.
-			txAmt := -math.Abs(req.Amount)
+			txMoney := models.Money{Cents: -req.Amount.Abs().Cents}
 
 			bankTx := models.BankTransaction{
 				Date:              req.Date,
 				Description:       req.Description,
-				Amount:            models.NewMoney(roundCents(txAmt)),
+				Amount:            txMoney,
 				TransactionType:   txType,
 				ChartAccountID:    req.ChartAccountID,
 				CategoryAccountID: effectiveCatID,
@@ -773,14 +839,8 @@ func CreateAndLink(c fiber.Ctx) error {
 				IsManual:          true,
 			}
 
-			// Validate allocation: sum existing confirmed bank transactions linked to this expense
-			var linkedTxSum float64
-			tx.Model(&models.BankTransaction{}).
-				Joins("JOIN expense_bank_transactions ebt ON ebt.bank_transaction_id = bank_transactions.id").
-				Where("ebt.expense_id = ? AND ebt.status = 'confirmed'", existingExp.ID).
-				Select("COALESCE(SUM(ABS(bank_transactions.amount)), 0)").Scan(&linkedTxSum)
-
-			if !req.Force && (linkedTxSum + math.Abs(bankTx.Amount.Dollars())) > existingExp.Amount.Dollars()+0.01 {
+			linkedTxCents := sumLinkedTxAbsCents(tx, existingExp.ID)
+			if !req.Force && (linkedTxCents+txMoney.Abs().Cents) > existingExp.Amount.Abs().Cents {
 				return errors.New("OVER_ALLOCATED_EXPENSE")
 			}
 
@@ -795,7 +855,7 @@ func CreateAndLink(c fiber.Ctx) error {
 				existingExp.ChartAccountID = req.OverrideChartAccountID
 				tx.Omit(clause.Associations).Save(&bankTx)
 				tx.Omit(clause.Associations).Save(&existingExp)
-			} else if expLinkCount == 0 { // 1:1
+			} else if expLinkCount == 0 {
 				if bankTx.CategoryAccountID != nil && existingExp.ChartAccountID != nil {
 					if *bankTx.CategoryAccountID != *existingExp.ChartAccountID {
 						return errors.New("CATEGORY_MISMATCH")
@@ -807,7 +867,7 @@ func CreateAndLink(c fiber.Ctx) error {
 					bankTx.CategoryAccountID = existingExp.ChartAccountID
 					tx.Omit(clause.Associations).Save(&bankTx)
 				}
-			} else { // 1 Exp -> Many Tx (Split expense)
+			} else {
 				if bankTx.CategoryAccountID == nil && existingExp.ChartAccountID != nil {
 					bankTx.CategoryAccountID = existingExp.ChartAccountID
 					tx.Omit(clause.Associations).Save(&bankTx)
@@ -853,34 +913,38 @@ func CreateAndLink(c fiber.Ctx) error {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "This expense has multiple receipt files and is already linked to a transaction. Split-payment links are only allowed for single-receipt expenses."})
 		case "OVER_ALLOCATED":
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "OVER_ALLOCATED",
+				"error":   "OVER_ALLOCATED",
 				"message": "This link would over-allocate the transaction. The transaction amount is less than the sum of the linked expenses.",
 			})
 		case "OVER_ALLOCATED_EXPENSE":
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "OVER_ALLOCATED",
+				"error":   "OVER_ALLOCATED",
 				"message": "The transaction amount you are creating is smaller than the expense you are linking it to.",
 			})
 		case "CATEGORY_MISMATCH":
 			var txAcc, expAcc models.ChartAccount
 			if req.Type == "transaction" {
-				var tx models.BankTransaction
-				var exp models.Expense
-				// Re-fetch using standard DB, not the transaction that was rolled back
-				db.DB.First(&tx, req.TargetID)
-				db.DB.First(&exp, newExpenseID) // newExpenseID might not exist due to rollback, but we have req.ChartAccountID
-				if tx.CategoryAccountID != nil { db.DB.First(&txAcc, *tx.CategoryAccountID) }
-				if req.ChartAccountID != nil { db.DB.First(&expAcc, *req.ChartAccountID) }
+				var existingTx models.BankTransaction
+				db.DB.First(&existingTx, req.TargetID)
+				if existingTx.CategoryAccountID != nil {
+					db.DB.First(&txAcc, *existingTx.CategoryAccountID)
+				}
+				if req.ChartAccountID != nil {
+					db.DB.First(&expAcc, *req.ChartAccountID)
+				}
 			} else {
 				var exp models.Expense
 				db.DB.First(&exp, req.TargetID)
-				// For receipt type, CategoryAccountID is the transaction's category
 				catID := req.CategoryAccountID
 				if catID == nil {
 					catID = req.OverrideChartAccountID
 				}
-				if catID != nil { db.DB.First(&txAcc, *catID) }
-				if exp.ChartAccountID != nil { db.DB.First(&expAcc, *exp.ChartAccountID) }
+				if catID != nil {
+					db.DB.First(&txAcc, *catID)
+				}
+				if exp.ChartAccountID != nil {
+					db.DB.First(&expAcc, *exp.ChartAccountID)
+				}
 			}
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error":               "CATEGORY_MISMATCH",
@@ -894,10 +958,94 @@ func CreateAndLink(c fiber.Ctx) error {
 	}
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"status": "successfully created and linked",
-		"expenseId": newExpenseID,
+		"status":        "successfully created and linked",
+		"expenseId":     newExpenseID,
 		"transactionId": newTxID,
+	})
+}
+
+// LinkExpenseToInvoice associates an expense/receipt with a client invoice (e.g. billable expense or project receipt).
+func LinkExpenseToInvoice(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
+	type linkInvReq struct {
+		ExpenseID uint `json:"expenseId"`
+		InvoiceID uint `json:"invoiceId"`
+	}
+	var req linkInvReq
+	if err := c.Bind().JSON(&req); err != nil || req.ExpenseID == 0 || req.InvoiceID == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "expenseId and invoiceId are required"})
+	}
+
+	var expense models.Expense
+	if err := db.DB.First(&expense, req.ExpenseID).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Expense not found"})
+	}
+	if expense.ReviewStatus == "DELETED" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot link a deleted expense to an invoice"})
+	}
+	if utils.IsDateInClosedPeriod(expense.Timestamp) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot modify an expense in a closed accounting period."})
+	}
+
+	var invoice models.Invoice
+	if err := db.DB.First(&invoice, req.InvoiceID).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Invoice not found"})
+	}
+	if invoice.Status == "VOID" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot link an expense to a VOID invoice"})
+	}
+
+	if err := db.DB.Model(&expense).Update("invoice_id", invoice.ID).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to link expense to invoice"})
+	}
+
+	events.Broadcast("EXPENSES_UPDATED", nil)
+	events.Broadcast("INVOICES_UPDATED", nil)
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status":    "success",
+		"expenseId": expense.ID,
+		"invoiceId": invoice.ID,
+	})
+}
+
+// UnlinkExpenseFromInvoice removes the invoice association from an expense/receipt.
+func UnlinkExpenseFromInvoice(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
+	type unlinkInvReq struct {
+		ExpenseID uint `json:"expenseId"`
+	}
+	var req unlinkInvReq
+	if err := c.Bind().JSON(&req); err != nil || req.ExpenseID == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "expenseId is required"})
+	}
+
+	var expense models.Expense
+	if err := db.DB.First(&expense, req.ExpenseID).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Expense not found"})
+	}
+	if utils.IsDateInClosedPeriod(expense.Timestamp) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot modify an expense in a closed accounting period."})
+	}
+
+	if err := db.DB.Model(&expense).Update("invoice_id", nil).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to unlink expense from invoice"})
+	}
+
+	events.Broadcast("EXPENSES_UPDATED", nil)
+	events.Broadcast("INVOICES_UPDATED", nil)
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status":    "success",
+		"expenseId": expense.ID,
 	})
 }
