@@ -76,3 +76,24 @@ export interface ReplaceOrAddModalState {
   suggestedTxId?: number;
   createPayload?: CreateAndLinkPayload;
 }
+
+export interface ExpenseEditFormState {
+  timestamp: string;
+  vendor: string;
+  description: string;
+  amount: number;
+  taxAmount: number;
+  currencyCode: string;
+  tender: string;
+  notes: string;
+  chartAccountId: number | string;
+}
+
+export interface TxEditFormState {
+  date: string;
+  description: string;
+  amount: number;
+  notes: string;
+  chartAccountId: number | string;
+  categoryAccountId: number | string;
+}

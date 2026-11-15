@@ -239,7 +239,10 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
 export async function updateTransaction(
   id: number,
-  updates: Partial<BankTransaction>
+  updates: Omit<Partial<BankTransaction>, "chartAccountId" | "categoryAccountId"> & {
+    chartAccountId?: number | null;
+    categoryAccountId?: number | null;
+  }
 ): Promise<BankTransaction> {
   const data = await patchJSON<{ transaction: BankTransaction }>(`/transactions/${id}`, updates);
   return data.transaction;
@@ -290,7 +293,10 @@ export async function createExpense(input: CreateExpenseInput): Promise<Expense>
   return data.expense;
 }
 
-export async function updateExpense(id: number, updates: Partial<Expense>): Promise<Expense> {
+export async function updateExpense(
+  id: number,
+  updates: Omit<Partial<Expense>, "chartAccountId"> & { chartAccountId?: number | null }
+): Promise<Expense> {
   const data = await patchJSON<{ expense: Expense }>(`/expenses/${id}`, updates);
   return data.expense;
 }
