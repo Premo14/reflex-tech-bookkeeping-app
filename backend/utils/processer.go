@@ -39,6 +39,11 @@ func HashFile(filePath string) (string, error) {
 // it checks extensions, hashes to prevent duplicates, handles HEIC conversion,
 // and routes bank statements to the parser or images to the DB.
 func processFile(filePath string) error {
+	// Guard against nil DB — if DB is unavailable, cannot process files
+	if db.DB == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+
 	fileExt := strings.ToLower(filepath.Ext(filePath))
 
 	// Is it supported?

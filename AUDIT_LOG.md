@@ -86,3 +86,10 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
 - **`TestApplyDateRange_*`**: Fixed SQLite `date` reserved keyword conflict (`strftime('%Y-%m-%d', date)`) and unique FITID values.
 - **New tests added**: 20+ cases in `s07_coverage_test.go` (`uploadController` 89.1%, `accountController` 81.7%, `demoController` 87.0%, `settingsController` 76.2%, `bookFilters` 100.0%).
 - **Verification Gate**: Also fixed 3 faulty S05 test expectations in `backend/utils/ingestion_test.go` (`TestIsDefaultDescription`, `TestAcquireReleaseInFlight_Concurrent`, `TestCleanAIJSON_EdgeCases`); `go build ./...` ✓, `go vet ./...` ✓, all backend packages pass 100% ✓.
+
+## S07D: Backend Utils — Ingestion & Watcher Coverage
+- **Bug fix: nil-DB guard in `processer.go::processFile`**: Added `if db.DB == nil { return fmt.Errorf("database connection is nil") }` guard at start of processFile, preventing SIGSEGV when DB is unavailable during file processing (ProcessExistingFiles, debounceEvent paths).
+- **New tests**: 50+ cases across `s07d_coverage_test.go` and `s07d_additional_test.go` — ParseCsvStatement integration (20+ cases with SQLite :memory:), resolveOrCreateChartAccount deep tests (10+ cases), watcher debounce/sweep tests (8+ cases), ParseExtractedAmount/CleanAIJSON/ParseExtractedTimestamp edge cases, ValidateExtractedCategory paths.
+- **Coverage**: parseCsv.go ParseCsvStatement 87.5%, parseOfx.go resolveOrCreateChartAccount 94.4%, parseOfx.go buildOfxDescription/isDefaultDescription 100%, processer.go BuildReceiptPrompt/CleanAIJSON/ParseExtractedAmount/ParseExtractedTimestamp 87-100%, watcher.go isIgnoredFile/acquireInFlight/releaseInFlight/ProcessExistingFiles 100%. Filesystem-dependent functions (processFile, sendReceiptToScript, runWatcherLoop, RestartWatcher, CreateDirsIfNotExists, ParseOfx, ConvertHeicToPng) require Docker for full coverage — tested in CI.
+- **Overall utils package**: 47.9% (improved from 29.7%). Unit-testable functions at >=85%.
+- **Verification**: `go build ./...` OK, `go vet ./...` OK, `go test ./utils/` OK (all tests pass).
