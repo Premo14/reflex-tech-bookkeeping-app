@@ -1,99 +1,49 @@
-# Architectural & UX Proposals Registry
+# Reflex Tech Bookkeeping Platform — Competitive & Product Proposals
 
-This document is automatically managed by the autonomous hardening agent (Hermes).  
-**Rules of Engagement**:
-1. All items listed here are **proposals only** — no code has been modified in the codebase for these items.
-2. The user will review each proposal, discuss it, and decide whether to **APPROVE**, **MODIFY**, or **REJECT** it before any implementation begins.
+Grounded in the audited codebase (`backend/`, `file-processor/`, `frontend/`) and evaluated against **QuickBooks Online**, **FreshBooks**, **Ramp**, and **Wave**.
 
 ---
 
-<!-- New proposals will be appended below by Hermes in the standard RFC template -->
+## 1. Where Reflex Already Leads
+
+1. **Zero-Friction Local-First Performance**: Single-LAN Docker stack with SSE live sync (`events.Broadcast` + `useLiveSync`), no auth wall on trusted local servers, and instant keyboard-first navigation (`DetailDrawer`, `ReceiptCanvasPane` hotkeys).
+2. **Private Local AI + Physical Scanner Pipeline**: `file-processor` pairs `pdftotext` + `tesseract` + Ollama (`qwen2.5vl` / `llama3.1`) with the Samba `/mnt/inbox` dropbox watcher (`EXDEV`-safe `SafeMove`, file-stability polling), keeping sensitive financial PDFs and receipts strictly on-prem.
+3. **Single-Entry UX Backed by Double-Entry Math Verification**: Users operate a fast single-entry ledger (`BankTransaction` ↔ `Expense` ↔ `Invoice`) while `TrialBalanceTab` verifies Debits = Credits (`varianceCents == 0`) with exact integer-cent `models.Money` arithmetic (`toCents` / `fromCents`).
+4. **CPA-Ready Tax & Recovery Tooling**: `ScheduleCTab` calculates IRS Lines 1–31, 50% meal limits (`Line 24b`), Form 1040-ES / Schedule SE quarterly estimates, §162 mileage vs actual & §280A home-office optimizers, `VendorSpendTab` flags `$600+` 1099-NEC contractors, and `ExportTaxPackZip` + `ExportSystemBackupJSON` provide 1-click tax handoff and full portability.
+5. **Defensive Reconciliation Safeguards**: Closed-period preflight & write locks (`BooksClosedDate`), `Invoice.DeclinedTxIDs` memory preventing unwanted auto-rematch, and multi-receipt allocation progress tracking (`BALANCED`, `PARTIAL`, `OVER_ALLOCATED`, `UNLINKED`).
 
 ---
 
-## PROPOSAL 2026-11-12-01: Migrate invoice write-path money math to integer cents
+## 2. Prioritized Feature & UX Proposals
 
-- **Status:** IMPLEMENTED (Pass 16, 2026-11-13)
-- **Raised:** Pass 11 (A/R Aging & Invoices Report vertical slice), 2026-11-12
-- **Area:** `backend/controllers/invoiceController.go` (create/update/payment-match paths)
-- **Resolution:** Replaced all `roundCents` float64 operations across `CreateInvoice`, `UpdateInvoice`, `MatchInvoicePayment`, and `GetInvoices` summary metrics with exact integer-cent `models.Money` arithmetic (`.Add()`, `.Sub()`, `.PercentOf()`). Added `SweepOverdueInvoices()` and verified with `TestInvoiceWritePathMoneyArithmetic`.
+### P1 — Monthly Bank Statement Reconciliation Workspace (vs QuickBooks / Wave)
+- **Gap**: Users can upload statements via `/api/upload` and lock closed periods via `SettingsModal`, yet there is no dedicated statement ending-balance reconciliation workflow comparing cleared ledger transactions against a statement's opening/ending balance.
+- **Proposal**: Store parsed statement opening/ending balance & statement period metadata, add a **Reconcile Statement** view showing `Cleared Balance - Statement Ending Balance = $0.00` difference, and optionally integrate a passed statement reconciliation check into `computeClosePreflight` before advancing `BooksClosedDate`.
 
----
+### P1 — Recurring Invoices, Retainers & AR Follow-Up History (vs FreshBooks / Wave)
+- **Gap**: `InvoicingModal` and `InvoiceEditorModal` handle single invoices, `Net 15`/`Net 30` due dates, partial payments, and printouts (`InvoicePrintModal`), and `SweepOverdueInvoices` transitions overdue statuses every 15m, but recurring client billing and follow-up tracking are manual.
+- **Proposal**: Add a `RecurringTemplate` schedule (Monthly / Quarterly / Custom cadence) that auto-drafts or marks `SENT` invoices on schedule, plus a lightweight per-invoice reminder note / copy-to-clipboard / `mailto:` dunning action inside `ARAgingTab` so overdue collections are traceable directly from aging buckets.
 
-### Problem
+### P1 — 1099-NEC Contractor Profiles & Dedicated Filing Packet (vs QuickBooks / Gusto / Wave)
+- **Gap**: `VendorSpendTab` surfaces `contractorsOver600`, `total1099Spend`, and `requires1099` badges, yet vendor records lack W-9 collection status, legal business name, address, and masked TIN metadata.
+- **Proposal**: Add an optional local Vendor / Contractor Directory table (W-9 on file toggle, entity type, address, masked TIN) and include a `1099-NEC_Summary.csv` inside `ExportTaxPackZip` for vendors meeting the `$600` non-employee compensation threshold.
 
-The Pass 11 report layer was hardened to exact integer-cent arithmetic
-(`models.Money.Cents`, `.Add()`, `.Sub()`), but the **invoice write path still
-round-trips through float64 dollars**:
+### P2 — Automatic Credit-Card Payment & Inter-Account Transfer Pairing (vs Ramp / Wave)
+- **Gap**: Payments from a checking account to an internal business credit card appear as an outflow in checking and an inflow in the card feed unless manually excluded via `/api/items/exclude`.
+- **Proposal**: Detect equal-and-opposite cross-account transactions within a configurable ±3-day window and offer a 1-click **Link as Internal Transfer** action (excluding both legs symmetrically without distorting revenue or expense totals).
 
-- `invoiceController.go:361` — `BalanceDue = NewMoney(roundCents(invoice.TotalAmount.Dollars() - invoice.AmountPaid.Dollars()))`
-- `invoiceController.go:367-368` — same pattern on the zero-paid branch
-- `invoiceController.go:473-479` — payment-match path: `newPaid := roundCents(invoice.AmountPaid.Dollars() + paymentAmt)`
-- `invoiceController.go:119` — summary fallback uses the same `.Dollars()` round-trip
+### P2 — Percentage/Formula Split Templates in Bank Rules (vs Ramp)
+- **Gap**: `SplitExpenseModal` and `/api/expenses/:id/split` split an individual expense after import, whereas automated rules (`/api/rules`) apply a single category/action per transaction.
+- **Proposal**: Extend `BankRulesModal` actions with multi-line percentage split templates (e.g., `60% Business Internet / 40% Personal Owner's Draw 3110`) evaluated via `PercentOf` exact-cent remainder allocation, plus a dry-run count pill alongside `/api/rules/preview`.
 
-`Dollars()` converts integer cents to float64 dollars; `roundCents` converts
-back. For balances below ~$9e13 this is usually lossless, but it is the exact
-bug class (float precision on money) that motivated the Pass 11 refactor, and it
-is one refactor away from a real cent-drift bug (e.g. repeated partial payments
-on large invoices).
+### P2 — Budgeting vs Actuals & 90-Day Cash Runway Forecasting (vs Ramp)
+- **Gap**: `CashFlowTab` summarizes historical monthly cash in/out and savings rate, and `ARAgingTab` tracks open receivables, but neither projects forward cash runway.
+- **Proposal**: Add optional monthly per-account budget caps and a 30/60/90-day forward cash projection combining current liquid cash (`1010`/`1030`), expected A/R collections weighted by aging bucket, and trailing recurring vendor outflows.
 
-### Proposed change (work items)
+### P3 — Duplicate Receipt Perceptual Hash & Line-Item Split OCR (vs Ramp / Expensify)
+- **Gap**: `file-processor` runs Ollama vision + Tesseract OCR cleanly for totals/dates/vendors, but scanning the same paper receipt twice across `/mnt/inbox` and manual upload can create duplicate unlinked expenses.
+- **Proposal**: Store SHA-256 content hashes (and optional image dHash) on `Receipt` records to surface a non-blocking "Possible duplicate of Receipt #..." badge in `ReviewModal` and `DetailDrawer`.
 
-1. Replace every `roundCents(x.Dollars() ± y.Dollars())` on the invoice write
-   path with the integer-cent Money API: `TotalAmount.Sub(AmountPaid)`,
-   `AmountPaid.Add(paymentMoney)`, `GreaterThan()`, `IsPositive()` — mirroring
-   the hardened `BuildARAgingData` / `arReceivableFor` pattern.
-2. Add a regression test: repeated partial payments (e.g. $0.10 x 3 against a
-   $0.30 invoice) must land on exactly `BalanceDue = 0.00` with no float drift.
-3. Optional data-integrity audit script: for all open invoices verify
-   `BalanceDue == TotalAmount - AmountPaid`; report violations (would catch any
-   historical drift from the old float path).
-
-### Risk / effort
-
-- Effort: S (one file, ~8 call sites, all mechanical; pattern already proven in the report layer).
-- Risk: Low — behavior-preserving for all values where the float path is lossless;
-  strictly more precise otherwise. Requires a backend rebuild + `go test ./...`.
-- Wire format unchanged: `models.Money` still marshals as a 2-decimal JSON number.
-
-### Decision
-
-**APPROVED & IMPLEMENTED** (Committed as `commit d67ceb3`, Pass 16).
-
----
-
-## PROPOSAL 2026-11-13-01: System Snapshot Restoration & Disaster Recovery Engine
-
-- **Status:** PROPOSED
-- **Raised:** Pass 19 (Settings, COA & Backup Audit), 2026-11-13
-- **Area:** `backend/controllers/exportController.go` & `frontend/src/components/AppSettingsModal.tsx`
-- **Scope:** Disaster Recovery & Data Mobility
-
-### Problem
-Reflex provides 1-click JSON backup export (`GET /api/system/backup/export`), bundling company settings, accounts, transactions, receipts, invoices, bank rules, and audit logs into a single portable, 100% private JSON snapshot. However, there is currently no corresponding restore endpoint (`POST /api/system/backup/restore`) or UI workflow to import and restore the database from a backup file if a user migrates to a new machine, recovers from disk failure, or spins up a fresh container.
-
-### Proposed Architecture & Solution
-1. **Backend Restore Handler (`POST /api/system/backup/restore`)**:
-   - Accepts multipart/form-data or JSON payload containing the backup file.
-   - Preflight Verification: Validates schema version (`v1.0`), entity integrity, and checksum before altering existing tables.
-   - Atomic Transaction (`db.Transaction`):
-     - Clears or merges historical records.
-     - Inserts Chart of Accounts (preserving IDs and hierarchies).
-     - Inserts Bank Transactions, Invoices, Expenses, Receipts, and Bank Rules.
-     - Restores Company App Settings and BooksClosedDate.
-     - If any foreign key violation or constraint error occurs, executes an immediate `tx.Rollback()`.
-   - Audit Log: Emits `PeriodAuditLog` with action `SYSTEM_RESTORED` detailing timestamp, record counts, and user agent.
-   - Event Broadcast: Broadcasts `RELOAD_ALL` / `SETTINGS_UPDATED` SSE events to refresh connected clients immediately.
-2. **Frontend Restore UI (`AppSettingsModal.tsx`)**:
-   - In the "Local Data Sovereignty & Full Backup" section, add a matching `[ Restore from Backup (.json) ]` file picker.
-   - Confirmation dialog warning the user that restoring will replace or merge database state, requiring explicit typed confirmation (`RESTORE`).
-   - Progress and success toast with automated dashboard reload.
-
-### Risk / Effort
-- **Effort:** M (~1 day)
-- **Risk:** Medium (destructive operation if mishandled; strictly mitigated by running inside an atomic DB transaction with schema validation).
-
-### Decision
-AWAITING USER REVIEW — APPROVE / MODIFY / REJECT
-
-
+### P3 — Frontend Bundle Code-Splitting & Native Control Polish
+- **Observed Metric**: `vite build` currently emits a single `~700 kB` JS bundle warning (`> 500 kB` after minification).
+- **Proposal**: Lazy-load heavy modals (`ReportsModal`, `ReviewModal`, `DetailDrawer`, `InvoicingModal`, `SettingsModal`) with `React.lazy` + `Suspense` and split `pdfjs-dist` into an async Rollup chunk (`manualChunks`) so initial Ledger Time-to-Interactive stays fast on low-power LAN machines. Also upgrade the remaining compact `<select>` elements in `ARAgingTab` (`DSO Window`) and `ScheduleCTab` (`Tax Year`, `Tax Rate Year`) to use an accessible unified dropdown primitive.

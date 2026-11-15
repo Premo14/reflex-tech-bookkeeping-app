@@ -1,6 +1,6 @@
 import React, { useRef, useState } from "react";
 import { uploadFile } from "../services/api";
-import { useConfirm } from "./ui/ConfirmDialog";
+import { useConfirm } from "./ui/confirmContext";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
 
 interface FileUploaderProps {

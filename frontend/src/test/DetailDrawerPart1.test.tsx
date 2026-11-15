@@ -85,7 +85,7 @@ const makeInvoice = (overrides: Partial<Invoice> = {}): Invoice => ({
     { description: "Cable Run", quantity: 3, unitPrice: 10 },
   ]),
   subtotal: 280,
-  taxRate: 0.08,
+  taxRate: 8,
   taxAmount: 22.4,
   totalAmount: 302.4,
   balanceDue: 150,

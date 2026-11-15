@@ -9,7 +9,7 @@ import type { ChartAccount, Expense } from "../types/models";
 import { splitExpense, type SplitLineInput } from "../services/api";
 import { getGroupedAccounts } from "../utils/accountHierarchy";
 import { formatCurrency, fromCents, toCents } from "../utils/formatCurrency";
-import { useConfirm } from "./ui/ConfirmDialog";
+import { useConfirm } from "./ui/confirmContext";
 
 interface SplitExpenseModalProps {
   isOpen: boolean;

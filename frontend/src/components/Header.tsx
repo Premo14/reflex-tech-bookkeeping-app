@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "./ui/Button";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
-import { useConfirm } from "./ui/ConfirmDialog";
+import { useConfirm } from "./ui/confirmContext";
 import { getDemoStatus, seedDemoData, resetDemoData, removeDemoData } from "../services/api";
 import { useLiveEvent } from "../utils/useLiveSync";
 import type { ChartAccount } from "../types/models";

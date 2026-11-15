@@ -1,35 +1,10 @@
-import React, { createContext, useContext, useState, useCallback, useRef, useEffect, useId } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useId } from 'react';
 import { Button } from './Button';
-
-export interface ConfirmOptions {
-  title?: string;
-  message: string;
-  confirmText?: string;
-  cancelText?: string;
-  variant?: 'primary' | 'danger' | 'secondary';
-}
-
-export interface AlertOptions {
-  title?: string;
-  message: string;
-  okText?: string;
-  variant?: 'primary' | 'danger' | 'secondary';
-}
-
-interface ConfirmationContextType {
-  confirm: (options: ConfirmOptions | string) => Promise<boolean>;
-  alert: (options: AlertOptions | string, title?: string) => Promise<void>;
-}
-
-const ConfirmationContext = createContext<ConfirmationContextType | null>(null);
-
-export function useConfirm() {
-  const context = useContext(ConfirmationContext);
-  if (!context) {
-    throw new Error('useConfirm must be used within a ConfirmationProvider');
-  }
-  return context;
-}
+import {
+  ConfirmationContext,
+  type ConfirmOptions,
+  type AlertOptions,
+} from './confirmContext';
 
 export interface ConfirmModalProps {
   isOpen: boolean;

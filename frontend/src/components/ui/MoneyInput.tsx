@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { Input } from './Input';
 
 interface MoneyInputProps {
@@ -20,6 +20,11 @@ const formatInitialMoney = (v: number | string | null | undefined): string => {
   return isNaN(p) ? '' : (Math.round(p * 100) / 100).toFixed(2);
 };
 
+interface EditState {
+  draft: string;
+  basePropValue: number | string | null | undefined;
+}
+
 export const MoneyInput = ({
   value,
   onChange,
@@ -32,49 +37,53 @@ export const MoneyInput = ({
   id,
   name,
 }: MoneyInputProps) => {
-  const [strVal, setStrVal] = useState(() => formatInitialMoney(value));
   const [isFocused, setIsFocused] = useState(false);
-  const lastEmittedRef = useRef<number | null>(null);
+  const [editState, setEditState] = useState<EditState | null>(null);
+  const [lastEmitted, setLastEmitted] = useState<number | null>(null);
 
-  useEffect(() => {
-    if (!isFocused) {
-      setStrVal(formatInitialMoney(value));
-    } else if (value !== null && value !== undefined && value !== '') {
+  const computeFocusedDisplay = (): string => {
+    if (editState === null) {
+      return formatInitialMoney(value);
+    }
+    if (value !== editState.basePropValue && value !== null && value !== undefined && value !== '') {
       const num = typeof value === 'number' ? value : parseFloat(value);
-      if (!isNaN(num) && lastEmittedRef.current !== null && Math.abs(num - lastEmittedRef.current) > 0.001) {
-        setStrVal(String(value));
+      if (!isNaN(num) && lastEmitted !== null && Math.abs(num - lastEmitted) > 0.001) {
+        return String(value);
       }
     }
-  }, [value, isFocused]);
+    return editState.draft;
+  };
+
+  const strVal = isFocused ? computeFocusedDisplay() : formatInitialMoney(value);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
-    setStrVal(raw);
+    setEditState({ draft: raw, basePropValue: value });
     const parsed = parseFloat(raw);
     if (!isNaN(parsed)) {
       const val = !allowNegative && parsed < 0 ? Math.abs(parsed) : parsed;
-      lastEmittedRef.current = val;
+      setLastEmitted(val);
       onChange(val);
     } else if (raw === '' || raw === '-') {
-      lastEmittedRef.current = 0;
+      setLastEmitted(0);
       onChange(0);
     }
   };
 
   const handleBlur = () => {
+    const currentRaw = strVal;
     setIsFocused(false);
-    let parsed = parseFloat(strVal);
-    if (isNaN(parsed) || strVal.trim() === '') {
-      setStrVal('');
-      lastEmittedRef.current = 0;
+    setEditState(null);
+    let parsed = parseFloat(currentRaw);
+    if (isNaN(parsed) || currentRaw.trim() === '') {
+      setLastEmitted(0);
       onChange(0);
       return;
     }
     if (!allowNegative && parsed < 0) parsed = Math.abs(parsed);
     const roundedCents = Math.round(parsed * 100);
     const finalNum = roundedCents / 100;
-    setStrVal(finalNum.toFixed(2));
-    lastEmittedRef.current = finalNum;
+    setLastEmitted(finalNum);
     onChange(finalNum);
   };
 
@@ -101,6 +110,7 @@ export const MoneyInput = ({
       value={strVal}
       onChange={handleChange}
       onFocus={(e) => {
+        setEditState({ draft: formatInitialMoney(value), basePropValue: value });
         setIsFocused(true);
         e.target.select();
       }}

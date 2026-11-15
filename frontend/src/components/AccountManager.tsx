@@ -5,7 +5,7 @@ import { Select } from "./ui/Select";
 import { Badge } from "./ui/Badge";
 import type { ChartAccount, CreateChartAccountInput, UpdateChartAccountInput } from "../types/models";
 import { createChartAccount, updateChartAccount, deleteChartAccount } from "../services/api";
-import { useConfirm } from "./ui/ConfirmDialog";
+import { useConfirm } from "./ui/confirmContext";
 import {
   ACCOUNT_SUBCLASSES,
   SCHEDULE_C_OPTIONS,

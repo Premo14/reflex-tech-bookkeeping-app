@@ -30,7 +30,7 @@ import type {
 import CreateExpenseForm from "./CreateExpenseForm";
 import CreateTransactionForm from "./CreateTransactionForm";
 import Pagination from "./ui/Pagination";
-import { useConfirm } from "./ui/ConfirmDialog";
+import { useConfirm } from "./ui/confirmContext";
 import { useLiveEvent } from "../utils/useLiveSync";
 import { formatCurrency } from "../utils/formatCurrency";
 

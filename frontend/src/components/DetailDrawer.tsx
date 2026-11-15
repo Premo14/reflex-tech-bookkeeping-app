@@ -3,7 +3,7 @@ import ReactDOM from "react-dom";
 import { Button } from "./ui/Button";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
 import { Tooltip } from "./ui/Tooltip";
-import { useConfirm } from "./ui/ConfirmDialog";
+import { useConfirm } from "./ui/confirmContext";
 import ExcludeItemModal from "./ExcludeItemModal";
 import SplitExpenseModal from "./SplitExpenseModal";
 import { EXCLUSION_REASON_LABELS } from "../utils/ledgerStatus";

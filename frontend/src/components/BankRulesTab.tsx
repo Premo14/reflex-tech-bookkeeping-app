@@ -4,7 +4,7 @@ import { Badge } from "./ui/Badge";
 import { Input } from "./ui/Input";
 import { Select } from "./ui/Select";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
-import { useConfirm } from "./ui/ConfirmDialog";
+import { useConfirm } from "./ui/confirmContext";
 import {
   getBankRules,
   getBankRuleSuggestions,

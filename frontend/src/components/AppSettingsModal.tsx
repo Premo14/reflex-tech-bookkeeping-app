@@ -3,7 +3,7 @@ import { Modal } from "./ui/Modal";
 import { Button } from "./ui/Button";
 import { Badge } from "./ui/Badge";
 import { Input } from "./ui/Input";
-import { useConfirm } from "./ui/ConfirmDialog";
+import { useConfirm } from "./ui/confirmContext";
 import { updateSettings, browseHostDirectories, getSystemBackupDownloadUrl, restoreSystemBackup } from "../services/api";
 import BankRulesTab from "./BankRulesTab";
 

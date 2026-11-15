@@ -228,7 +228,7 @@ export function DetailInvoiceView({
           </div>
           {invoice.taxAmount !== undefined && invoice.taxAmount > 0 && (
             <div className="flex justify-between text-zinc-400">
-              <span>Tax ({((invoice.taxRate || 0) * 100).toFixed(1)}%):</span>
+              <span>Tax ({(invoice.taxRate || 0).toFixed(1)}%):</span>
               <span className="font-mono tabular-nums text-zinc-200">{formatCurrency(invoice.taxAmount)}</span>
             </div>
           )}

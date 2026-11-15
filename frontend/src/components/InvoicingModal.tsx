@@ -3,7 +3,7 @@ import { Modal } from "./ui/Modal";
 import { Button } from "./ui/Button";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
-import { useConfirm } from "./ui/ConfirmDialog";
+import { useConfirm } from "./ui/confirmContext";
 import DetailDrawer from "./DetailDrawer";
 import { InvoiceEditorModal } from "./invoicing/InvoiceEditorModal";
 import { InvoiceMatchPaymentModal } from "./invoicing/InvoiceMatchPaymentModal";
