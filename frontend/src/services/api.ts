@@ -345,7 +345,7 @@ export function linkExpenseToTransaction(
 }
 
 export interface CreateAndLinkInput {
-  type: "transaction" | "expense";
+  type: "transaction" | "receipt" | "expense";
   targetId: number;
   date?: string;
   amount?: number;

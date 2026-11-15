@@ -1,10 +1,8 @@
 import { useEffect, useState, useRef } from "react";
 import { Button } from "./ui/Button";
-import { Card } from "./ui/Card";
 import { Input } from "./ui/Input";
 import { Select } from "./ui/Select";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
-import Pagination from "./ui/Pagination";
 import ReactDOM from "react-dom";
 import ExcludeItemModal from "./ExcludeItemModal";
 import { EXCLUSION_REASON_LABELS } from "../utils/ledgerStatus";
@@ -18,7 +16,8 @@ import {
   linkExpenseToInvoice, unlinkExpenseFromInvoice,
   createAndLink, uploadReceiptToExpense, deleteReceipt,
   getSettings, getChartAccounts, resolveReviewItems, restoreItem,
-  getInvoice, deleteInvoice, matchInvoicePayment, markInvoicePaidCash, unmatchInvoicePayment, getInvoiceCandidates, getInvoices
+  getInvoice, deleteInvoice, matchInvoicePayment, markInvoicePaidCash, unmatchInvoicePayment, getInvoiceCandidates, getInvoices,
+  type CreateAndLinkInput,
 } from "../services/api";
 import type {
   BankTransaction,
@@ -28,15 +27,27 @@ import type {
   ScoredDepositCandidate,
   ScoredExpenseCandidate,
   ScoredTransactionCandidate,
-  InvoiceLineItem,
 } from "../types/models";
-import CreateExpenseForm from "./CreateExpenseForm";
-import CreateTransactionForm from "./CreateTransactionForm";
 import { SuggestedMatchesList } from "./SuggestedMatchesList";
 import { getGroupedAccounts } from "../utils/accountHierarchy";
-import { formatDate, formatPaymentTerms } from "../utils/dateUtils";
+import { formatDate } from "../utils/dateUtils";
+import { formatCurrency } from "../utils/formatCurrency";
 import { useLiveEvent } from "../utils/useLiveSync";
 import { extractCleanVendor } from "../utils/vendorUtils";
+import { ReceiptCanvasPane } from "./detail-drawer/ReceiptCanvasPane";
+import { DetailInvoiceView } from "./detail-drawer/DetailInvoiceView";
+import { DetailLinkPicker } from "./detail-drawer/DetailLinkPicker";
+import { DetailSubModals } from "./detail-drawer/DetailSubModals";
+import type {
+  ActionChoiceState,
+  ActionTarget,
+  AllowConfirmState,
+  ConflictModalState,
+  CreateAndLinkPayload,
+  CreateFormState,
+  OverAllocatedModalState,
+  ReplaceOrAddModalState,
+} from "./detail-drawer/types";
 
 const CURRENCIES = [
   "USD", "EUR", "GBP", "CAD", "AUD", "JPY", "INR", "CNY", "CHF", "SGD", 
@@ -103,7 +114,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
   const [showLinkPanel, setShowLinkPanel] = useState(false);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createForm, setCreateForm] = useState<any>({});
+  const [createForm, setCreateForm] = useState<CreateFormState>({});
   const [isSaving, setIsSaving] = useState(false);
 
   const [showReceiptModal, setShowReceiptModal] = useState(false);
@@ -111,14 +122,14 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
   const [isLoading, setIsLoading] = useState(true);
   const [isClosed, setIsClosed] = useState(false);
   const [isDateInClosedPeriod, setIsDateInClosedPeriod] = useState(false);
-  const [excludeTarget, setExcludeTarget] = useState<{type: "transaction"|"expense", id: number, linkedChoice?: "ONLY_THIS" | "ALL_LINKED"} | null>(null);
-  const [ignoreTarget, setIgnoreTarget] = useState<{type: "transaction"|"expense", id: number, linkedChoice?: "ONLY_THIS" | "ALL_LINKED"} | null>(null);
-  const [actionChoiceModal, setActionChoiceModal] = useState<{ action: "EXCLUDE" | "IGNORE", targetType: "transaction" | "expense", targetId: number } | null>(null);
+  const [excludeTarget, setExcludeTarget] = useState<ActionTarget | null>(null);
+  const [ignoreTarget, setIgnoreTarget] = useState<ActionTarget | null>(null);
+  const [actionChoiceModal, setActionChoiceModal] = useState<ActionChoiceState | null>(null);
   const [isVisible, setIsVisible] = useState(false);
-  const [conflictModalData, setConflictModalData] = useState<any>(null);
-  const [overAllocatedModalData, setOverAllocatedModalData] = useState<any>(null);
-  const [replaceOrAddModalData, setReplaceOrAddModalData] = useState<any>(null);
-  const [allowConfirmTarget, setAllowConfirmTarget] = useState<{ type: "transaction" | "expense"; id: number; date: string } | null>(null);
+  const [conflictModalData, setConflictModalData] = useState<ConflictModalState | null>(null);
+  const [overAllocatedModalData, setOverAllocatedModalData] = useState<OverAllocatedModalState | null>(null);
+  const [replaceOrAddModalData, setReplaceOrAddModalData] = useState<ReplaceOrAddModalState | null>(null);
+  const [allowConfirmTarget, setAllowConfirmTarget] = useState<AllowConfirmState | null>(null);
   const [isAllowing, setIsAllowing] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoreError, setRestoreError] = useState("");
@@ -169,7 +180,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
 
   const isDeposit = type === "transaction" && tx && tx.amount > 0;
 
-  const formatMoney = (amount: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+  const formatMoney = formatCurrency;
   const expenseReceiptCount = (activeExpense || expense)?.receipts?.length ?? 0;
   const canAddMoreTransactions = !(expenseReceiptCount > 1 && transactionsList.length >= 1);
 
@@ -496,42 +507,13 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
         return;
       }
 
-      if (isInputFocused) return;
+      if (isInputFocused || showReceiptModal) return;
 
-      if (showReceiptModal) {
-        const receipts = activeExpense?.receipts || [];
-        if (receipts.length > 1) {
-          if (e.key === "ArrowLeft") {
-            setActiveReceiptIdx(prev => Math.max(0, prev - 1));
-            setReceiptZoom(1);
-            setReceiptRotation(0);
-          } else if (e.key === "ArrowRight") {
-            setActiveReceiptIdx(prev => Math.min(receipts.length - 1, prev + 1));
-            setReceiptZoom(1);
-            setReceiptRotation(0);
-          }
-        }
-        if (e.key === "+" || e.key === "=") {
-          e.preventDefault();
-          setReceiptZoom(prev => Math.min(3, prev + 0.25));
-        } else if (e.key === "-" || e.key === "_") {
-          e.preventDefault();
-          setReceiptZoom(prev => Math.max(0.5, prev - 0.25));
-        } else if (e.key === "0") {
-          e.preventDefault();
-          setReceiptZoom(1);
-          setReceiptRotation(0);
-        } else if (e.key === "r" || e.key === "R") {
-          e.preventDefault();
-          setReceiptRotation(prev => (prev + 90) % 360);
-        }
-      } else {
-        if ((e.key === "a" || e.key === "A") && !isClosed) {
-          if (type === "transaction" && suggestedExpenseCandidates.length > 0 && suggestedExpenseCandidates[0].score >= 50) {
-            handleApproveSuggestedMatch("expense", suggestedExpenseCandidates[0].expense.id);
-          } else if (type === "receipt" && suggestedTransactionCandidates.length > 0 && suggestedTransactionCandidates[0].score >= 50) {
-            handleApproveSuggestedMatch("tx", suggestedTransactionCandidates[0].transaction.id);
-          }
+      if ((e.key === "a" || e.key === "A") && !isClosed) {
+        if (type === "transaction" && suggestedExpenseCandidates.length > 0 && suggestedExpenseCandidates[0].score >= 50) {
+          handleApproveSuggestedMatch("expense", suggestedExpenseCandidates[0].expense.id);
+        } else if (type === "receipt" && suggestedTransactionCandidates.length > 0 && suggestedTransactionCandidates[0].score >= 50) {
+          handleApproveSuggestedMatch("tx", suggestedTransactionCandidates[0].transaction.id);
         }
       }
     };
@@ -541,7 +523,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
     showCreateModal, showReceiptModal, excludeTarget, ignoreTarget,
     actionChoiceModal, conflictModalData, overAllocatedModalData,
     replaceOrAddModalData, allowConfirmTarget, onClose,
-    type, suggestedExpenseCandidates, suggestedTransactionCandidates, activeExpense, isClosed
+    type, suggestedExpenseCandidates, suggestedTransactionCandidates, isClosed
   ]);
 
   const validateForm = async (formState: any, isTx: boolean): Promise<boolean> => {
@@ -715,7 +697,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
     }
   };
 
-  const executeCreateAndLink = async (payload: any, overrideChartAccountId?: number, force: boolean = false) => {
+  const executeCreateAndLink = async (payload: CreateAndLinkPayload, overrideChartAccountId?: number, force: boolean = false) => {
     try {
       // Client-side validation
       let amt = Number(payload.amount);
@@ -744,28 +726,25 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
         return;
       }
 
+      const normalizedPayload: CreateAndLinkPayload = { ...payload };
       // Enforce correct sign for transactions
-      if (type === "receipt" && payload.transactionType) {
-        const out = payload.transactionType === 'DEBIT' || payload.transactionType === 'PAYMENT';
+      if (type === "receipt" && normalizedPayload.transactionType) {
+        const out = normalizedPayload.transactionType === 'DEBIT' || normalizedPayload.transactionType === 'PAYMENT';
         if (out && amt > 0) amt = -amt;
         else if (!out && amt < 0) amt = Math.abs(amt);
-        payload.amount = amt;
+        normalizedPayload.amount = amt;
       }
 
-      if (payload.chartAccountId) payload.chartAccountId = Number(payload.chartAccountId);
-      if (payload.categoryAccountId) payload.categoryAccountId = Number(payload.categoryAccountId);
+      if (normalizedPayload.chartAccountId) normalizedPayload.chartAccountId = Number(normalizedPayload.chartAccountId);
+      if (normalizedPayload.categoryAccountId) normalizedPayload.categoryAccountId = Number(normalizedPayload.categoryAccountId);
 
-      const fullPayload = {
-        ...payload,
-        type,
+      const fullPayload: CreateAndLinkInput = {
+        ...normalizedPayload,
+        type: type === "transaction" ? "transaction" : "receipt",
         targetId: Number(id),
+        ...(overrideChartAccountId !== undefined ? { overrideChartAccountId } : {}),
+        ...(force ? { force: true } : {}),
       };
-      if (overrideChartAccountId !== undefined) {
-        fullPayload.overrideChartAccountId = overrideChartAccountId;
-      }
-      if (force) {
-        fullPayload.force = true;
-      }
       await createAndLink(fullPayload);
       setConflictModalData(null);
       setOverAllocatedModalData(null);
@@ -952,11 +931,16 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
     setIsSaving(true);
     try {
       if (type === "transaction" && tx) {
-        const payload: any = { type: "transaction", targetId: tx.id, ...createForm, amount: Number(createForm.amount) };
-        if (createForm.timestamp) payload.timestamp = new Date(createForm.timestamp).toISOString();
-        if (createForm.date) payload.date = new Date(createForm.date).toISOString();
-        if (createForm.chartAccountId) payload.chartAccountId = Number(createForm.chartAccountId);
-        
+        const payload: CreateAndLinkPayload = {
+          ...createForm,
+          type: "transaction",
+          targetId: tx.id,
+          amount: Number(createForm.amount),
+          timestamp: createForm.timestamp ? new Date(createForm.timestamp).toISOString() : undefined,
+          date: createForm.date ? new Date(createForm.date).toISOString() : undefined,
+          chartAccountId: createForm.chartAccountId ? Number(createForm.chartAccountId) : undefined,
+        };
+
         if (expensesList.length > 0) {
           setReplaceOrAddModalData({ createPayload: payload, isCreateMode: true });
           return;
@@ -970,12 +954,17 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
           });
           return;
         }
-        const payload: any = { type: "receipt", targetId: expense.id, ...createForm, amount: Number(createForm.amount) };
-        if (createForm.date) payload.date = new Date(createForm.date).toISOString();
-        if (createForm.timestamp) payload.timestamp = new Date(createForm.timestamp).toISOString();
-        if (createForm.chartAccountId) payload.chartAccountId = Number(createForm.chartAccountId);
-        if (createForm.categoryAccountId) payload.categoryAccountId = Number(createForm.categoryAccountId);
-        
+        const payload: CreateAndLinkPayload = {
+          ...createForm,
+          type: "receipt",
+          targetId: expense.id,
+          amount: Number(createForm.amount),
+          date: createForm.date ? new Date(createForm.date).toISOString() : undefined,
+          timestamp: createForm.timestamp ? new Date(createForm.timestamp).toISOString() : undefined,
+          chartAccountId: createForm.chartAccountId ? Number(createForm.chartAccountId) : undefined,
+          categoryAccountId: createForm.categoryAccountId ? Number(createForm.categoryAccountId) : undefined,
+        };
+
         if (transactionsList.length > 0) {
           setReplaceOrAddModalData({ createPayload: payload, isCreateMode: true });
           return;
@@ -983,7 +972,122 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
         await executeCreateAndLink(payload);
       }
       setCreateForm({});
-    } finally { setIsSaving(false); }
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleConfirmIgnore = async (target: ActionTarget) => {
+    setIsSaving(true);
+    try {
+      if (target.linkedChoice === "ONLY_THIS") {
+        if (target.type === "transaction") {
+          for (const e of confirmedExpenses) await unlinkExpenseFromTransaction(e.id, target.id);
+          await resolveReviewItems("ignore_warnings", [target.id], []);
+        } else {
+          for (const t of confirmedTransactions) await unlinkExpenseFromTransaction(target.id, t.id);
+          await resolveReviewItems("ignore_warnings", [], [target.id]);
+        }
+      } else if (target.linkedChoice === "ALL_LINKED") {
+        const tIds = type === "transaction" && tx ? [tx.id] : confirmedTransactions.map((t) => t.id);
+        const eIds = type === "receipt" && expense ? [expense.id] : confirmedExpenses.map((e) => e.id);
+        await resolveReviewItems("ignore_warnings", tIds, eIds);
+      } else {
+        if (target.type === "transaction") await resolveReviewItems("ignore_warnings", [target.id], []);
+        else await resolveReviewItems("ignore_warnings", [], [target.id]);
+      }
+      setIgnoreTarget(null);
+      await loadData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to ignore warnings";
+      await alert({ title: "Ignore Failed", message: `Failed to ignore: ${msg}`, variant: "danger" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSelectActionChoice = (choice: "ONLY_THIS" | "ALL_LINKED", data: ActionChoiceState) => {
+    setActionChoiceModal(null);
+    if (data.action === "EXCLUDE") {
+      setExcludeTarget({ type: data.targetType, id: data.targetId, linkedChoice: choice });
+    } else {
+      setIgnoreTarget({ type: data.targetType, id: data.targetId, linkedChoice: choice });
+    }
+  };
+
+  const handleResolveConflict = (chosenCategoryId: number, data: ConflictModalState) => {
+    if (data.isCreateMode) {
+      void executeCreateAndLink(data.createPayload, chosenCategoryId);
+    } else {
+      void executeLink(data.expenseId, data.transactionId, chosenCategoryId);
+    }
+  };
+
+  const handleAddSplitLink = (data: ReplaceOrAddModalState) => {
+    setReplaceOrAddModalData(null);
+    if (data.isSuggested) {
+      if (data.suggestedExpId && tx) void executeLink(data.suggestedExpId, tx.id);
+      if (data.suggestedTxId && expense) void executeLink(expense.id, data.suggestedTxId);
+    } else if (data.isCreateMode && data.createPayload) {
+      void executeCreateAndLink(data.createPayload);
+    } else if (data.selectedLinkId !== undefined) {
+      if (type === "transaction" && tx) void executeLink(data.selectedLinkId, tx.id);
+      else if (expense) void executeLink(expense.id, data.selectedLinkId);
+    }
+  };
+
+  const handleReplaceLinks = async (data: ReplaceOrAddModalState) => {
+    setReplaceOrAddModalData(null);
+    setIsSaving(true);
+    try {
+      if (type === "transaction" && tx) {
+        for (const e of confirmedExpenses) await unlinkExpenseFromTransaction(e.id, tx.id);
+      } else if (type === "receipt" && expense) {
+        for (const t of confirmedTransactions) await unlinkExpenseFromTransaction(expense.id, t.id);
+      }
+
+      if (data.isSuggested) {
+        if (data.suggestedExpId && tx) await executeLink(data.suggestedExpId, tx.id);
+        if (data.suggestedTxId && expense) await executeLink(expense.id, data.suggestedTxId);
+      } else if (data.isCreateMode && data.createPayload) {
+        await executeCreateAndLink(data.createPayload);
+      } else if (data.selectedLinkId !== undefined) {
+        if (type === "transaction" && tx) await executeLink(data.selectedLinkId, tx.id);
+        else if (expense) await executeLink(expense.id, data.selectedLinkId);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to replace links";
+      await alert({ title: "Replace Links Failed", message: `Failed to replace links: ${msg}`, variant: "danger" });
+    } finally {
+      setIsSaving(false);
+      void loadData(true);
+    }
+  };
+
+  const handleConfirmOverAllocated = (data: OverAllocatedModalState) => {
+    if (data.isCreateMode) {
+      void executeCreateAndLink(data.createPayload, data.overrideChartAccountId, true);
+    } else {
+      void executeLink(data.expenseId, data.transactionId, data.overrideChartAccountId, true);
+    }
+  };
+
+  const handleConfirmAllowClosed = async (target: AllowConfirmState) => {
+    setIsAllowing(true);
+    try {
+      await resolveReviewItems(
+        "allow",
+        target.type === "transaction" ? [target.id] : [],
+        target.type === "expense" ? [target.id] : []
+      );
+      setAllowConfirmTarget(null);
+      await loadData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to allow item";
+      await alert({ title: "Allow Item Failed", message: `Failed to allow item: ${msg}`, variant: "danger" });
+    } finally {
+      setIsAllowing(false);
+    }
   };
 
   const renderTransactionPagination = () => {
@@ -1116,533 +1220,49 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
   const itemAwaitingReview = itemReviewStatus === 'PENDING' && isDateInClosedPeriod;
 
   const renderLinkPicker = () => {
-    if (!showLinkPanel) return null;
-    const isInvoiceMode = linkTargetMode === "invoice";
-    const isNonDepositTxInvoice = isInvoiceMode && type === "transaction" && (!tx || tx.amount <= 0);
-    const hasEmptyList = isInvoiceMode
-      ? linkInvoices.length === 0
-      : type === "transaction"
-        ? unlinked.expenses.length === 0
-        : unlinked.transactions.length === 0;
-
+    if (!showLinkPanel || (type !== "transaction" && type !== "receipt")) return null;
     return (
-      <div className="border border-white/10 bg-zinc-900/90 rounded-xl p-3.5 sm:p-4 backdrop-blur-md mt-4 shadow-xl">
-        <div className="flex flex-col gap-3 mb-4 border-b border-zinc-800 pb-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <span>
-                  Link Existing{" "}
-                  {isInvoiceMode
-                    ? "Invoice"
-                    : type === "transaction"
-                      ? "Expense"
-                      : "Transaction"}
-                </span>
-              </h2>
-              <p className="text-xs text-zinc-400 mt-0.5">
-                {isInvoiceMode
-                  ? type === "transaction"
-                    ? "Match this bank deposit to an open client invoice."
-                    : "Associate this receipt/expense with a client invoice."
-                  : "Select a matching record to link."}
-              </p>
-            </div>
-            <div className="inline-flex bg-zinc-950 p-0.5 rounded-lg border border-white/10">
-              {type === "transaction" ? (
-                <button
-                  type="button"
-                  onClick={() => { setLinkTargetMode("expense"); setSelectedLinkId(null); setLinkPage(1); }}
-                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
-                    !isInvoiceMode ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "text-zinc-400 hover:text-white"
-                  }`}
-                >
-                  Expenses
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => { setLinkTargetMode("tx"); setSelectedLinkId(null); setLinkPage(1); }}
-                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
-                    !isInvoiceMode ? "bg-blue-500/20 text-blue-300 border border-blue-500/30" : "text-zinc-400 hover:text-white"
-                  }`}
-                >
-                  Bank Transactions
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => { setLinkTargetMode("invoice"); setSelectedLinkId(null); setLinkPage(1); }}
-                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
-                  isInvoiceMode ? "bg-indigo-500/20 text-indigo-300 border border-indigo-500/30" : "text-zinc-400 hover:text-white"
-                }`}
-              >
-                Invoices
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 w-full">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-zinc-400 font-medium">From</span>
-              <Input type="date" value={linkStartDate} onChange={(e) => { setLinkStartDate(e.target.value); setLinkPage(1); }} className="text-xs py-1 w-32" title="Start Date" />
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-zinc-400 font-medium">To</span>
-              <Input type="date" value={linkEndDate} onChange={(e) => { setLinkEndDate(e.target.value); setLinkPage(1); }} className="text-xs py-1 w-32" title="End Date" />
-            </div>
-            <Input type="text" placeholder={isInvoiceMode ? "Search Client / Invoice #..." : "Search Amount / Text..."} value={linkSearch} onChange={(e) => { setLinkSearch(e.target.value); setLinkPage(1); }} className="w-full sm:w-44 text-xs py-1 flex-1" />
-          </div>
-        </div>
-
-        {isNonDepositTxInvoice && (
-          <div className="mb-3 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs">
-            Only incoming deposits (+ positive amount) can settle a client invoice payment. Select the <strong>Expenses</strong> tab to link debit purchases.
-          </div>
-        )}
-
-        {type === "receipt" && !isInvoiceMode && activeExpense?.tender?.toLowerCase() === "cash" && (
-          <div className="mb-3 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs">
-            Cash expenses are auto-balanced without bank statement matching. Switch to the <strong>Invoices</strong> tab to attach this cash slip to a client invoice.
-          </div>
-        )}
-
-        <div className="max-h-80 overflow-y-auto border border-zinc-800 rounded-md bg-zinc-950 mb-3">
-          {hasEmptyList ? (
-            <div className="p-6 text-center text-zinc-400 text-sm">
-              {isInvoiceMode ? "No matching invoices found." : "No unlinked items available."}
-            </div>
-          ) : (
-            <ul className="divide-y divide-zinc-800">
-              {isInvoiceMode && linkInvoices.map((inv) => {
-                const bal = inv.balanceDue ?? inv.totalAmount;
-                return (
-                  <li key={inv.id}>
-                    <Card active={selectedLinkId === inv.id} onClick={() => setSelectedLinkId(inv.id)} className="flex-col! items-start! gap-1 cursor-pointer hover:bg-zinc-800/50">
-                      <div className="w-full flex justify-between items-center gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="font-mono text-xs font-bold text-indigo-400">{inv.invoiceNumber || `INV-${inv.id}`}</span>
-                          <span className="font-semibold text-white">{formatMoney(inv.totalAmount)}</span>
-                          {bal > 0 && bal < inv.totalAmount && (
-                            <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                              Bal {formatMoney(bal)}
-                            </span>
-                          )}
-                          <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
-                            inv.status === "PAID" ? "bg-emerald-500/10 text-emerald-400" :
-                            inv.status === "OVERDUE" ? "bg-red-500/10 text-red-400" :
-                            "bg-blue-500/10 text-blue-300"
-                          }`}>
-                            {inv.status}
-                          </span>
-                        </div>
-                        <span className="text-xs text-zinc-400 shrink-0">{formatDate(inv.issueDate)}</span>
-                      </div>
-                      <div className="text-sm text-zinc-300 truncate w-full">
-                        {inv.clientName}{inv.clientEmail ? ` — ${inv.clientEmail}` : ""}
-                      </div>
-                    </Card>
-                  </li>
-                );
-              })}
-
-              {!isInvoiceMode && type === "transaction" && unlinked.expenses.map(e => (
-                <li key={e.id}>
-                  <Card active={selectedLinkId === e.id} onClick={() => setSelectedLinkId(e.id)} className="flex-col! items-start! gap-1 cursor-pointer hover:bg-zinc-800/50">
-                    <div className="w-full flex justify-between items-center">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-white">{formatMoney(e.amount)}</span>
-                        {e.allocationStatus === "PARTIALLY_ALLOCATED" && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Under-Allocated</span>
-                        )}
-                        {e.chartAccount && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded font-mono bg-purple-500/10 text-purple-300 border border-purple-500/20">
-                            {e.chartAccount.code} {e.chartAccount.name}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-xs text-zinc-400">{formatDate(e.timestamp)}</span>
-                    </div>
-                    <div className="text-sm text-zinc-400 truncate w-full">{e.vendor} — {e.description}</div>
-                  </Card>
-                </li>
-              ))}
-
-              {!isInvoiceMode && type === "receipt" && unlinked.transactions.map(t => (
-                <li key={t.id}>
-                  <Card active={selectedLinkId === t.id} onClick={() => setSelectedLinkId(t.id)} className="flex-col! items-start! gap-1 cursor-pointer hover:bg-zinc-800/50">
-                    <div className="w-full flex justify-between items-center">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-white">{formatMoney(t.amount)}</span>
-                        {t.allocationStatus === "PARTIALLY_ALLOCATED" && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Under-Allocated</span>
-                        )}
-                        {t.chartAccount && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded font-mono bg-blue-500/10 text-blue-300 border border-blue-500/20">
-                            {t.chartAccount.code} {t.chartAccount.name}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-xs text-zinc-400">{formatDate(t.date)}</span>
-                    </div>
-                    <div className="text-sm text-zinc-400 truncate w-full">{t.description}</div>
-                  </Card>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
-          {!isInvoiceMode ? (
-            <Pagination currentPage={linkPage} totalPages={unlinkedTotalPages} onPageChange={setLinkPage} />
-          ) : (
-            <span className="text-[11px] text-zinc-400">{linkInvoices.length} invoice{linkInvoices.length === 1 ? "" : "s"} shown</span>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={() => { setShowLinkPanel(false); setSelectedLinkId(null); }}>Cancel</Button>
-            {selectedLinkId !== null && (
-              <Button
-                variant="info"
-                size="sm"
-                disabled={isNonDepositTxInvoice || (type === "receipt" && !isInvoiceMode && activeExpense?.tender?.toLowerCase() === "cash")}
-                isLoading={isLinkingInvoice || isMatchingInvoice}
-                onClick={handleLink}
-              >
-                {isInvoiceMode ? (type === "transaction" ? "Match & Mark Paid" : "Link to Invoice") : "Confirm Link"}
-              </Button>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const renderInvoiceView = () => {
-    if (!invoice) return null;
-
-    let items: InvoiceLineItem[] = [];
-    try {
-      if (typeof invoice.items === 'string') {
-        items = JSON.parse(invoice.items);
-      } else if (Array.isArray(invoice.items)) {
-        items = invoice.items;
-      }
-    } catch {
-      items = [];
-    }
-
-    const isPaid = invoice.status === 'PAID';
-    const hasTx = !!(invoice.bankTransactionId || invoice.bankTransaction);
-    const linkedTx = invoice.bankTransaction;
-    const isCashPayment = Boolean(
-      linkedTx && (
-        (linkedTx.isManual && linkedTx.fitId?.startsWith('CASH-INV-')) ||
-        linkedTx.chartAccount?.code === '1030' ||
-        linkedTx.description?.startsWith('Cash Payment —')
-      )
-    );
-
-    return (
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5 items-stretch relative">
-        {/* LEFT COLUMN: INVOICE DETAILS */}
-        <div className="bg-white/2 border border-white/5 rounded-xl p-4 sm:p-5 backdrop-blur-md shadow-lg flex flex-col space-y-4">
-          <div className="flex justify-between items-start border-b border-zinc-800 pb-3 gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 mb-1 flex-wrap">
-                <span className="font-mono text-xs font-bold text-indigo-400">
-                  {invoice.invoiceNumber || `INV-${invoice.id}`}
-                </span>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                  isPaid ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
-                  invoice.status === 'OVERDUE' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
-                  invoice.status === 'SENT' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
-                  'bg-zinc-700/50 text-zinc-300'
-                }`}>
-                  {invoice.status}
-                </span>
-              </div>
-              <h2 className="text-base font-bold text-white">{invoice.clientName}</h2>
-              {invoice.clientEmail && <p className="text-xs text-zinc-400 mt-0.5">{invoice.clientEmail}</p>}
-              {invoice.clientAddress && <p className="text-xs text-zinc-400 mt-0.5 whitespace-pre-line">{invoice.clientAddress}</p>}
-            </div>
-            <div className="text-right shrink-0">
-              <span className="text-[10px] uppercase font-bold tracking-wider text-zinc-400 block">Total Due</span>
-              <span className="text-xl font-black text-white font-mono">{formatMoney(invoice.totalAmount)}</span>
-              {invoice.balanceDue !== undefined && invoice.balanceDue > 0 && !isPaid && (
-                <span className="text-xs text-amber-400 font-semibold block mt-0.5 font-mono">
-                  Remaining: {formatMoney(invoice.balanceDue)}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5 pb-1">
-            {onEditInvoice && (
-              <Button variant="secondary" size="sm" onClick={() => onEditInvoice(invoice)} className="text-xs">
-                Edit Invoice
-              </Button>
-            )}
-            {onPrintInvoice && (
-              <Button variant="ghost" size="sm" onClick={() => onPrintInvoice(invoice)} className="text-xs bg-white/5 hover:bg-white/10 text-zinc-200">
-                Print / PDF
-              </Button>
-            )}
-            <Button variant="danger" size="sm" onClick={() => handleDeleteInvoiceRecord(invoice)} className="text-xs ml-auto">
-              Delete
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3 text-xs p-3 bg-zinc-900/60 rounded-xl border border-white/5">
-            <div>
-              <span className="text-zinc-400 block text-[10px] uppercase font-bold">Issue Date</span>
-              <span className="text-zinc-300 font-medium">{formatDate(invoice.issueDate)}</span>
-            </div>
-            <div>
-              <span className="text-zinc-400 block text-[10px] uppercase font-bold">Due Date</span>
-              <span className="text-zinc-300 font-medium">{formatDate(invoice.dueDate)}</span>
-            </div>
-            <div>
-              <span className="text-zinc-400 block text-[10px] uppercase font-bold">Payment Window</span>
-              <span 
-                className="text-zinc-200 font-medium cursor-help underline decoration-dotted decoration-zinc-600 hover:text-white transition-colors"
-                title={`Payment terms: ${invoice.paymentTerms || 'Net 30'} (${formatPaymentTerms(invoice.paymentTerms || 'Net 30')})`}
-                data-tooltip={`Payment terms: ${invoice.paymentTerms || 'Net 30'} (${formatPaymentTerms(invoice.paymentTerms || 'Net 30')})`}
-              >
-                {formatPaymentTerms(invoice.paymentTerms || "Net 30")}
-              </span>
-              <span className="text-[10px] text-zinc-400 block font-normal mt-0.5">
-                ({invoice.paymentTerms || "Net 30"})
-              </span>
-            </div>
-          </div>
-
-          {/* LINE ITEMS TABLE */}
-          <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2">Line Items</h4>
-            <div className="border border-white/5 rounded-xl overflow-hidden bg-zinc-900/40">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-white/5 bg-white/[0.02] text-zinc-400 text-[10px] uppercase tracking-wider font-semibold">
-                    <th className="py-2 px-3">Description</th>
-                    <th className="py-2 px-2 text-right">Qty</th>
-                    <th className="py-2 px-2 text-right">Rate</th>
-                    <th className="py-2 px-3 text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {items.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="py-3 px-3 text-zinc-400 italic text-center">No line items specified</td>
-                    </tr>
-                  ) : (
-                    items.map((it, i) => (
-                      <tr key={i} className="hover:bg-white/[0.02]">
-                        <td className="py-2 px-3 font-medium text-white">{it.description || "Item"}</td>
-                        <td className="py-2 px-2 text-right text-zinc-400">{it.quantity}</td>
-                        <td className="py-2 px-2 text-right text-zinc-400">{formatMoney(it.unitPrice)}</td>
-                        <td className="py-2 px-3 text-right font-semibold text-white">{formatMoney(it.amount || (it.quantity * it.unitPrice))}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* FINANCIAL SUMMARY TOTALS */}
-          <div className="pt-2 border-t border-white/5 space-y-1.5 text-xs">
-            <div className="flex justify-between text-zinc-400">
-              <span>Subtotal:</span>
-              <span className="font-mono text-zinc-200">{formatMoney(invoice.subtotal || invoice.totalAmount)}</span>
-            </div>
-            {invoice.taxAmount !== undefined && invoice.taxAmount > 0 && (
-              <div className="flex justify-between text-zinc-400">
-                <span>Tax ({((invoice.taxRate || 0) * 100).toFixed(1)}%):</span>
-                <span className="font-mono text-zinc-200">{formatMoney(invoice.taxAmount)}</span>
-              </div>
-            )}
-            <div className="flex justify-between text-sm font-bold text-white pt-1 border-t border-white/5">
-              <span>Total Invoice Amount:</span>
-              <span className="font-mono text-emerald-400">{formatMoney(invoice.totalAmount)}</span>
-            </div>
-          </div>
-
-          {invoice.notes && (
-            <div className="p-3 bg-zinc-900/40 border border-white/5 rounded-xl text-xs">
-              <span className="text-zinc-400 font-bold block mb-0.5">Notes:</span>
-              <p className="text-zinc-300 italic">{invoice.notes}</p>
-            </div>
-          )}
-
-          {invoice.linkedExpenses && invoice.linkedExpenses.length > 0 && (
-            <div className="pt-2 border-t border-white/5 space-y-2">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-                Linked Receipts / Expenses ({invoice.linkedExpenses.length})
-              </h4>
-              <div className="space-y-1.5">
-                {invoice.linkedExpenses.map((le) => (
-                  <div key={le.id} className="p-2.5 bg-zinc-900/60 border border-white/10 rounded-lg flex items-center justify-between gap-2 text-xs">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-white truncate">{le.vendor || le.description}</div>
-                      <div className="text-[11px] text-zinc-400">
-                        {formatDate(le.timestamp)} • {formatMoney(le.amount)}
-                      </div>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      isLoading={isLinkingInvoice}
-                      onClick={() => handleUnlinkExpenseInvoice(le.id, invoice.invoiceNumber)}
-                      className="text-[11px] text-zinc-400 hover:text-red-400 shrink-0"
-                    >
-                      Unlink
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* RIGHT COLUMN: BANK & CASH DEPOSIT MATCHING */}
-        <div className="bg-white/2 border border-white/5 rounded-xl p-4 sm:p-5 backdrop-blur-md shadow-lg flex flex-col space-y-4">
-          <div className="flex justify-between items-center border-b border-zinc-800 pb-2.5">
-            <h3 className="text-xs font-bold text-white tracking-tight flex items-center gap-1.5 uppercase">
-              <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path></svg>
-              <span>Payment & Deposit Reconciliation</span>
-            </h3>
-            {hasTx && (
-              <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-                BALANCED
-              </span>
-            )}
-          </div>
-
-          {hasTx && linkedTx ? (
-            <div className="p-4 bg-zinc-900/80 border border-emerald-500/30 rounded-xl space-y-3">
-              <div className="flex justify-between items-start gap-2">
-                <div className="min-w-0">
-                  <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-400 block mb-1">
-                    {isCashPayment ? "✓ Paid in Cash (Cash on Hand)" : "✓ Paid via Bank Deposit"}
-                  </span>
-                  <div className="text-base font-bold text-white break-words">{linkedTx.description}</div>
-                  <div className="text-xs text-zinc-400 mt-0.5">
-                    {isCashPayment ? "Cash Received" : "Deposited"}: {formatDate(linkedTx.date)}
-                  </div>
-                </div>
-                <div className="text-right shrink-0">
-                  <div className="text-xs text-zinc-400">Payment Amount</div>
-                  <div className="text-base font-bold text-emerald-400">{formatMoney(linkedTx.amount)}</div>
-                </div>
-              </div>
-
-              {linkedTx.chartAccount && (
-                <div className="text-xs pt-2 border-t border-white/5 flex items-center gap-2 text-zinc-400">
-                  <span className="text-zinc-400">{isCashPayment ? "Cash Account:" : "Bank Account:"}</span>
-                  <span className="text-zinc-200 font-medium">{linkedTx.chartAccount.name} ({linkedTx.chartAccount.code})</span>
-                </div>
-              )}
-
-              <div className="pt-2 flex justify-end">
-                <Button
-                  variant="danger"
-                  size="sm"
-                  isLoading={isMatchingInvoice}
-                  onClick={() => handleUnmatchInvoicePayment(invoice.id, linkedTx, invoice.invoiceNumber)}
-                  className="text-xs"
-                >
-                  Unlink Payment
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-4 flex-1 flex flex-col">
-              <p className="text-xs text-zinc-400 leading-relaxed">
-                Match an incoming bank deposit below or mark this invoice as paid in cash to post directly to Cash on Hand (1030).
-              </p>
-
-              {!isPaid && invoice.status !== 'VOID' && (
-                <div className="p-3 bg-emerald-500/5 border border-emerald-500/20 rounded-xl space-y-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <div className="text-xs font-bold text-emerald-300">Paid in Physical Cash?</div>
-                      <div className="text-[11px] text-zinc-400">Records a balanced deposit on Cash on Hand without waiting for bank feed sync.</div>
-                    </div>
-                    <Button
-                      variant={showCashPayPanel ? "ghost" : "primary"}
-                      size="sm"
-                      onClick={() => setShowCashPayPanel((p) => !p)}
-                      className="text-xs shrink-0"
-                    >
-                      {showCashPayPanel ? "Cancel" : "Mark Paid in Cash"}
-                    </Button>
-                  </div>
-
-                  {showCashPayPanel && (
-                    <div className="pt-2.5 border-t border-emerald-500/20 space-y-2.5">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <div>
-                          <label className="text-[10px] font-bold uppercase text-zinc-400 block mb-1">Cash Payment Date</label>
-                          <Input
-                            type="date"
-                            value={cashPayDate}
-                            onChange={(e) => setCashPayDate(e.target.value)}
-                            className="text-xs py-1"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold uppercase text-zinc-400 block mb-1">Memo / Note (Optional)</label>
-                          <Input
-                            type="text"
-                            placeholder="e.g. Received cash at job site"
-                            value={cashPayNotes}
-                            onChange={(e) => setCashPayNotes(e.target.value)}
-                            className="text-xs py-1"
-                          />
-                        </div>
-                      </div>
-                      <div className="flex justify-end">
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          isLoading={isRecordingCashPay}
-                          onClick={() => handleMarkInvoicePaidCash(invoice.id)}
-                          className="text-xs font-bold"
-                        >
-                          Confirm Cash Payment ({formatMoney(invoice.balanceDue ?? invoice.totalAmount)})
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <SuggestedMatchesList
-                title="Suggested Bank Deposit Matches"
-                isActionLoading={isMatchingInvoice}
-                items={invoiceCandidates.map((cand) => ({
-                  id: cand.transaction.id,
-                  score: cand.score,
-                  reason: cand.reason,
-                  title: cand.transaction.description,
-                  subtitle: `${formatDate(cand.transaction.date)} • ${cand.transaction.chartAccount?.name || "Checking"}`,
-                  amountLabel: formatMoney(cand.transaction.amount),
-                  amountClassName: "text-emerald-400",
-                  actionLabel: "Match & Pay",
-                  onAction: () => handleMatchInvoicePayment(invoice.id, cand.transaction.id),
-                }))}
-                emptyState={
-                  <div className="p-6 border border-dashed border-white/10 rounded-xl text-center text-zinc-400 text-xs">
-                    <svg className="w-8 h-8 text-zinc-500 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    <p className="font-medium text-zinc-300">No candidate bank deposits found</p>
-                    <p className="text-zinc-400 mt-1">When a matching customer deposit arrives on your bank statement, it will appear here for 1-click matching.</p>
-                  </div>
-                }
-              />
-            </div>
-          )}
-        </div>
-      </div>
+      <DetailLinkPicker
+        type={type}
+        tx={tx}
+        activeExpense={activeExpense}
+        linkTargetMode={linkTargetMode}
+        onSelectMode={(mode) => {
+          setLinkTargetMode(mode);
+          setSelectedLinkId(null);
+          setLinkPage(1);
+        }}
+        linkStartDate={linkStartDate}
+        onLinkStartDateChange={(value) => {
+          setLinkStartDate(value);
+          setLinkPage(1);
+        }}
+        linkEndDate={linkEndDate}
+        onLinkEndDateChange={(value) => {
+          setLinkEndDate(value);
+          setLinkPage(1);
+        }}
+        linkSearch={linkSearch}
+        onLinkSearchChange={(value) => {
+          setLinkSearch(value);
+          setLinkPage(1);
+        }}
+        linkInvoices={linkInvoices}
+        unlinkedExpenses={unlinked.expenses}
+        unlinkedTransactions={unlinked.transactions}
+        selectedLinkId={selectedLinkId}
+        onSelectLinkId={setSelectedLinkId}
+        linkPage={linkPage}
+        unlinkedTotalPages={unlinkedTotalPages}
+        onLinkPageChange={setLinkPage}
+        isLinkingInvoice={isLinkingInvoice}
+        isMatchingInvoice={isMatchingInvoice}
+        onCancel={() => {
+          setShowLinkPanel(false);
+          setSelectedLinkId(null);
+        }}
+        onConfirmLink={handleLink}
+      />
     );
   };
 
@@ -1760,7 +1380,26 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
               )}
               
               {type === "invoice" && invoice ? (
-                renderInvoiceView()
+                <DetailInvoiceView
+                  invoice={invoice}
+                  invoiceCandidates={invoiceCandidates}
+                  isMatchingInvoice={isMatchingInvoice}
+                  isLinkingInvoice={isLinkingInvoice}
+                  showCashPayPanel={showCashPayPanel}
+                  onToggleCashPayPanel={() => setShowCashPayPanel((prev) => !prev)}
+                  cashPayDate={cashPayDate}
+                  onCashPayDateChange={setCashPayDate}
+                  cashPayNotes={cashPayNotes}
+                  onCashPayNotesChange={setCashPayNotes}
+                  isRecordingCashPay={isRecordingCashPay}
+                  onMarkPaidCash={handleMarkInvoicePaidCash}
+                  onMatchPayment={handleMatchInvoicePayment}
+                  onUnmatchPayment={handleUnmatchInvoicePayment}
+                  onUnlinkExpense={handleUnlinkExpenseInvoice}
+                  onDeleteInvoice={handleDeleteInvoiceRecord}
+                  onEditInvoice={onEditInvoice}
+                  onPrintInvoice={onPrintInvoice}
+                />
               ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5 items-stretch relative">
                 
@@ -2153,14 +1792,14 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                                 const txDateStr = targetTx?.date ? targetTx.date.split('T')[0] : '';
                                 const linkedExpSum = expensesList.reduce((s, ce) => s + ce.amount, 0);
                                 const remainingTxAmt = targetTx?.amount ? Math.max(0, Math.abs(targetTx.amount) - linkedExpSum) : 0;
-                                const txAmtStr = remainingTxAmt > 0 ? String(remainingTxAmt) : (targetTx?.amount ? String(Math.abs(targetTx.amount)) : '');
+                                const txAmt = remainingTxAmt > 0 ? remainingTxAmt : (targetTx?.amount ? Math.abs(targetTx.amount) : undefined);
                                 const txVendor = targetTx?.description || '';
-                                const txCatId = targetTx?.categoryAccountId || '';
+                                const txCatId = targetTx?.categoryAccountId;
                                 setCreateForm({
                                   timestamp: txDateStr,
                                   vendor: extractCleanVendor(txVendor),
                                   description: txVendor,
-                                  amount: txAmtStr,
+                                  amount: txAmt,
                                   tender: 'card',
                                   chartAccountId: txCatId ? Number(txCatId) : undefined
                                 });
@@ -2585,26 +2224,26 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                               setShowCreateModal(true);
                               const remainingAmt = activeExpense ? Math.max(0, activeExpense.amount - transactionsList.reduce((s, ct) => s + Math.abs(ct.amount), 0)) : 0;
 
-                              let defaultBankId: number | '' = '';
+                              let defaultBankId: number | undefined = undefined;
                               const tender = activeExpense?.tender?.toLowerCase();
                               if (tender === 'card') {
                                 const cc = accounts.find(a => a.type === 'LIABILITY' && a.code.startsWith('20') && a.active);
-                                defaultBankId = cc ? cc.id : (accounts.find(a => a.type === 'ASSET' && a.code === '1010' && a.active)?.id || '');
+                                defaultBankId = cc ? cc.id : accounts.find(a => a.type === 'ASSET' && a.code === '1010' && a.active)?.id;
                               } else if (tender === 'cash') {
                                 const cashAcc = accounts.find(a => a.code === '1030' && a.active);
-                                defaultBankId = cashAcc ? cashAcc.id : '';
+                                defaultBankId = cashAcc?.id;
                               } else {
                                 const checking = accounts.find(a => a.code === '1010' && a.active);
-                                defaultBankId = checking ? checking.id : (accounts.find(a => (a.type === 'ASSET' || a.type === 'LIABILITY') && a.active)?.id || '');
+                                defaultBankId = checking ? checking.id : accounts.find(a => (a.type === 'ASSET' || a.type === 'LIABILITY') && a.active)?.id;
                               }
 
                               setCreateForm({
                                 date: activeExpense?.timestamp ? activeExpense.timestamp.split('T')[0] : '',
                                 description: activeExpense?.vendor ? `${activeExpense.vendor}${activeExpense.description ? ` - ${activeExpense.description}` : ''}` : (activeExpense?.description || ''),
-                                amount: remainingAmt > 0 ? remainingAmt : (activeExpense?.amount || ''),
+                                amount: remainingAmt > 0 ? remainingAmt : activeExpense?.amount,
                                 transactionType: 'DEBIT',
                                 chartAccountId: defaultBankId,
-                                categoryAccountId: activeExpense?.chartAccountId || '',
+                                categoryAccountId: activeExpense?.chartAccountId,
                               });
                             }}
                             className="w-full text-xs font-semibold px-2 py-1.5 justify-center bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition"
@@ -2772,155 +2411,20 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
         </div>
       </div>
 
-      {/* RECEIPT IMAGE MODAL */}
-      {showReceiptModal && (
-        <div className="fixed inset-0 z-80 flex items-center justify-center bg-black/80 p-4">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-xl max-w-4xl w-full flex flex-col max-h-[90vh]">
-            <div className="p-4 border-b border-zinc-700 flex justify-between items-center">
-              <h3 className="font-bold text-lg">Physical Receipt</h3>
-              <Button variant="ghost" onClick={() => setShowReceiptModal(false)} className="text-zinc-400 hover:text-white">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-              </Button>
-            </div>
-            <div className="p-4 flex-1 overflow-auto bg-zinc-950 min-h-[50vh]">
-              {(() => {
-                const receipts = activeExpense?.receipts;
-                return receipts && receipts.length > 0 ? (
-                    <div className="w-full flex flex-col items-center py-4 relative">
-                      {receipts.length > 1 && (
-                        <div className="flex w-full justify-between px-4 absolute top-1/2 -translate-y-1/2 z-10">
-                          <Button variant="ghost" className="bg-black/50 text-white rounded-full p-2 hover:bg-black/70 cursor-pointer" onClick={() => { setActiveReceiptIdx(Math.max(0, activeReceiptIdx - 1)); setReceiptZoom(1); setReceiptRotation(0); }} disabled={activeReceiptIdx === 0}>
-                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
-                          </Button>
-                          <Button variant="ghost" className="bg-black/50 text-white rounded-full p-2 hover:bg-black/70 cursor-pointer" onClick={() => { setActiveReceiptIdx(Math.min(receipts.length - 1, activeReceiptIdx + 1)); setReceiptZoom(1); setReceiptRotation(0); }} disabled={activeReceiptIdx === receipts.length - 1}>
-                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
-                          </Button>
-                        </div>
-                      )}
-                      
-                      {(() => {
-                        const receipt = receipts[activeReceiptIdx];
-                        if (!receipt) {
-                          if (activeReceiptIdx > 0) setTimeout(() => setActiveReceiptIdx(0), 0);
-                          return null;
-                        }
-                        const filename = receipt.documentUri.split('/').pop();
-                        const fileUrl = `/api/images/${filename}`;
-                        const isPdf = receipt.fileExt.toLowerCase() === '.pdf';
-                        return (
-                          <div key={receipt.id} className="w-full flex flex-col items-center">
-                            {!isPdf && (
-                              <div className="flex items-center gap-1.5 mb-2.5 bg-zinc-900/95 px-3 py-1.5 rounded-xl border border-white/10 shadow-lg backdrop-blur-md">
-                                <button
-                                  type="button"
-                                  onClick={() => setReceiptZoom(prev => Math.max(0.5, prev - 0.25))}
-                                  className="text-zinc-300 hover:text-white min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] flex items-center justify-center rounded-lg text-sm font-bold hover:bg-white/10 transition-colors cursor-pointer"
-                                  title="Zoom Out (−)"
-                                  aria-label="Zoom Out"
-                                >
-                                  −
-                                </button>
-                                <span className="text-xs font-mono text-zinc-300 w-12 text-center select-none font-semibold">
-                                  {Math.round(receiptZoom * 100)}%
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => setReceiptZoom(prev => Math.min(3, prev + 0.25))}
-                                  className="text-zinc-300 hover:text-white min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] flex items-center justify-center rounded-lg text-sm font-bold hover:bg-white/10 transition-colors cursor-pointer"
-                                  title="Zoom In (+)"
-                                  aria-label="Zoom In"
-                                >
-                                  +
-                                </button>
-                                <div className="h-4 w-px bg-white/20 mx-1" />
-                                <button
-                                  type="button"
-                                  onClick={() => setReceiptRotation(prev => (prev + 90) % 360)}
-                                  className="text-zinc-300 hover:text-white min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] flex items-center justify-center rounded-lg text-base font-bold hover:bg-white/10 transition-colors cursor-pointer"
-                                  title="Rotate 90° Clockwise (R)"
-                                  aria-label="Rotate 90 degrees clockwise"
-                                >
-                                  ↻
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => { setReceiptZoom(1); setReceiptRotation(0); }}
-                                  className="text-zinc-400 hover:text-white px-2.5 py-1 rounded-lg text-xs font-medium hover:bg-white/10 transition-colors ml-1 cursor-pointer"
-                                  title="Reset Zoom & Rotation (0)"
-                                  aria-label="Reset zoom and rotation"
-                                >
-                                  Reset
-                                </button>
-                              </div>
-                            )}
-                            {isPdf ? (
-                              <iframe src={fileUrl} className="w-full h-[75vh] rounded-md bg-white border border-zinc-700" title={`Receipt ${receipt.id}`} />
-                            ) : (
-                              <div className="w-full max-h-[75vh] overflow-auto flex items-center justify-center p-2 rounded-md bg-zinc-950/60 border border-zinc-800">
-                                <img
-                                  src={fileUrl}
-                                  alt={`Receipt ${receipt.id}`}
-                                  style={{
-                                    transform: `scale(${receiptZoom}) rotate(${receiptRotation}deg)`,
-                                    transformOrigin: 'center center',
-                                    transition: 'transform 0.15s ease-out',
-                                  }}
-                                  className="max-w-full max-h-[70vh] object-contain rounded select-none"
-                                />
-                              </div>
-                            )}
-                            <p className="text-zinc-400 text-xs mt-4 mb-2">{filename}</p>
-                            {receipts.length > 1 && (
-                              <p className="text-zinc-400 text-xs font-semibold">Image {activeReceiptIdx + 1} of {receipts.length}</p>
-                            )}
-                            {!isClosed && (
-                              <div className="mt-4">
-                                <Button variant="danger" size="sm" onClick={() => handleDeleteReceipt(receipt.id)} disabled={isSaving}>
-                                  {isSaving ? "Deleting..." : "Delete Receipt"}
-                                </Button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                ) : (
-                  <div className="h-full flex items-center justify-center text-zinc-400 min-h-[50vh]">
-                    <p>No physical receipt attached.</p>
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* CREATE & LINK MODAL */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-80 flex items-center justify-center bg-black/80 p-4">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-md">
-            <div className="p-5 border-b border-zinc-800 flex justify-between items-center">
-              <h3 className="font-bold text-lg">Create & Link {type === "transaction" ? "Expense" : "Transaction"}</h3>
-              <Button variant="ghost" onClick={() => setShowCreateModal(false)} className="text-zinc-400 hover:text-white">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-              </Button>
-            </div>
-            <div className="p-5 space-y-4">
-              {type === "transaction" ? (
-                <CreateExpenseForm form={createForm} setForm={setCreateForm} accounts={accounts} />
-              ) : (
-                <CreateTransactionForm form={createForm} setForm={setCreateForm} accounts={accounts} />
-              )}
-            </div>
-            <div className="p-5 border-t border-zinc-800 flex gap-3 justify-end">
-              <Button variant="ghost" onClick={() => setShowCreateModal(false)}>Cancel</Button>
-              <Button variant="ghost" onClick={handleCreate} disabled={isSaving} className="px-5 py-2 bg-zinc-100 text-zinc-900 hover:bg-white rounded-lg text-sm font-semibold transition disabled:opacity-50">
-                {isSaving ? 'Saving…' : 'Create & Link'}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ReceiptCanvasPane
+        isOpen={showReceiptModal}
+        receipts={activeExpense?.receipts || []}
+        activeReceiptIdx={activeReceiptIdx}
+        onChangeActiveReceiptIdx={setActiveReceiptIdx}
+        zoom={receiptZoom}
+        onChangeZoom={setReceiptZoom}
+        rotation={receiptRotation}
+        onChangeRotation={setReceiptRotation}
+        isClosed={isClosed}
+        isSaving={isSaving}
+        onDeleteReceipt={handleDeleteReceipt}
+        onClose={() => setShowReceiptModal(false)}
+      />
 
       {excludeTarget && (
         <ExcludeItemModal
@@ -2942,319 +2446,36 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
         />
       )}
 
-      {ignoreTarget && (
-        <div className="fixed inset-0 z-90 flex items-center justify-center bg-black/80 p-4">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-lg overflow-hidden shadow-2xl">
-            <div className="p-5 border-b border-zinc-800">
-              <h3 className="font-bold text-lg text-white">Ignore Warnings</h3>
-            </div>
-            <div className="p-5 space-y-4">
-              <div className="p-4 bg-orange-500/10 border border-orange-500/20 rounded-xl text-sm text-orange-200/90 leading-relaxed">
-                <p className="font-bold text-orange-400 mb-1">Are you sure?</p>
-                This will mark the item as reviewed and ignore any warnings (like missing receipts or rule mismatches). The item stays in the books, but no longer requires review.
-              </div>
-              {ignoreTarget.linkedChoice && (
-                <div className="p-4 bg-blue-500/10 border border-blue-500/20 text-blue-300 rounded-xl text-sm font-medium">
-                  {ignoreTarget.linkedChoice === "ONLY_THIS" 
-                    ? "You chose to sever the link(s) and only ignore warnings for this specific item." 
-                    : "You chose to keep the link(s) intact and ignore warnings for all linked items."}
-                </div>
-              )}
-            </div>
-            <div className="p-4 border-t border-zinc-800 flex justify-end gap-3 bg-zinc-800/50">
-              <Button variant="ghost" onClick={() => setIgnoreTarget(null)}>Cancel</Button>
-              <Button 
-                variant="primary" 
-                disabled={isSaving}
-                className="bg-orange-600 hover:bg-orange-500 text-white border-transparent"
-                onClick={async () => {
-                  setIsSaving(true);
-                  try {
-                    if (ignoreTarget.linkedChoice === "ONLY_THIS") {
-                      if (ignoreTarget.type === "transaction") {
-                        for (const e of confirmedExpenses) await unlinkExpenseFromTransaction(e.id, ignoreTarget.id);
-                      } else {
-                        for (const t of confirmedTransactions) await unlinkExpenseFromTransaction(ignoreTarget.id, t.id);
-                      }
-                      
-                      if (ignoreTarget.type === "transaction") await resolveReviewItems("ignore_warnings", [ignoreTarget.id], []);
-                      else await resolveReviewItems("ignore_warnings", [], [ignoreTarget.id]);
-                    } else if (ignoreTarget.linkedChoice === "ALL_LINKED") {
-                      const tIds = type === "transaction" && tx ? [tx.id] : confirmedTransactions.map(t => t.id);
-                      const eIds = type === "receipt" && expense ? [expense.id] : confirmedExpenses.map(e => e.id);
-                      await resolveReviewItems("ignore_warnings", tIds, eIds);
-                    } else {
-                      if (ignoreTarget.type === "transaction") await resolveReviewItems("ignore_warnings", [ignoreTarget.id], []);
-                      else await resolveReviewItems("ignore_warnings", [], [ignoreTarget.id]);
-                    }
-                    setIgnoreTarget(null);
-                    await loadData();
-                  } catch (err: any) {
-                    await alert({ title: "Ignore Failed", message: "Failed to ignore: " + err.message, variant: "danger" });
-                  } finally {
-                    setIsSaving(false);
-                  }
-                }}
-              >
-                {isSaving ? "Ignoring..." : "Confirm Ignore"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {actionChoiceModal && (
-        <div className="fixed inset-0 z-90 flex items-center justify-center bg-black/80 p-4">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-md overflow-hidden shadow-2xl">
-            <div className="p-5 border-b border-zinc-800">
-              <h3 className="font-bold text-lg text-white">Linked Items Detected</h3>
-              <p className="text-sm text-zinc-400 mt-2 leading-relaxed">
-                This item is currently linked to {actionChoiceModal.targetType === "transaction" ? "one or more expenses" : "a bank transaction"}. How would you like to proceed?
-              </p>
-            </div>
-            <div className="p-5 space-y-3">
-              <button 
-                className="w-full p-4 border border-zinc-700 rounded-lg hover:border-blue-500 hover:bg-blue-500/10 text-left transition-colors"
-                onClick={() => {
-                  const data = actionChoiceModal;
-                  setActionChoiceModal(null);
-                  
-                  if (data.action === "EXCLUDE") {
-                    setExcludeTarget({ type: data.targetType, id: data.targetId, linkedChoice: "ONLY_THIS" });
-                  } else {
-                    setIgnoreTarget({ type: data.targetType, id: data.targetId, linkedChoice: "ONLY_THIS" });
-                  }
-                }}
-              >
-                <div className="font-medium text-white">Unlink & {actionChoiceModal.action === "EXCLUDE" ? "Exclude" : "Ignore"} Only This Item</div>
-                <div className="text-xs text-zinc-400 mt-1">Sever the link(s) and only apply the action to the selected item.</div>
-              </button>
-              
-              <button 
-                className="w-full p-4 border border-zinc-700 rounded-lg hover:border-red-500 hover:bg-red-500/10 text-left transition-colors"
-                onClick={() => {
-                  const data = actionChoiceModal;
-                  setActionChoiceModal(null);
-                  
-                  if (data.action === "EXCLUDE") {
-                    setExcludeTarget({ type: data.targetType, id: data.targetId, linkedChoice: "ALL_LINKED" });
-                  } else {
-                    setIgnoreTarget({ type: data.targetType, id: data.targetId, linkedChoice: "ALL_LINKED" });
-                  }
-                }}
-              >
-                <div className="font-medium text-white">{actionChoiceModal.action === "EXCLUDE" ? "Exclude" : "Ignore"} All Linked Items</div>
-                <div className="text-xs text-zinc-400 mt-1">Keep the link(s) intact and apply the action to the entire group.</div>
-              </button>
-            </div>
-            <div className="p-4 border-t border-zinc-800 flex justify-end bg-zinc-800/50">
-              <Button variant="ghost" onClick={() => setActionChoiceModal(null)}>Cancel</Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {conflictModalData && (
-        <div className="fixed inset-0 z-90 flex items-center justify-center bg-black/80 p-4">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-md overflow-hidden shadow-2xl">
-            <div className="p-5 border-b border-zinc-800">
-              <h3 className="font-bold text-lg text-white">Category Mismatch</h3>
-              <p className="text-sm text-zinc-400 mt-2 leading-relaxed">The items you are trying to link have conflicting categories. Which category should both items use?</p>
-            </div>
-            <div className="p-5 space-y-3">
-              <button 
-                className="w-full p-4 border border-zinc-700 rounded-lg hover:border-blue-500 hover:bg-blue-500/10 text-left transition-colors"
-                onClick={() => {
-                  if (conflictModalData.isCreateMode) {
-                    executeCreateAndLink(conflictModalData.createPayload, conflictModalData.txCategory.id);
-                  } else {
-                    executeLink(conflictModalData.expenseId, conflictModalData.transactionId, conflictModalData.txCategory.id);
-                  }
-                }}
-              >
-                <div className="font-medium text-white flex items-center gap-2">
-                  <span>{conflictModalData.txCategory.code} — {conflictModalData.txCategory.name}</span>
-                  {!conflictModalData.txCategory.active && (
-                    <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-semibold border border-red-500/30" title="This account category has been archived in Chart of Accounts. Historical records are preserved for tax compliance.">
-                      Archived
-                    </span>
-                  )}
-                </div>
-                <div className="text-xs text-zinc-400 mt-1">Use the Bank Transaction's category</div>
-              </button>
-              
-              <button 
-                className="w-full p-4 border border-zinc-700 rounded-lg hover:border-blue-500 hover:bg-blue-500/10 text-left transition-colors"
-                onClick={() => {
-                  if (conflictModalData.isCreateMode) {
-                    executeCreateAndLink(conflictModalData.createPayload, conflictModalData.expCategory.id);
-                  } else {
-                    executeLink(conflictModalData.expenseId, conflictModalData.transactionId, conflictModalData.expCategory.id);
-                  }
-                }}
-              >
-                <div className="font-medium text-white flex items-center gap-2">
-                  <span>{conflictModalData.expCategory.code} — {conflictModalData.expCategory.name}</span>
-                  {!conflictModalData.expCategory.active && (
-                    <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-semibold border border-red-500/30" title="This account category has been archived in Chart of Accounts. Historical records are preserved for tax compliance.">
-                      Archived
-                    </span>
-                  )}
-                </div>
-                <div className="text-xs text-zinc-400 mt-1">Use the Expense's category</div>
-              </button>
-            </div>
-            <div className="p-4 border-t border-zinc-800 flex justify-end bg-zinc-800/50">
-              <Button variant="ghost" onClick={() => setConflictModalData(null)}>Cancel</Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {replaceOrAddModalData && (
-        <div className="fixed inset-0 z-90 flex items-center justify-center bg-black/80 p-4">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-md overflow-hidden shadow-2xl">
-            <div className="p-5 border-b border-zinc-800">
-              <h3 className="font-bold text-lg text-white">Already Linked</h3>
-              <p className="text-sm text-zinc-400 mt-2 leading-relaxed">
-                This {type === "transaction" ? "transaction" : "expense"} is already linked to another item. Do you want to add this new link (e.g., for a split payment) or replace the existing linked item(s) entirely?
-              </p>
-            </div>
-            <div className="p-5 space-y-3">
-              <button 
-                className="w-full p-4 border border-zinc-700 rounded-lg hover:border-blue-500 hover:bg-blue-500/10 text-left transition-colors"
-                onClick={() => {
-                  const data = replaceOrAddModalData;
-                  setReplaceOrAddModalData(null);
-                  if (data.isSuggested) {
-                    if (data.suggestedExpId && tx) executeLink(data.suggestedExpId, tx.id);
-                    if (data.suggestedTxId && expense) executeLink(expense.id, data.suggestedTxId);
-                  } else if (data.isCreateMode) {
-                    executeCreateAndLink(data.createPayload);
-                  } else {
-                    if (type === "transaction" && tx) executeLink(data.selectedLinkId, tx.id);
-                    else if (expense) executeLink(expense.id, data.selectedLinkId);
-                  }
-                }}
-              >
-                <div className="font-medium text-white">Add to Existing (Split)</div>
-                <div className="text-xs text-zinc-400 mt-1">Keep current links and add this new one.</div>
-              </button>
-              
-              <button 
-                className="w-full p-4 border border-zinc-700 rounded-lg hover:border-red-500 hover:bg-red-500/10 text-left transition-colors"
-                onClick={async () => {
-                  const data = replaceOrAddModalData;
-                  setReplaceOrAddModalData(null);
-                  setIsSaving(true);
-                  try {
-                    // Unlink existing first
-                    if (type === "transaction" && tx) {
-                      for (const e of confirmedExpenses) await unlinkExpenseFromTransaction(e.id, tx.id);
-                    } else if (type === "receipt" && expense) {
-                      for (const t of confirmedTransactions) await unlinkExpenseFromTransaction(expense.id, t.id);
-                    }
-                    
-                    // Then execute the link
-                    if (data.isSuggested) {
-                      if (data.suggestedExpId && tx) await executeLink(data.suggestedExpId, tx.id);
-                      if (data.suggestedTxId && expense) await executeLink(expense.id, data.suggestedTxId);
-                    } else if (data.isCreateMode) {
-                      await executeCreateAndLink(data.createPayload);
-                    } else {
-                      if (type === "transaction" && tx) await executeLink(data.selectedLinkId, tx.id);
-                      else if (expense) await executeLink(expense.id, data.selectedLinkId);
-                    }
-                  } catch (err: any) {
-                    await alert({ title: "Replace Links Failed", message: "Failed to replace links: " + err.message, variant: "danger" });
-                  } finally {
-                    setIsSaving(false);
-                    loadData(true);
-                  }
-                }}
-              >
-                <div className="font-medium text-white">Replace Existing</div>
-                <div className="text-xs text-zinc-400 mt-1">Remove current links and only keep this new one.</div>
-              </button>
-            </div>
-            <div className="p-4 border-t border-zinc-800 flex justify-end bg-zinc-800/50">
-              <Button variant="ghost" onClick={() => setReplaceOrAddModalData(null)}>Cancel</Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {overAllocatedModalData && (
-        <div className="fixed inset-0 z-90 flex items-center justify-center bg-black/80 p-4">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-md overflow-hidden shadow-2xl">
-            <div className="p-5 border-b border-zinc-800">
-              <h3 className="font-bold text-lg text-white">Amount Mismatch</h3>
-              <p className="text-sm text-zinc-400 mt-2 leading-relaxed">{overAllocatedModalData.message}</p>
-            </div>
-            <div className="p-4 border-t border-zinc-800 flex justify-end gap-3 bg-zinc-800/50">
-              <Button variant="ghost" onClick={() => setOverAllocatedModalData(null)}>Cancel</Button>
-              <Button 
-                variant="primary" 
-                onClick={() => {
-                  if (overAllocatedModalData.isCreateMode) {
-                    executeCreateAndLink(overAllocatedModalData.createPayload, overAllocatedModalData.overrideChartAccountId, true);
-                  } else {
-                    executeLink(overAllocatedModalData.expenseId, overAllocatedModalData.transactionId, overAllocatedModalData.overrideChartAccountId, true);
-                  }
-                }}
-              >
-                Link Anyway
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {allowConfirmTarget && (
-        <div className="fixed inset-0 z-90 flex items-center justify-center bg-black/80 p-4">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-md overflow-hidden shadow-2xl">
-            <div className="p-5 border-b border-zinc-800">
-              <h3 className="font-bold text-lg text-white">Reopen Books to Allow Item</h3>
-              <p className="text-sm text-zinc-400 mt-2 leading-relaxed">
-                Allowing this item will approve it and reopen your books back to{" "}
-                <strong className="text-white">
-                  {(() => {
-                    const d = new Date(allowConfirmTarget.date);
-                    d.setDate(d.getDate() - 1);
-                    return d.toISOString().split("T")[0];
-                  })()}
-                </strong>{" "}
-                (the day before this item). Any linked items and subsequent pending items will be approved automatically.
-              </p>
-            </div>
-            <div className="p-4 border-t border-zinc-800 flex justify-end gap-3 bg-zinc-800/50">
-              <Button variant="ghost" onClick={() => setAllowConfirmTarget(null)}>Cancel</Button>
-              <Button
-                variant="primary"
-                isLoading={isAllowing}
-                onClick={async () => {
-                  setIsAllowing(true);
-                  try {
-                    await resolveReviewItems(
-                      "allow",
-                      allowConfirmTarget.type === "transaction" ? [allowConfirmTarget.id] : [],
-                      allowConfirmTarget.type === "expense" ? [allowConfirmTarget.id] : []
-                    );
-                    setAllowConfirmTarget(null);
-                    await loadData();
-                  } catch (err: any) {
-                    await alert({ title: "Allow Item Failed", message: "Failed to allow item: " + err.message, variant: "danger" });
-                  } finally {
-                    setIsAllowing(false);
-                  }
-                }}
-              >
-                Confirm & Reopen Books
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <DetailSubModals
+        type={type}
+        accounts={accounts}
+        isSaving={isSaving}
+        isAllowing={isAllowing}
+        showCreateModal={showCreateModal}
+        createForm={createForm}
+        onChangeCreateForm={setCreateForm}
+        onCloseCreateModal={() => setShowCreateModal(false)}
+        onSubmitCreate={handleCreate}
+        ignoreTarget={ignoreTarget}
+        onCloseIgnoreModal={() => setIgnoreTarget(null)}
+        onConfirmIgnore={handleConfirmIgnore}
+        actionChoiceModal={actionChoiceModal}
+        onCloseActionChoice={() => setActionChoiceModal(null)}
+        onSelectActionChoice={handleSelectActionChoice}
+        conflictModalData={conflictModalData}
+        onCloseConflictModal={() => setConflictModalData(null)}
+        onResolveConflict={handleResolveConflict}
+        replaceOrAddModalData={replaceOrAddModalData}
+        onCloseReplaceOrAddModal={() => setReplaceOrAddModalData(null)}
+        onAddSplitLink={handleAddSplitLink}
+        onReplaceLinks={handleReplaceLinks}
+        overAllocatedModalData={overAllocatedModalData}
+        onCloseOverAllocatedModal={() => setOverAllocatedModalData(null)}
+        onConfirmOverAllocated={handleConfirmOverAllocated}
+        allowConfirmTarget={allowConfirmTarget}
+        onCloseAllowConfirm={() => setAllowConfirmTarget(null)}
+        onConfirmAllowClosed={handleConfirmAllowClosed}
+      />
       {isSplitModalOpen && activeExpense && (
         <SplitExpenseModal
           isOpen={true}
