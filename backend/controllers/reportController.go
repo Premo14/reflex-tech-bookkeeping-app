@@ -15,10 +15,6 @@ import (
 	"github.com/gofiber/fiber/v3"
 )
 
-func roundCents(v float64) float64 {
-	return math.Round(v*100) / 100
-}
-
 // PLLine represents an aggregated revenue or expense line in the Profit & Loss statement.
 type PLLine struct {
 	AccountCode string       `json:"accountCode"`
@@ -233,6 +229,9 @@ func BuildProfitLossData(input PLBuilderInput) ProfitLossReportData {
 //     2. sum of unlinked BankTransaction debits categorized under EXPENSE accounts.
 //     3. uncategorized expenses, unlinked debits, and unallocated remainders grouped under Suspense (9999).
 func GetProfitLoss(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 
@@ -474,6 +473,7 @@ type ScheduleCReportData struct {
 }
 
 var scheduleCLineOrder = map[string]int{
+	"Line 1": 10, "Line 2": 20, "Line 4": 40, "Line 6": 60,
 	"Line 8": 80, "Line 9": 90, "Line 10": 100, "Line 11": 110, "Line 12": 120,
 	"Line 13": 130, "Line 14": 140, "Line 15": 150, "Line 16a": 160, "Line 16b": 165,
 	"Line 17": 170, "Line 18": 180, "Line 19": 190, "Line 20a": 200, "Line 20b": 205,
@@ -484,53 +484,117 @@ var scheduleCLineOrder = map[string]int{
 func resolveScheduleCLine(acc models.ChartAccount) (lineNum string, lineName string, dedPct float64) {
 	raw := strings.TrimSpace(acc.ScheduleCLine)
 	if raw == "" {
+		code := acc.Code
+		lower := strings.ToLower(acc.Name)
+
 		if acc.Type == "REVENUE" {
-			if strings.Contains(strings.ToLower(acc.Name), "interest") {
+			if code == "4090" || strings.Contains(lower, "return") || strings.Contains(lower, "refund") || strings.Contains(lower, "allowance") {
+				return "Line 2", "Returns and allowances", 100.0
+			}
+			if code == "4210" || strings.Contains(lower, "interest") {
 				return "Line 6", "Other income", 100.0
 			}
 			return "Line 1", "Gross receipts or sales", 100.0
 		}
-		lower := strings.ToLower(acc.Name)
-		code := acc.Code
-		switch {
-		case code == "5090" || strings.Contains(lower, "meal"):
-			return "Line 24b", "Deductible meals (50%)", 50.0
-		case code == "5020" || strings.Contains(lower, "payroll") || strings.Contains(lower, "wage"):
-			return "Line 26", "Wages", 100.0
-		case code == "5010" || strings.Contains(lower, "rent"):
+
+		// 1. Direct standard account code mapping
+		switch code {
+		case "5000":
+			return "Line 4", "Cost of goods sold", 100.0
+		case "5010":
 			return "Line 20b", "Rent or lease (other business property)", 100.0
-		case code == "5030" || strings.Contains(lower, "utilit"):
+		case "5015":
+			return "Line 20a", "Rent or lease (vehicles, machinery, and equipment)", 100.0
+		case "5020":
+			return "Line 26", "Wages", 100.0
+		case "5025":
+			return "Line 14", "Employee benefit programs", 100.0
+		case "5030":
 			return "Line 25", "Utilities", 100.0
+		case "5040":
+			return "Line 21", "Repairs and maintenance", 100.0
+		case "5050":
+			return "Line 18", "Office expense", 100.0
+		case "5060":
+			return "Line 22", "Supplies", 100.0
+		case "5070":
+			return "Line 30", "Expenses for business use of your home", 100.0
+		case "5080":
+			return "Line 15", "Insurance (other than health)", 100.0
+		case "5090":
+			return "Line 24b", "Deductible meals (50%)", 50.0
+		case "5110":
+			return "Line 17", "Legal and professional services", 100.0
+		case "5120":
+			return "Line 11", "Contract labor", 100.0
+		case "5210":
+			return "Line 27a", "Other expenses (Software & online services)", 100.0
+		case "5310":
+			return "Line 8", "Advertising", 100.0
+		case "5410":
+			return "Line 24a", "Travel", 100.0
+		case "5510":
+			return "Line 9", "Car and truck expenses", 100.0
+		case "5610":
+			return "Line 23", "Taxes and licenses", 100.0
+		case "5710":
+			return "Line 16b", "Other interest", 100.0
+		case "5720":
+			return "Line 13", "Depreciation and section 179 expense deduction", 100.0
+		case "5810":
+			return "Line 10", "Commissions and fees", 100.0
+		case "5910":
+			return "Line 27a", "Other expenses (Bank & merchant fees)", 100.0
+		}
+
+		// 2. Intelligent name-based fallback for custom accounts
+		switch {
 		case strings.Contains(lower, "home office"):
 			return "Line 30", "Expenses for business use of your home", 100.0
-		case code == "5050" || strings.Contains(lower, "office"):
-			return "Line 18", "Office expense", 100.0
-		case code == "5060" || strings.Contains(lower, "suppl"):
-			return "Line 22", "Supplies", 100.0
-		case code == "5040" || strings.Contains(lower, "repair") || strings.Contains(lower, "maintenance"):
-			return "Line 21", "Repairs and maintenance", 100.0
-		case code == "5080" || strings.Contains(lower, "insur"):
+		case strings.Contains(lower, "meal") || strings.Contains(lower, "dining") || strings.Contains(lower, "restaurant"):
+			return "Line 24b", "Deductible meals (50%)", 50.0
+		case strings.Contains(lower, "payroll") || strings.Contains(lower, "wage") || strings.Contains(lower, "salary"):
+			return "Line 26", "Wages", 100.0
+		case strings.Contains(lower, "equipment rent") || strings.Contains(lower, "equipment lease") || strings.Contains(lower, "machinery rent") || strings.Contains(lower, "vehicle lease"):
+			return "Line 20a", "Rent or lease (vehicles, machinery, and equipment)", 100.0
+		case strings.Contains(lower, "rent") || strings.Contains(lower, "lease"):
+			return "Line 20b", "Rent or lease (other business property)", 100.0
+		case strings.Contains(lower, "benefit") || strings.Contains(lower, "pension") || strings.Contains(lower, "health insurance"):
+			return "Line 14", "Employee benefit programs", 100.0
+		case strings.Contains(lower, "insur"):
 			return "Line 15", "Insurance (other than health)", 100.0
-		case code == "5110" || strings.Contains(lower, "profession") || strings.Contains(lower, "legal") || strings.Contains(lower, "accounting"):
+		case strings.Contains(lower, "cost of goods") || strings.Contains(lower, "cogs"):
+			return "Line 4", "Cost of goods sold", 100.0
+		case strings.Contains(lower, "contractor") || strings.Contains(lower, "subcontract") || strings.Contains(lower, "freelance") || strings.Contains(lower, "contract labor"):
+			return "Line 11", "Contract labor", 100.0
+		case strings.Contains(lower, "profession") || strings.Contains(lower, "legal") || strings.Contains(lower, "accounting") || strings.Contains(lower, "lawyer") || strings.Contains(lower, "attorney"):
 			return "Line 17", "Legal and professional services", 100.0
-		case code == "5310" || strings.Contains(lower, "advertis") || strings.Contains(lower, "market"):
+		case strings.HasPrefix(code, "57") || strings.Contains(lower, "depreciation") || strings.Contains(lower, "amortization") || strings.Contains(lower, "sec 179") || strings.Contains(lower, "section 179"):
+			return "Line 13", "Depreciation and section 179 expense deduction", 100.0
+		case strings.Contains(lower, "interest") || strings.Contains(lower, "finance charge"):
+			return "Line 16b", "Other interest", 100.0
+		case strings.Contains(lower, "commission") || strings.Contains(lower, "processing fee") || strings.Contains(lower, "merchant fee"):
+			return "Line 10", "Commissions and fees", 100.0
+		case strings.Contains(lower, "bank fee") || strings.Contains(lower, "wire fee") || strings.Contains(lower, "atm fee"):
+			return "Line 27a", "Other expenses (Bank & merchant fees)", 100.0
+		case strings.Contains(lower, "software") || strings.Contains(lower, "subscription") || strings.Contains(lower, "saas") || strings.Contains(lower, "cloud"):
+			return "Line 27a", "Other expenses (Software & online services)", 100.0
+		case strings.Contains(lower, "office"):
+			return "Line 18", "Office expense", 100.0
+		case strings.Contains(lower, "suppl") || strings.Contains(lower, "material"):
+			return "Line 22", "Supplies", 100.0
+		case strings.Contains(lower, "repair") || strings.Contains(lower, "maintenance"):
+			return "Line 21", "Repairs and maintenance", 100.0
+		case strings.Contains(lower, "advertis") || strings.Contains(lower, "market") || strings.Contains(lower, "promotion"):
 			return "Line 8", "Advertising", 100.0
-		case code == "5410" || strings.Contains(lower, "travel") || strings.Contains(lower, "flight") || strings.Contains(lower, "hotel") || strings.Contains(lower, "lodging"):
+		case strings.Contains(lower, "travel") || strings.Contains(lower, "flight") || strings.Contains(lower, "hotel") || strings.Contains(lower, "lodging"):
 			return "Line 24a", "Travel", 100.0
-		case strings.HasPrefix(code, "55") || strings.Contains(lower, "vehicle") || strings.Contains(lower, "auto") || strings.Contains(lower, "car") || strings.Contains(lower, "truck") || strings.Contains(lower, "gas") || strings.Contains(lower, "mileage") || strings.Contains(lower, "parking") || strings.Contains(lower, "toll"):
+		case strings.HasPrefix(code, "55") || strings.Contains(lower, "vehicle") || strings.Contains(lower, "truck") || strings.Contains(lower, "mileage") || strings.Contains(lower, "parking") || strings.Contains(lower, "toll") || strings.Contains(lower, "gasoline") || strings.Contains(lower, "fuel") || strings.Contains(lower, "auto repair") || strings.Contains(lower, "auto service") || strings.Contains(lower, "car rental"):
 			return "Line 9", "Car and truck expenses", 100.0
 		case strings.HasPrefix(code, "56") || strings.Contains(lower, "tax") || strings.Contains(lower, "license") || strings.Contains(lower, "permit") || strings.Contains(lower, "registration"):
 			return "Line 23", "Taxes and licenses", 100.0
-		case strings.HasPrefix(code, "57") || strings.Contains(lower, "depreciation") || strings.Contains(lower, "amortization") || strings.Contains(lower, "sec 179") || strings.Contains(lower, "section 179"):
-			return "Line 13", "Depreciation and section 179 expense deduction", 100.0
-		case strings.Contains(lower, "contractor") || strings.Contains(lower, "subcontract") || strings.Contains(lower, "freelance"):
-			return "Line 11", "Contract labor", 100.0
-		case strings.Contains(lower, "commission"):
-			return "Line 10", "Commissions and fees", 100.0
-		case strings.Contains(lower, "interest") || strings.Contains(lower, "finance charge"):
-			return "Line 16b", "Other interest", 100.0
-		case strings.Contains(lower, "benefit") || strings.Contains(lower, "pension"):
-			return "Line 14", "Employee benefit programs", 100.0
+		case strings.Contains(lower, "utilit") || strings.Contains(lower, "electric") || strings.Contains(lower, "water") || strings.Contains(lower, "internet"):
+			return "Line 25", "Utilities", 100.0
 		default:
 			return "Line 27a", "Other expenses", 100.0
 		}
@@ -571,18 +635,42 @@ func scheduleCIncomeTreatmentForLine(lineNum string) (string, bool) {
 	}
 }
 
-// BuildScheduleCData compiles the IRS Schedule C tax numbers for a given period.
+// addScheduleCIncomeAccountLine appends an account's exact Money total into a Schedule C Part I income line bucket.
+func addScheduleCIncomeAccountLine(lineMap map[string]*ScheduleCIncomeLine, lineNum, lineName string, acc models.ChartAccount, amt models.Money) {
+	key := lineNum + " - " + lineName
+	if _, exists := lineMap[key]; !exists {
+		lineMap[key] = &ScheduleCIncomeLine{
+			LineNumber: lineNum,
+			LineName:   lineName,
+			Amount:     models.NewMoney(0),
+			Accounts:   []ScheduleCAccountDetail{},
+		}
+	}
+	lineMap[key].Amount = lineMap[key].Amount.Add(amt)
+	lineMap[key].Accounts = append(lineMap[key].Accounts, ScheduleCAccountDetail{
+		AccountID:   acc.ID,
+		AccountCode: acc.Code,
+		AccountName: acc.Name,
+		Total:       amt,
+	})
+}
+
+// BuildScheduleCData compiles the IRS Schedule C tax numbers for a given period using exact integer-cent Money arithmetic.
 func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportData, error) {
+	if db.DB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	if year == 0 && startDate != "" {
+		if t, err := parseDateFlexible(startDate); err == nil {
+			year = t.Year()
+		}
+	}
 	if year == 0 {
 		year = time.Now().Year()
 	}
 	if startDate == "" && endDate == "" {
 		startDate = fmt.Sprintf("%d-01-01", year)
 		endDate = fmt.Sprintf("%d-12-31", year)
-	} else if startDate != "" && year == 0 {
-		if t, err := time.Parse("2006-01-02", startDate); err == nil {
-			year = t.Year()
-		}
 	}
 
 	// Fetch all chart accounts into memory map
@@ -596,8 +684,8 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 	}
 
 	type rawAccSum struct {
-		AccountID uint    `gorm:"column:account_id"`
-		Total     float64 `gorm:"column:total"`
+		AccountID uint         `gorm:"column:account_id"`
+		Total     models.Money `gorm:"column:total"`
 	}
 
 	// --- 1. REVENUE ---
@@ -614,7 +702,9 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 	}
 
 	// Uncategorized deposits
-	type amtResult struct{ Total float64 }
+	type amtResult struct {
+		Total models.Money `gorm:"column:total"`
+	}
 	var uncatDeposits amtResult
 	uncatDepQ := db.DB.Table("bank_transactions bt").
 		Select("COALESCE(SUM(bt.amount), 0) as total").
@@ -624,10 +714,12 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		Where("COALESCE(bank_ca.type, '') != ?", "LIABILITY").
 		Where(inBooksClauseBT)
 	uncatDepQ = ApplyDateRange(uncatDepQ, "bt.date", startDate, endDate)
-	_ = uncatDepQ.Scan(&uncatDeposits)
+	if err := uncatDepQ.Scan(&uncatDeposits).Error; err != nil {
+		return nil, err
+	}
 
 	// --- 2. EXPENSES ---
-	expByAccount := make(map[uint]float64)
+	expByAccount := make(map[uint]models.Money)
 
 	// 2a. Confirmed Expenses
 	var expReceiptSums []rawAccSum
@@ -643,7 +735,7 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		return nil, err
 	}
 	for _, s := range expReceiptSums {
-		expByAccount[s.AccountID] += s.Total
+		expByAccount[s.AccountID] = expByAccount[s.AccountID].Add(s.Total)
 	}
 
 	// 2b. Unlinked bank debits categorized under EXPENSE
@@ -660,7 +752,7 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		return nil, err
 	}
 	for _, s := range debitSums {
-		expByAccount[s.AccountID] += s.Total
+		expByAccount[s.AccountID] = expByAccount[s.AccountID].Add(s.Total)
 	}
 
 	// 2c. Uncategorized expenses & unlinked debits
@@ -693,13 +785,13 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 	partQ = ApplyDateRange(partQ, "bt.date", startDate, endDate)
 	_ = partQ.Scan(&partialDebitRemainder)
 
-	totalUncatExp := uncatExpTotal.Total + uncatDebitTotal.Total + partialDebitRemainder.Total
+	totalUncatExp := uncatExpTotal.Total.Add(uncatDebitTotal.Total).Add(partialDebitRemainder.Total)
 
 	// Aggregate into Income Lines
-	var grossReceipts float64
-	var returnsAndAllowances float64
-	var cogs float64
-	var otherIncome float64
+	var grossReceipts models.Money
+	var returnsAndAllowances models.Money
+	var cogs models.Money
+	var otherIncome models.Money
 	incomeLineMap := make(map[string]*ScheduleCIncomeLine)
 
 	for _, s := range revSums {
@@ -712,70 +804,55 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		if !ok {
 			return nil, fmt.Errorf("revenue account %q is mapped to unsupported Schedule C income line %q; choose Line 1, 2, 4, or 6", acc.Name, lineNum)
 		}
-		key := lineNum + " - " + lineName
-		if _, exists := incomeLineMap[key]; !exists {
-			incomeLineMap[key] = &ScheduleCIncomeLine{
-				LineNumber: lineNum,
-				LineName:   lineName,
-				Amount:     models.NewMoney(0),
-				Accounts:   []ScheduleCAccountDetail{},
-			}
-		}
-		incomeLineMap[key].Amount = incomeLineMap[key].Amount.Add(models.NewMoney(roundCents(s.Total)))
-		incomeLineMap[key].Accounts = append(incomeLineMap[key].Accounts, ScheduleCAccountDetail{
-			AccountID:   acc.ID,
-			AccountCode: acc.Code,
-			AccountName: acc.Name,
-			Total:       models.NewMoney(roundCents(s.Total)),
-		})
+		addScheduleCIncomeAccountLine(incomeLineMap, lineNum, lineName, acc, s.Total)
 
 		switch treatment {
 		case "gross_receipts":
-			grossReceipts += s.Total
+			grossReceipts = grossReceipts.Add(s.Total)
 		case "returns_and_allowances":
-			returnsAndAllowances += s.Total
+			returnsAndAllowances = returnsAndAllowances.Add(s.Total)
 		case "cost_of_goods_sold":
-			cogs += s.Total
+			cogs = cogs.Add(s.Total)
 		case "other_income":
-			otherIncome += s.Total
+			otherIncome = otherIncome.Add(s.Total)
 		}
 	}
 
-	if uncatDeposits.Total > 0 {
+	if uncatDeposits.Total.IsPositive() {
 		key := "Suspense - Uncategorized Income"
 		incomeLineMap[key] = &ScheduleCIncomeLine{
 			LineNumber: "Suspense",
 			LineName:   "Uncategorized Income",
-			Amount:     models.NewMoney(roundCents(uncatDeposits.Total)),
+			Amount:     uncatDeposits.Total,
 			Accounts: []ScheduleCAccountDetail{
-				{AccountID: 0, AccountCode: "9998", AccountName: "Uncategorized Income / Suspense", Total: models.NewMoney(roundCents(uncatDeposits.Total))},
+				{AccountID: 0, AccountCode: "9998", AccountName: "Uncategorized Income / Suspense", Total: uncatDeposits.Total},
 			},
 		}
-		otherIncome += uncatDeposits.Total
+		otherIncome = otherIncome.Add(uncatDeposits.Total)
 	}
-
-	var incomeLines []ScheduleCIncomeLine
-	for _, l := range incomeLineMap {
-		l.Amount = models.NewMoney(roundCents(l.Amount.Dollars()))
-		incomeLines = append(incomeLines, *l)
-	}
-	sort.Slice(incomeLines, func(i, j int) bool {
-		return incomeLines[i].LineNumber < incomeLines[j].LineNumber
-	})
-
-	netReceipts := grossReceipts - returnsAndAllowances
-	grossProfit := netReceipts - cogs
-	grossIncome := grossProfit + otherIncome
 
 	// Aggregate Expenses into Schedule C Expense Lines
 	expenseLineMap := make(map[string]*ScheduleCExpenseLine)
 
 	for accID, total := range expByAccount {
 		acc, ok := accMap[accID]
-		if !ok || total == 0 {
+		if !ok || total.Cents == 0 {
 			continue
 		}
 		lineNum, lineName, dedPct := resolveScheduleCLine(acc)
+
+		// Line 4 (Cost of Goods Sold) and Line 2 (Returns & Allowances) belong in Part I (Gross Income)
+		if lineNum == "Line 4" {
+			cogs = cogs.Add(total)
+			addScheduleCIncomeAccountLine(incomeLineMap, lineNum, lineName, acc, total)
+			continue
+		}
+		if lineNum == "Line 2" {
+			returnsAndAllowances = returnsAndAllowances.Add(total)
+			addScheduleCIncomeAccountLine(incomeLineMap, lineNum, lineName, acc, total)
+			continue
+		}
+
 		key := lineNum + " - " + lineName
 		if _, exists := expenseLineMap[key]; !exists {
 			expenseLineMap[key] = &ScheduleCExpenseLine{
@@ -788,42 +865,56 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 			}
 		}
 		line := expenseLineMap[key]
-		line.GrossAmount = line.GrossAmount.Add(models.NewMoney(roundCents(total)))
+		line.GrossAmount = line.GrossAmount.Add(total)
 		line.Accounts = append(line.Accounts, ScheduleCAccountDetail{
 			AccountID:   acc.ID,
 			AccountCode: acc.Code,
 			AccountName: acc.Name,
-			Total:       models.NewMoney(roundCents(total)),
+			Total:       total,
 		})
 	}
 
-	if totalUncatExp > 0 {
+	var incomeLines []ScheduleCIncomeLine
+	for _, l := range incomeLineMap {
+		sort.Slice(l.Accounts, func(i, j int) bool {
+			return l.Accounts[i].AccountCode < l.Accounts[j].AccountCode
+		})
+		incomeLines = append(incomeLines, *l)
+	}
+	sort.Slice(incomeLines, func(i, j int) bool {
+		return incomeLines[i].LineNumber < incomeLines[j].LineNumber
+	})
+
+	netReceipts := grossReceipts.Sub(returnsAndAllowances)
+	grossProfit := netReceipts.Sub(cogs)
+	grossIncome := grossProfit.Add(otherIncome)
+
+	if totalUncatExp.IsPositive() {
 		key := "Suspense - Uncategorized Expenses"
 		expenseLineMap[key] = &ScheduleCExpenseLine{
 			LineNumber:        "Suspense",
 			LineName:          "Uncategorized Expenses (Suspense 9999)",
-			GrossAmount:       models.NewMoney(roundCents(totalUncatExp)),
+			GrossAmount:       totalUncatExp,
 			DeductiblePercent: 100.0,
-			DeductibleAmount:  models.NewMoney(roundCents(totalUncatExp)),
+			DeductibleAmount:  totalUncatExp,
 			Accounts: []ScheduleCAccountDetail{
-				{AccountID: 0, AccountCode: "9999", AccountName: "Uncategorized Expenses / Suspense", Total: models.NewMoney(roundCents(totalUncatExp))},
+				{AccountID: 0, AccountCode: "9999", AccountName: "Uncategorized Expenses / Suspense", Total: totalUncatExp},
 			},
 		}
 	}
 
 	var expenseLines []ScheduleCExpenseLine
-	var totalGrossExp float64
-	var totalDedExp float64
-	var nondeductibleMeals float64
+	var totalGrossExp models.Money
+	var totalDedExp models.Money
+	var nondeductibleMeals models.Money
 
 	for _, l := range expenseLineMap {
-		l.GrossAmount = models.NewMoney(roundCents(l.GrossAmount.Dollars()))
-		l.DeductibleAmount = models.NewMoney(roundCents(l.GrossAmount.Dollars() * (l.DeductiblePercent / 100.0)))
-		totalGrossExp += l.GrossAmount.Dollars()
-		totalDedExp += l.DeductibleAmount.Dollars()
+		l.DeductibleAmount = l.GrossAmount.PercentOf(l.DeductiblePercent)
+		totalGrossExp = totalGrossExp.Add(l.GrossAmount)
+		totalDedExp = totalDedExp.Add(l.DeductibleAmount)
 
 		if l.DeductiblePercent < 100.0 {
-			nondeductibleMeals += roundCents(l.GrossAmount.Dollars() - l.DeductibleAmount.Dollars())
+			nondeductibleMeals = nondeductibleMeals.Add(l.GrossAmount.Sub(l.DeductibleAmount))
 		}
 
 		sort.Slice(l.Accounts, func(i, j int) bool {
@@ -847,7 +938,7 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		return expenseLines[i].LineName < expenseLines[j].LineName
 	})
 
-	netProfitOrLoss := grossIncome - totalDedExp
+	netProfitOrLoss := grossIncome.Sub(totalDedExp)
 
 	// Count uncategorized items
 	var uncategorizedTxCount int64
@@ -864,30 +955,30 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 	uncatExpQ = ApplyDateRange(uncatExpQ, "timestamp", startDate, endDate)
 	uncatExpQ.Count(&uncategorizedExpCount)
 
-	// IRS Self-Employment Tax (Schedule SE) & Form 1040-ES Quarterly Estimates
-	// Net profit is subject to SE tax if >= $400.
+	// IRS Self-Employment Tax (Schedule SE) & Form 1040-ES Quarterly Estimates in exact integer cents.
+	// Net profit is subject to SE tax if >= $400 (40000 cents).
 	// Net SE earnings = 92.35% of Net Profit (Line 31).
-	// SE tax rate = 15.3% (12.4% Social Security up to wage cap + 2.9% Medicare with no cap).
+	// SE tax rate = 15.3% (12.4% Social Security up to $176,100 cap + 2.9% Medicare with no cap).
 	// 50% of SE tax is deductible above-the-line on Form 1040 Schedule 1 (Line 15).
-	var seTax float64
-	var dedSETax float64
-	var estIncomeTax float64
-	var totalEstTax float64
-	var qtrTax float64
+	var seTax, dedSETax, estIncomeTax, totalEstTax, qtrTax models.Money
 
-	if netProfitOrLoss >= 400.0 {
-		netSEEarnings := netProfitOrLoss * 0.9235
-		// Cap Social Security at $176,100 for 2026/2025 wage limits
-		ssEarnings := math.Min(netSEEarnings, 176100.0)
-		seTax = roundCents((ssEarnings * 0.124) + (netSEEarnings * 0.029))
-		dedSETax = roundCents(seTax * 0.50)
+	if netProfitOrLoss.Cents >= 40000 {
+		netSEEarnings := netProfitOrLoss.PercentOf(92.35)
+		ssCap := models.Money{Cents: 17610000}
+		ssEarnings := netSEEarnings
+		if ssEarnings.GreaterThan(ssCap) {
+			ssEarnings = ssCap
+		}
+		seTax = ssEarnings.PercentOf(12.4).Add(netSEEarnings.PercentOf(2.9))
+		dedSETax = seTax.PercentOf(50.0)
 
-		// Effective income tax estimation for sole proprietor (~15% bracket on net profit after SE deduction)
-		taxableIncomeEstimate := math.Max(0, netProfitOrLoss-dedSETax)
-		estIncomeTax = roundCents(taxableIncomeEstimate * 0.15)
+		taxableIncomeEstimate := netProfitOrLoss.Sub(dedSETax)
+		if taxableIncomeEstimate.IsPositive() {
+			estIncomeTax = taxableIncomeEstimate.PercentOf(15.0)
+		}
 
-		totalEstTax = roundCents(seTax + estIncomeTax)
-		qtrTax = roundCents(totalEstTax / 4.0)
+		totalEstTax = seTax.Add(estIncomeTax)
+		qtrTax = models.Money{Cents: int64(math.Round(float64(totalEstTax.Cents) / 4.0))}
 	}
 
 	deadlines := []QuarterlyTaxDeadline{
@@ -895,28 +986,28 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 			Quarter:   "Q1",
 			Period:    "Jan 1 – Mar 31",
 			DueDate:   fmt.Sprintf("April 15, %d", year),
-			AmountDue: models.NewMoney(qtrTax),
+			AmountDue: qtrTax,
 			IsPast:    time.Now().After(time.Date(year, time.April, 15, 23, 59, 59, 0, time.Local)),
 		},
 		{
 			Quarter:   "Q2",
 			Period:    "Apr 1 – May 31",
 			DueDate:   fmt.Sprintf("June 15, %d", year),
-			AmountDue: models.NewMoney(qtrTax),
+			AmountDue: qtrTax,
 			IsPast:    time.Now().After(time.Date(year, time.June, 15, 23, 59, 59, 0, time.Local)),
 		},
 		{
 			Quarter:   "Q3",
 			Period:    "Jun 1 – Aug 31",
 			DueDate:   fmt.Sprintf("September 15, %d", year),
-			AmountDue: models.NewMoney(qtrTax),
+			AmountDue: qtrTax,
 			IsPast:    time.Now().After(time.Date(year, time.September, 15, 23, 59, 59, 0, time.Local)),
 		},
 		{
 			Quarter:   "Q4",
 			Period:    "Sep 1 – Dec 31",
 			DueDate:   fmt.Sprintf("January 15, %d", year+1),
-			AmountDue: models.NewMoney(qtrTax),
+			AmountDue: qtrTax,
 			IsPast:    time.Now().After(time.Date(year+1, time.January, 15, 23, 59, 59, 0, time.Local)),
 		},
 	}
@@ -925,34 +1016,37 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		StartDate:                   startDate,
 		EndDate:                     endDate,
 		Year:                        year,
-		GrossReceipts:               models.NewMoney(roundCents(grossReceipts)),
-		ReturnsAndAllowances:        models.NewMoney(roundCents(returnsAndAllowances)),
-		NetReceipts:                 models.NewMoney(roundCents(netReceipts)),
-		CostOfGoodsSold:             models.NewMoney(roundCents(cogs)),
-		GrossProfit:                 models.NewMoney(roundCents(grossProfit)),
-		OtherIncome:                 models.NewMoney(roundCents(otherIncome)),
-		GrossIncome:                 models.NewMoney(roundCents(grossIncome)),
+		GrossReceipts:               grossReceipts,
+		ReturnsAndAllowances:        returnsAndAllowances,
+		NetReceipts:                 netReceipts,
+		CostOfGoodsSold:             cogs,
+		GrossProfit:                 grossProfit,
+		OtherIncome:                 otherIncome,
+		GrossIncome:                 grossIncome,
 		IncomeLines:                 incomeLines,
 		ExpenseLines:                expenseLines,
-		TotalExpensesGross:          models.NewMoney(roundCents(totalGrossExp)),
-		TotalExpensesDeductible:     models.NewMoney(roundCents(totalDedExp)),
-		NondeductibleMeals:          models.NewMoney(roundCents(nondeductibleMeals)),
-		NetProfitOrLoss:             models.NewMoney(roundCents(netProfitOrLoss)),
-		UncategorizedExpenseAmount:  models.NewMoney(roundCents(totalUncatExp)),
-		UncategorizedIncomeAmount:   models.NewMoney(roundCents(uncatDeposits.Total)),
+		TotalExpensesGross:          totalGrossExp,
+		TotalExpensesDeductible:     totalDedExp,
+		NondeductibleMeals:          nondeductibleMeals,
+		NetProfitOrLoss:             netProfitOrLoss,
+		UncategorizedExpenseAmount:  totalUncatExp,
+		UncategorizedIncomeAmount:   uncatDeposits.Total,
 		UncategorizedTxCount:        uncategorizedTxCount,
 		UncategorizedExpCount:       uncategorizedExpCount,
-		SelfEmploymentTax:           models.NewMoney(seTax),
-		DeductibleSelfEmploymentTax: models.NewMoney(dedSETax),
-		EstimatedIncomeTax:          models.NewMoney(estIncomeTax),
-		TotalEstimatedTax:           models.NewMoney(totalEstTax),
-		EstimatedQuarterlyTax:       models.NewMoney(qtrTax),
+		SelfEmploymentTax:           seTax,
+		DeductibleSelfEmploymentTax: dedSETax,
+		EstimatedIncomeTax:          estIncomeTax,
+		TotalEstimatedTax:           totalEstTax,
+		EstimatedQuarterlyTax:       qtrTax,
 		QuarterlyDeadlines:          deadlines,
 	}, nil
 }
 
 // GetScheduleCReport returns structured IRS Form 1040 Schedule C calculations.
 func GetScheduleCReport(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 	yearStr := c.Query("year")
@@ -1115,6 +1209,9 @@ func BuildCashFlowData(input CashFlowBuilderInput) CashFlowReportData {
 // Excludes LIABILITY accounts (e.g. credit cards) and internal transfers between ASSET accounts
 // so that only true Cash and Cash Equivalent flows are measured without double-counting.
 func GetCashFlowSummary(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 
@@ -1304,6 +1401,9 @@ func BuildVendorSpendData(input VendorSpendBuilderInput) VendorSpendReportData {
 
 // GetVendorSpendReport analyzes expense and debit spending grouped and ranked by payee/vendor.
 func GetVendorSpendReport(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 
@@ -1324,7 +1424,9 @@ func GetVendorSpendReport(c fiber.Ctx) error {
 		Where(inBooksClauseExpAS).
 		Where("(LOWER(COALESCE(e.tender, '')) = 'cash' OR e.review_status = 'WARNINGS_IGNORED' OR e.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
 	expQ = ApplyDateRange(expQ, "e.timestamp", startDate, endDate)
-	_ = expQ.Scan(&exps)
+	if err := expQ.Scan(&exps).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch vendor expense data"})
+	}
 
 	var debits []dbExpenseRow
 	debQ := db.DB.Table("bank_transactions bt").
@@ -1335,7 +1437,9 @@ func GetVendorSpendReport(c fiber.Ctx) error {
 		Where(inBooksClauseBT).
 		Where("bt.id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')")
 	debQ = ApplyDateRange(debQ, "bt.date", startDate, endDate)
-	debQ.Scan(&debits)
+	if err := debQ.Scan(&debits).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch vendor debit data"})
+	}
 
 	var rawItems []VendorSpendRawItem
 	for _, e := range exps {
@@ -1656,8 +1760,9 @@ func BuildTrialBalanceData(startDate, endDate string) (*TrialBalanceReportData, 
 		}, nil
 	}
 
+	// Load all chart accounts so historical transactions referencing archived accounts still balance.
 	var accounts []models.ChartAccount
-	if err := db.DB.Where("active = true").Order("code ASC").Find(&accounts).Error; err != nil {
+	if err := db.DB.Order("code ASC").Find(&accounts).Error; err != nil {
 		return nil, err
 	}
 
@@ -1675,7 +1780,7 @@ func BuildTrialBalanceData(startDate, endDate string) (*TrialBalanceReportData, 
 	// Find default cash/equity account for cash tender offsetting credit
 	var cashAccountID uint
 	for _, acc := range accounts {
-		if acc.Type == "ASSET" && (acc.Code == "1050" || strings.Contains(strings.ToLower(acc.Name), "cash")) {
+		if acc.Type == "ASSET" && (acc.Code == "1030" || acc.Code == "1050" || strings.Contains(strings.ToLower(acc.Name), "cash")) {
 			cashAccountID = acc.ID
 			break
 		}
@@ -1868,6 +1973,9 @@ func BuildTrialBalanceData(startDate, endDate string) (*TrialBalanceReportData, 
 
 // GetTrialBalance delivers the Trial Balance report API endpoint
 func GetTrialBalance(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 

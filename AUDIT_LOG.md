@@ -170,3 +170,13 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
   - `rulesController.go`: Added nil-DB guards across all 9 handlers, shared `validateActiveRuleCategory` + `broadcastRuleAppliedUpdates` helpers, `404` check on missing `DeleteRule`, regex validation in `TestRulePreview`, and rune-safe keyword truncation in `GetRuleSuggestions`.
 - **Coverage**: `invoiceController.go` handlers **75.0%–100.0%** (10 functions ≥90%), `rulesController.go` handlers **78.6%–100.0%** (10 functions ≥85%); `controllers` package jumped from **60.4% → 73.9%**.
 - **Verification**: `go build ./...` ✅, `go vet ./...` ✅, `go test -count=1 ./...` ✅ (all 7 packages pass).
+
+## S11A & S11B: Controllers — Financial, Tax & Trial Balance Reports
+- **reportController.go**:
+  - Removed all 35 `roundCents(float64)` calls and converted `BuildScheduleCData`, IRS Schedule SE (15.3% / `$176,100` SS cap), and Form 1040-ES quarterly tax estimation to exact integer-cent `models.Money` arithmetic (`PercentOf`, `Add`, `Sub`).
+  - Fixed dead-code `startDate` year inference in `BuildScheduleCData` (extracting year from `startDate` before defaulting to current year so prior-year quarterly deadlines render accurately).
+  - Extracted `addScheduleCIncomeAccountLine` to eliminate 3x duplicated income-bucket aggregation.
+  - Added `db.DB == nil` guards to `GetProfitLoss`, `BuildScheduleCData`, `GetScheduleCReport`, `GetCashFlowSummary`, `GetVendorSpendReport`, and `GetTrialBalance`, plus proper HTTP 500 error propagation in `GetVendorSpendReport`.
+  - Loaded all accounts (including deactivated historical accounts) in `BuildTrialBalanceData` so closed/archived categories with historical postings keep `TotalDebit == TotalCredit` (`VarianceCents == 0`).
+- **Coverage**: `reportController.go` functions **80.0%–100.0%** (`BuildScheduleCData` 90.0%, `resolveScheduleCLine` 95.6%, `GetProfitLoss` 88.7%, `GetCashFlowSummary` 90.9%, `GetVendorSpendReport` 90.9%, `GetARAgingReport` 92.3%, `BuildTrialBalanceData` 91.4%, `GetTrialBalance` 87.5%); `controllers` package rose from **73.9% → 83.0%**.
+- **Verification**: `go build ./...` ✅, `go vet ./...` ✅, `go test -count=1 ./controllers` ✅.
