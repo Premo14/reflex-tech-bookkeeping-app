@@ -222,3 +222,8 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
 - **matchConfidence.ts**: Replaced naked `.toFixed(2)` strings with `formatCurrency`, added `absExp > 0` division-by-zero guard on tip variance, and guarded invalid/empty dates so `diffDays` never evaluates as `NaN` (`96.22%` coverage).
 - **vendorUtils.ts & useLiveSync.ts**: Added `ACH WITHDRAWAL` prefix cleanup in `extractCleanVendor` (`100%` coverage); replaced all `any` types with `unknown` and fixed React `useEffect` `exhaustive-deps` warnings in `useLiveSync.ts` (`86.15%` coverage).
 - **Verification**: `npm run build` ✅, `eslint src/utils src/types` (0 errors, 0 warnings) ✅, `CoreUtils.test.tsx` (12/12 passing; `src/utils` **93.95%** statements / **95.71%** lines) ✅.
+
+## S15B: Frontend API Client (`services/api.ts`)
+- **services/api.ts**: Consolidated duplicated `fetch` + error-parsing boilerplate into shared `ApiError`, `fetchWithTimeout` (30s JSON default / 600s multipart OCR/restore timeout translating `AbortError` into HTTP 408), `requestJSON`/`getJSON`/`postJSON`/`patchJSON`/`deleteJSON`, and `buildUrl` helpers.
+- **Type Safety & Contracts**: Eliminated all 6 ESLint `@typescript-eslint/no-explicit-any` warnings (`CreateAndLinkInput`, `UnlinkedItemsResponse`, `UploadReceiptResponse`, typed `PeriodAuditLog[]` return on `getAuditLogs`); ensured `ApiError` preserves `status` and structured `data` for 409 duplicate-receipt & 403 closed-period flows.
+- **Verification**: `npm run build` ✅, `npm run lint` (0 errors; 0 warnings in `services/api.ts`) ✅, `ApiClient.test.ts` passing (`services/api.ts`: **98.22%** statements / **99.11%** lines) ✅.
