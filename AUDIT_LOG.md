@@ -131,3 +131,10 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
 - **demo_receipt_png.go**: `drawBitmapText` 91.7%, `drawDottedRule` 100%, `wrapLine` 85.7%, `CreateDemoReceiptPNGToDir` 88.1%, `CreateDemoReceiptPNG` 0% (deferred).
 - **Overall utils/ package**: 43.3% (from 42.6% baseline). Non-DB helpers ≥77-100%.
 - **Verification**: `go build ./...` ✅, `go vet ./...` ✅, all tests pass ✅.
+
+## S08A: Controllers — Transactions
+- Audited `transactionController.go` (504 lines, 8 functions) and existing 60+ tests in `transactionController_test.go`.
+- Verification results: GetTransactions 94.4%, GetTransaction 96.6%, ValidateBankAccount 100%, ValidateTransactionCategory 100%, CreateTransaction 97.4%, UpdateTransaction 93.8%, DeleteTransaction 93.3%, GetAccountAndDescendantIDs 100% — all ≥93% (target ≥85% met).
+- Audit findings: No bugs/security/perf issues. Integer-cent math correct. Closed-period 403 enforced on Create/Update/Delete. Imported-transaction protection blocks amount/date/account tampering. Search covers description/notes/FITID. All 7 status filters tested. FITID auto-generation verified. Bank rules auto-evaluation triggers on nil category.
+- No changes needed — existing test coverage already exceeds target.
+- Verification Gate: `go build ./...` ✅, `go vet ./...` ✅, `go test ./...` ✅, file-processor build ✅, frontend build ✅.
