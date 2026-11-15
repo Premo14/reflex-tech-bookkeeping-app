@@ -363,3 +363,66 @@ export function getGroupedAccounts(
 
   return groups;
 }
+
+/** Recursively collects all descendant chart account IDs for cycle-safe parent filtering. */
+export function getDescendantIds(rootId: number, allAccounts: ChartAccount[]): Set<number> {
+  const descendants = new Set<number>();
+  function recurse(parentId: number) {
+    for (const a of allAccounts) {
+      if (a.parentId === parentId && !descendants.has(a.id)) {
+        descendants.add(a.id);
+        recurse(a.id);
+      }
+    }
+  }
+  recurse(rootId);
+  return descendants;
+}
+
+/** Suggests the next unused 4-digit account code within a subclass numeric range. */
+export function getNextAvailableCodeInRange(min: number, max: number, existingAccounts: ChartAccount[]): string {
+  const existingCodes = new Set(existingAccounts.map((a) => parseInt(a.code, 10)).filter((n) => !isNaN(n)));
+  for (let candidate = min; candidate <= max; candidate += 10) {
+    if (!existingCodes.has(candidate)) {
+      return String(candidate);
+    }
+  }
+  for (let candidate = min; candidate <= max; candidate++) {
+    if (!existingCodes.has(candidate)) {
+      return String(candidate);
+    }
+  }
+  return String(min);
+}
+
+/** Standard IRS Form 1040 Schedule C line options for tax mapping in Chart of Accounts. */
+export const SCHEDULE_C_OPTIONS = [
+  { value: "", label: "-- None / Not Applicable --" },
+  { value: "Line 1 - Gross receipts or sales", label: "Line 1 - Gross receipts or sales (Revenue)" },
+  { value: "Line 2 - Returns and allowances", label: "Line 2 - Returns & allowances" },
+  { value: "Line 4 - Cost of goods sold", label: "Line 4 - Cost of goods sold (COGS)" },
+  { value: "Line 6 - Other income", label: "Line 6 - Other income (Interest, refunds)" },
+  { value: "Line 8 - Advertising", label: "Line 8 - Advertising & marketing" },
+  { value: "Line 9 - Car and truck expenses", label: "Line 9 - Car and truck expenses" },
+  { value: "Line 10 - Commissions and fees", label: "Line 10 - Commissions and fees" },
+  { value: "Line 11 - Contract labor", label: "Line 11 - Contract labor (1099)" },
+  { value: "Line 12 - Depletion", label: "Line 12 - Depletion" },
+  { value: "Line 13 - Depreciation", label: "Line 13 - Depreciation & Sec 179" },
+  { value: "Line 14 - Employee benefit programs", label: "Line 14 - Employee benefits" },
+  { value: "Line 15 - Insurance (other than health)", label: "Line 15 - Insurance (liability, business)" },
+  { value: "Line 16a - Mortgage interest", label: "Line 16a - Mortgage interest" },
+  { value: "Line 16b - Other interest", label: "Line 16b - Other interest (loans, credit card interest)" },
+  { value: "Line 17 - Legal and professional services", label: "Line 17 - Legal and professional services" },
+  { value: "Line 18 - Office expense", label: "Line 18 - Office expense & supplies" },
+  { value: "Line 19 - Pension and profit-sharing", label: "Line 19 - Pension and profit-sharing" },
+  { value: "Line 20a - Rent (vehicles, machinery)", label: "Line 20a - Rent (vehicles, machinery, equipment)" },
+  { value: "Line 20b - Rent or lease (other business property)", label: "Line 20b - Rent/lease (office, property)" },
+  { value: "Line 21 - Repairs and maintenance", label: "Line 21 - Repairs and maintenance" },
+  { value: "Line 22 - Supplies", label: "Line 22 - Supplies & materials" },
+  { value: "Line 23 - Taxes and licenses", label: "Line 23 - Taxes and licenses" },
+  { value: "Line 24a - Travel", label: "Line 24a - Travel & lodging" },
+  { value: "Line 24b - Deductible meals (50%)", label: "Line 24b - Deductible meals (50% IRS limit)" },
+  { value: "Line 25 - Utilities", label: "Line 25 - Utilities (electric, internet, phone)" },
+  { value: "Line 26 - Wages", label: "Line 26 - Wages & salaries" },
+  { value: "Line 27a - Other expenses", label: "Line 27a - Other expenses (Software, bank fees, misc)" },
+];

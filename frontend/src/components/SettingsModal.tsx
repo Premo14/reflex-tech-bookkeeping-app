@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { getSettings, updateSettings, getAuditLogs, getClosePreflight } from "../services/api";
 import type { PeriodAuditLog, ClosePreflight } from "../types/models";
 import { Modal } from "./ui/Modal";
@@ -25,35 +25,7 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
   const [ackUncategorized, setAckUncategorized] = useState(false);
   const debounceRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    if (isOpen) {
-      loadData();
-      setAckUncategorized(false);
-    }
-  }, [isOpen]);
-
-  useEffect(() => {
-    setAckUncategorized(false);
-    if (!booksClosedDate) {
-      setPreflight(null);
-      return;
-    }
-    setIsLoadingPreflight(true);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(async () => {
-      try {
-        const data = await getClosePreflight(booksClosedDate);
-        setPreflight(data);
-      } catch (err: any) {
-        console.error("Failed to fetch preflight:", err);
-      } finally {
-        setIsLoadingPreflight(false);
-      }
-    }, 300);
-    return () => clearTimeout(debounceRef.current ?? undefined);
-  }, [booksClosedDate]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const [settings, logs] = await Promise.all([
         getSettings(),
@@ -67,10 +39,55 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
         setCurrentClosedDate("");
       }
       setAuditLogs(logs || []);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("Failed to load settings:", err);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      setAckUncategorized(false);
+      void loadData();
+    });
+    return () => {
+      active = false;
+    };
+  }, [isOpen, loadData]);
+
+  useEffect(() => {
+    let active = true;
+    if (!booksClosedDate) {
+      void Promise.resolve().then(() => {
+        if (!active) return;
+        setAckUncategorized(false);
+        setPreflight(null);
+      });
+      return () => {
+        active = false;
+      };
+    }
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(async () => {
+      if (!active) return;
+      setAckUncategorized(false);
+      setIsLoadingPreflight(true);
+      try {
+        const data = await getClosePreflight(booksClosedDate);
+        if (active) setPreflight(data);
+      } catch (err: unknown) {
+        console.error("Failed to fetch preflight:", err);
+      } finally {
+        if (active) setIsLoadingPreflight(false);
+      }
+    }, 300);
+    return () => {
+      active = false;
+      clearTimeout(debounceRef.current ?? undefined);
+    };
+  }, [booksClosedDate]);
 
   const handleSave = async (forceDate?: string) => {
     const dateToSave = forceDate !== undefined ? forceDate : booksClosedDate;
@@ -80,8 +97,8 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
       await updateSettings("BooksClosedDate", dateToSave);
       refreshData();
       await loadData();
-    } catch (err: any) {
-      setError(err.message || "Failed to update settings");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to update settings");
     } finally {
       setIsSaving(false);
     }
@@ -136,21 +153,22 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
         </div>
 
         {error && (
-          <div className="p-2.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-xs font-medium">
+          <div role="alert" className="p-2.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-xs font-medium">
             {error}
           </div>
         )}
 
         {/* CONTROLS */}
-        <div className="bg-[#111] border border-white/5 p-4 rounded-xl">
+        <div className="surface-glass border border-white/10 p-4 rounded-xl">
           <h3 className="text-xs font-bold text-white mb-2">Change Closing Date</h3>
           <p className="text-[11px] text-zinc-400 mb-3 leading-relaxed">
-            <strong className="text-amber-400/90">Strict Closing Rule:</strong> You cannot lock books for a period that contains unresolved items. All expenses and transactions on or before your chosen date must be explicitly linked and balanced, or moved to the "Ignored Items" queue.
+            <strong className="text-amber-400/90">Strict Closing Rule:</strong> You cannot lock books for a period that contains unresolved items. All expenses and transactions on or before your chosen date must be explicitly linked and balanced, or moved to the &ldquo;Ignored Items&rdquo; queue.
           </p>
           
           <div className="flex flex-col sm:flex-row items-end gap-2.5">
             <div className="flex-1 w-full">
               <Input
+                id="settings-closing-date"
                 type="date"
                 label="New Closing Date"
                 value={booksClosedDate}
@@ -158,18 +176,18 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
               />
             </div>
             <div className="flex gap-2 w-full sm:w-auto mt-2 sm:mt-0">
-              <Button variant="primary" size="sm" onClick={() => handleSave()} disabled={!canSave} isLoading={isSaving} className="flex-1 sm:flex-none">
+              <Button variant="primary" size="sm" glow onClick={() => handleSave()} disabled={!canSave} isLoading={isSaving} className="flex-1 sm:flex-none">
                 Save Date
               </Button>
               {booksClosedDate && (
-                <Button variant="danger" size="sm" onClick={() => handleSave("")} isLoading={isSaving} className="flex-1 sm:flex-none" title="Clear date to completely unlock books">
+                <Button variant="danger" size="sm" onClick={() => handleSave("")} isLoading={isSaving} className="flex-1 sm:flex-none touch-glow-red" title="Clear date to completely unlock books">
                   Unlock All
                 </Button>
               )}
             </div>
           </div>
           <div className="mt-3 pt-3 border-t border-white/5">
-            <Button variant="secondary" size="sm" onClick={handleQuickClose} isLoading={isSaving} className="w-full justify-center text-xs">
+            <Button variant="secondary" size="sm" onClick={handleQuickClose} isLoading={isSaving} className="w-full justify-center text-xs touch-glow-emerald">
               Quick Lock: End of Last Month
             </Button>
           </div>
@@ -256,7 +274,7 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
         {/* AUDIT LOG */}
         <div>
           <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 pl-1">Audit History</h3>
-          <div className="bg-[#0a0a0a] border border-white/5 rounded-xl overflow-hidden max-h-40 overflow-y-auto">
+          <div className="bg-zinc-900/50 border border-white/10 rounded-xl overflow-hidden max-h-40 overflow-y-auto overflow-x-auto">
             {auditLogs.length === 0 ? (
               <div className="p-3 text-center text-xs text-zinc-500">No history available.</div>
             ) : (
@@ -275,7 +293,7 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
                       <td className="py-2 px-3 text-zinc-300 whitespace-nowrap text-[11px]">{new Date(log.createdAt).toLocaleString()}</td>
                       <td className={`py-2 px-3 font-semibold ${getActionColor(log.action)}`}>{log.action}</td>
                       <td className="py-2 px-3 text-zinc-400">
-                        {log.previousDate || "OPEN"} <span className="text-zinc-600 mx-1">→</span> {log.newDate || "OPEN"}
+                        {log.previousDate || "OPEN"} <span className="text-zinc-400 mx-1">→</span> {log.newDate || "OPEN"}
                       </td>
                       <td className="py-2 px-3 text-zinc-500 hidden sm:table-cell text-[11px]">{log.reason}</td>
                     </tr>

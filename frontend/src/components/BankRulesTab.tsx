@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, type FormEvent } from "react";
 import { Button } from "./ui/Button";
+import { Badge } from "./ui/Badge";
 import { Input } from "./ui/Input";
 import { Select } from "./ui/Select";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
@@ -98,7 +99,7 @@ export default function BankRulesTab({
   const [isSaving, setIsSaving] = useState(false);
   const [suggestions, setSuggestions] = useState<RuleSuggestion[]>([]);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
       const [rulesData, accountsData, suggData] = await Promise.all([
@@ -109,20 +110,49 @@ export default function BankRulesTab({
       setRules(rulesData || []);
       setAccounts(accountsData || []);
       setSuggestions(suggData?.suggestions || []);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("Failed to load rules:", err);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  const handleApplyAllRules = useCallback(async () => {
+    setIsApplying(true);
+    setApplyResultMsg(null);
+    try {
+      const res = await applyAllBankRules();
+      setApplyResultMsg(
+        `Applied rules to ${res.appliedCount} open transaction${
+          res.appliedCount === 1 ? "" : "s"
+        }.`
+      );
+      if (onRulesApplied) onRulesApplied();
+      await loadData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setApplyResultMsg(`Failed to apply rules: ${msg}`);
+    } finally {
+      setIsApplying(false);
+    }
+  }, [onRulesApplied, loadData]);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (active) void loadData();
+    });
+    return () => {
+      active = false;
+    };
+  }, [loadData]);
 
   // Handle prefill if opened from "Create Rule from Transaction"
   useEffect(() => {
-    if (initialRuleData) {
+    if (!initialRuleData) return;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active) return;
       setRuleName(initialRuleData.name || "");
       setConditions([
         {
@@ -139,36 +169,49 @@ export default function BankRulesTab({
       setNotes("");
       setEditingRuleId(null);
       setIsEditing(true);
-    }
+    });
+    return () => {
+      active = false;
+    };
   }, [initialRuleData]);
 
   // Live preview matching debounced
   useEffect(() => {
+    let active = true;
     const valid = conditions.filter((c) => c.value && c.value.trim() !== "");
     if (!isEditing || valid.length === 0) {
-      setPreviewMatches(null);
-      return;
+      void Promise.resolve().then(() => {
+        if (active) setPreviewMatches(null);
+      });
+      return () => {
+        active = false;
+      };
     }
 
     const timer = setTimeout(async () => {
-      setIsPreviewLoading(true);
+      if (active) setIsPreviewLoading(true);
       try {
         const res = await previewBankRule({
           matchLogic,
           conditions: valid,
         });
-        setPreviewMatches({
-          count: res.matchCount,
-          samples: res.sampleMatches || [],
-        });
+        if (active) {
+          setPreviewMatches({
+            count: res.matchCount,
+            samples: res.sampleMatches || [],
+          });
+        }
       } catch {
-        setPreviewMatches(null);
+        if (active) setPreviewMatches(null);
       } finally {
-        setIsPreviewLoading(false);
+        if (active) setIsPreviewLoading(false);
       }
     }, 400);
 
-    return () => clearTimeout(timer);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
   }, [conditions, matchLogic, isEditing]);
 
   const handleStartCreate = () => {
@@ -245,7 +288,7 @@ export default function BankRulesTab({
     setConditions(conditions.filter((_, i) => i !== index));
   };
 
-  const handleSaveRule = async (e: React.FormEvent) => {
+  const handleSaveRule = async (e: FormEvent) => {
     e.preventDefault();
     if (!ruleName.trim()) {
       await alert({
@@ -314,13 +357,13 @@ export default function BankRulesTab({
       await loadData();
 
       if (applyImmediately) {
-        handleApplyAllRules();
+        await handleApplyAllRules();
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to save rule:", err);
       await alert({
         title: "Error Saving Rule",
-        message: err.message || "Failed to save bank rule.",
+        message: err instanceof Error && err.message ? err.message : "Failed to save bank rule.",
       });
     } finally {
       setIsSaving(false);
@@ -339,10 +382,10 @@ export default function BankRulesTab({
     try {
       await deleteBankRule(id);
       await loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       await alert({
         title: "Delete Failed",
-        message: err.message || "Failed to delete rule.",
+        message: err instanceof Error && err.message ? err.message : "Failed to delete rule.",
       });
     }
   };
@@ -353,32 +396,15 @@ export default function BankRulesTab({
       setRules((prev) =>
         prev.map((r) => (r.id === rule.id ? { ...r, active: !r.active } : r))
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
       await alert({
         title: "Update Failed",
-        message: err.message || "Failed to update rule status.",
+        message: err instanceof Error && err.message ? err.message : "Failed to update rule status.",
       });
     }
   };
 
-  const handleApplyAllRules = async () => {
-    setIsApplying(true);
-    setApplyResultMsg(null);
-    try {
-      const res = await applyAllBankRules();
-      setApplyResultMsg(
-        `Applied rules to ${res.appliedCount} open transaction${
-          res.appliedCount === 1 ? "" : "s"
-        }.`
-      );
-      if (onRulesApplied) onRulesApplied();
-      await loadData();
-    } catch (err: any) {
-      setApplyResultMsg(`Failed to apply rules: ${err.message}`);
-    } finally {
-      setIsApplying(false);
-    }
-  };
+  const activeRulesCount = rules.filter((r) => r.active).length;
 
   const groupedAccounts = getGroupedAccounts(
     accounts,
@@ -390,15 +416,15 @@ export default function BankRulesTab({
     <div className="space-y-4">
       {/* HEADER / ACTIONS BAR */}
       {!isEditing && (
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-xl bg-zinc-950 border border-white/10">
+        <div className="surface-glass flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-xl border border-white/10">
           <div className="space-y-0.5">
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
                 Automated Bank Rules
               </span>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                {rules.length} Active Rules
-              </span>
+              <Badge variant="success" glow>
+                {activeRulesCount} Active Rule{activeRulesCount === 1 ? "" : "s"}
+              </Badge>
             </div>
             <p className="text-xs text-zinc-400">
               Rules automatically normalize messy descriptions, assign categories, and pre-approve recurring debits on ingestion.
@@ -412,7 +438,7 @@ export default function BankRulesTab({
               size="sm"
               onClick={handleApplyAllRules}
               disabled={isApplying || rules.length === 0}
-              className="text-xs font-semibold"
+              className="text-xs font-semibold touch-glow-emerald"
             >
               {isApplying ? (
                 <>
@@ -420,7 +446,7 @@ export default function BankRulesTab({
                 </>
               ) : (
                 <>
-                  <svg className="w-3.5 h-3.5 text-indigo-400 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg aria-hidden="true" className="w-3.5 h-3.5 text-indigo-400 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
@@ -433,10 +459,11 @@ export default function BankRulesTab({
               type="button"
               variant="primary"
               size="sm"
+              glow
               onClick={handleStartCreate}
               className="text-xs font-semibold flex items-center gap-1.5"
             >
-              <svg className="w-4 h-4 text-zinc-950" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg aria-hidden="true" className="w-4 h-4 text-zinc-950" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
               </svg>
               New Rule
@@ -446,12 +473,13 @@ export default function BankRulesTab({
       )}
 
       {applyResultMsg && (
-        <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs flex items-center justify-between">
+        <div role="status" className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs flex items-center justify-between">
           <span>{applyResultMsg}</span>
           <button
             type="button"
+            aria-label="Dismiss rule status"
             onClick={() => setApplyResultMsg(null)}
-            className="text-emerald-400 hover:text-white text-xs ml-2 cursor-pointer"
+            className="text-emerald-400 hover:text-white text-xs ml-2 cursor-pointer transition-colors"
           >
             &times;
           </button>
@@ -460,10 +488,10 @@ export default function BankRulesTab({
 
       {/* SMART RULE SUGGESTIONS */}
       {!isEditing && suggestions.length > 0 && (
-        <div className="p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 space-y-2 mb-3">
+        <div className="surface-glass p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 space-y-2 mb-3">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-semibold text-indigo-300 flex items-center gap-1.5">
-              <span>💡</span> Smart Rule Suggestions ({suggestions.length})
+              <span aria-hidden="true">💡</span> Smart Rule Suggestions ({suggestions.length})
             </span>
             <span className="text-[11px] text-zinc-400">
               Detected recurring categorizations
@@ -473,7 +501,7 @@ export default function BankRulesTab({
             {suggestions.map((s, idx) => (
               <div
                 key={idx}
-                className="flex items-center justify-between gap-2 p-2 rounded-lg bg-zinc-950/60 border border-white/5 text-xs"
+                className="flex items-center justify-between gap-2 p-2 rounded-lg bg-zinc-950/60 border border-white/5 hover:border-indigo-500/30 transition-colors text-xs"
               >
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-mono text-[11px] text-zinc-200 bg-zinc-900 px-1.5 py-0.5 rounded border border-white/5">
@@ -510,10 +538,10 @@ export default function BankRulesTab({
               <LoadingSpinner size="sm" /> Loading rules...
             </div>
           ) : rules.length === 0 ? (
-            <div className="p-8 text-center rounded-xl bg-zinc-950 border border-white/5 space-y-2">
+            <div className="p-8 text-center rounded-xl bg-zinc-900/50 border border-white/10 space-y-2">
               <div className="text-zinc-500 text-3xl">⚡</div>
               <p className="text-sm font-semibold text-zinc-300">No Bank Rules Created Yet</p>
-              <p className="text-xs text-zinc-500 max-w-md mx-auto">
+              <p className="text-xs text-zinc-400 max-w-md mx-auto">
                 Create rules to automatically categorize recurring charges like software subscriptions, utility bills, and payroll transfers as soon as they hit your account.
               </p>
               <Button
@@ -537,8 +565,8 @@ export default function BankRulesTab({
                     key={rule.id}
                     className={`p-3.5 rounded-xl border transition-all ${
                       rule.active
-                        ? "bg-zinc-950/80 border-white/10 hover:border-white/20"
-                        : "bg-zinc-950/40 border-white/5 opacity-60"
+                        ? "surface-glass border-white/10 hover:border-white/20"
+                        : "bg-zinc-900/30 border-white/5 opacity-60"
                     }`}
                   >
                     <div className="flex items-start justify-between gap-3">
@@ -547,24 +575,29 @@ export default function BankRulesTab({
                           <span className="font-semibold text-sm text-zinc-100">
                             {rule.name}
                           </span>
-                          <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-white/5">
+                          <Badge variant="neutral" size="sm">
                             Priority #{rule.priority}
-                          </span>
+                          </Badge>
+                          {!rule.active && (
+                            <Badge variant="neutral" size="sm">
+                              Paused
+                            </Badge>
+                          )}
                           {rule.autoConfirm && (
-                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                            <Badge variant="success" size="sm" glow>
                               Auto-Approve
-                            </span>
+                            </Badge>
                           )}
                           {rule.autoExclude && (
-                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                            <Badge variant="purple" size="sm">
                               Auto-Exclude ({rule.exclusionReason})
-                            </span>
+                            </Badge>
                           )}
                         </div>
 
                         {/* Conditions summary */}
                         <div className="text-xs text-zinc-400 flex items-center gap-1.5 flex-wrap">
-                          <span className="text-zinc-500 text-[11px] uppercase font-bold">
+                          <span className="text-zinc-400 text-[11px] uppercase font-bold">
                             When:
                           </span>
                           {condList.map((cond, idx) => (
@@ -584,7 +617,7 @@ export default function BankRulesTab({
 
                         {/* Action summary */}
                         <div className="text-xs text-zinc-300 flex items-center gap-2 flex-wrap pt-0.5">
-                          <span className="text-zinc-500 text-[11px] uppercase font-bold">
+                          <span className="text-zinc-400 text-[11px] uppercase font-bold">
                             Then:
                           </span>
                           {targetAccount ? (
@@ -609,7 +642,7 @@ export default function BankRulesTab({
                             </span>
                           )}
 
-                          <span className="text-zinc-600">&bull;</span>
+                          <span className="text-zinc-400">•</span>
                           <span className="text-zinc-500 text-[11px]">
                             Applied {rule.applyCount || 0} times
                           </span>
@@ -620,8 +653,15 @@ export default function BankRulesTab({
                       <div className="flex items-center gap-2 shrink-0 pt-0.5">
                         <button
                           type="button"
+                          role="switch"
+                          aria-checked={rule.active}
+                          aria-label={
+                            rule.active
+                              ? `Pause rule ${rule.name}`
+                              : `Activate rule ${rule.name}`
+                          }
                           onClick={() => handleToggleRuleActive(rule)}
-                          className={`w-9 h-5 flex items-center rounded-full p-0.5 transition-colors cursor-pointer ${
+                          className={`w-9 h-5 flex items-center rounded-full p-0.5 transition-colors cursor-pointer touch-glow-emerald ${
                             rule.active ? "bg-emerald-600" : "bg-zinc-700"
                           }`}
                           title={
@@ -639,22 +679,24 @@ export default function BankRulesTab({
 
                         <button
                           type="button"
+                          aria-label={`Edit rule ${rule.name}`}
                           onClick={() => handleStartEdit(rule)}
-                          className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-white/10 transition-colors"
+                          className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-white/10 transition-colors touch-glow-emerald cursor-pointer"
                           title="Edit Rule"
                         >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg aria-hidden="true" className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                           </svg>
                         </button>
 
                         <button
                           type="button"
+                          aria-label={`Delete rule ${rule.name}`}
                           onClick={() => handleDeleteRule(rule.id)}
-                          className="p-1.5 rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                          className="p-1.5 rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors touch-glow-red cursor-pointer"
                           title="Delete Rule"
                         >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg aria-hidden="true" className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                           </svg>
                         </button>
@@ -670,7 +712,7 @@ export default function BankRulesTab({
 
       {/* RULE EDIT / CREATE VIEW */}
       {isEditing && (
-        <form onSubmit={handleSaveRule} className="space-y-4">
+        <form onSubmit={handleSaveRule} noValidate className="space-y-4">
           <div className="flex items-center justify-between pb-2 border-b border-white/10">
             <h3 className="text-sm font-semibold text-zinc-200">
               {editingRuleId ? "Edit Bank Rule" : "Create New Bank Rule"}
@@ -687,10 +729,11 @@ export default function BankRulesTab({
           {/* Rule Name & Match Logic */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="sm:col-span-2 space-y-1">
-              <label className="text-xs font-medium text-zinc-300">
+              <label htmlFor="bank-rule-name" className="text-xs font-medium text-zinc-300">
                 Rule Name <span className="text-red-400">*</span>
               </label>
               <Input
+                id="bank-rule-name"
                 value={ruleName}
                 onChange={(e) => setRuleName(e.target.value)}
                 placeholder="e.g. AWS Cloud Hosting, Office Rent, Starbucks"
@@ -699,10 +742,11 @@ export default function BankRulesTab({
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-medium text-zinc-300">
+              <label htmlFor="bank-rule-logic" className="text-xs font-medium text-zinc-300">
                 Condition Logic
               </label>
               <Select
+                id="bank-rule-logic"
                 value={matchLogic}
                 onChange={(e) => setMatchLogic(e.target.value as "AND" | "OR")}
                 className="w-full text-xs"
@@ -714,7 +758,7 @@ export default function BankRulesTab({
           </div>
 
           {/* Conditions List */}
-          <div className="space-y-2 p-3.5 rounded-xl bg-zinc-950 border border-white/10">
+          <div className="surface-glass space-y-2 p-3.5 rounded-xl border border-white/10">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
                 Matching Criteria
@@ -722,7 +766,7 @@ export default function BankRulesTab({
               <button
                 type="button"
                 onClick={handleAddCondition}
-                className="text-xs font-medium text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
+                className="text-xs font-medium text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer transition-colors"
               >
                 + Add Condition
               </button>
@@ -741,6 +785,7 @@ export default function BankRulesTab({
                     className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2"
                   >
                     <Select
+                      aria-label={`Condition ${index + 1} field`}
                       value={cond.field}
                       onChange={(e) =>
                         handleConditionChange(index, "field", e.target.value)
@@ -755,6 +800,7 @@ export default function BankRulesTab({
                     </Select>
 
                     <Select
+                      aria-label={`Condition ${index + 1} operator`}
                       value={cond.operator}
                       onChange={(e) =>
                         handleConditionChange(index, "operator", e.target.value)
@@ -769,6 +815,7 @@ export default function BankRulesTab({
                     </Select>
 
                     <Input
+                      aria-label={`Condition ${index + 1} value`}
                       type={isNumeric ? "number" : "text"}
                       step={isNumeric ? "0.01" : undefined}
                       value={cond.value}
@@ -788,8 +835,9 @@ export default function BankRulesTab({
                     {conditions.length > 1 && (
                       <button
                         type="button"
+                        aria-label={`Remove condition ${index + 1}`}
                         onClick={() => handleRemoveCondition(index)}
-                        className="p-2 text-zinc-500 hover:text-red-400 transition-colors self-center cursor-pointer"
+                        className="p-2 text-zinc-400 hover:text-red-400 touch-glow-red rounded-lg transition-colors self-center cursor-pointer"
                         title="Remove condition"
                       >
                         &times;
@@ -811,7 +859,7 @@ export default function BankRulesTab({
                   ) : previewMatches ? (
                     <span>
                       Matches{" "}
-                      <strong className="text-emerald-400 font-semibold">
+                      <strong className="text-emerald-400 font-semibold font-mono tabular-nums">
                         {previewMatches.count}
                       </strong>{" "}
                       existing transactions in your ledger.
@@ -823,17 +871,18 @@ export default function BankRulesTab({
           </div>
 
           {/* Action Settings */}
-          <div className="space-y-3 p-3.5 rounded-xl bg-zinc-950 border border-white/10">
+          <div className="surface-glass space-y-3 p-3.5 rounded-xl border border-white/10">
             <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider block">
               Actions to Apply
             </span>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1">
-                <label className="text-xs font-medium text-zinc-300">
+                <label htmlFor="bank-rule-category" className="text-xs font-medium text-zinc-300">
                   Assign Category Account
                 </label>
                 <Select
+                  id="bank-rule-category"
                   value={categoryAccountId?.toString() || ""}
                   onChange={(e) =>
                     setCategoryAccountId(
@@ -856,10 +905,11 @@ export default function BankRulesTab({
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-medium text-zinc-300">
+                <label htmlFor="bank-rule-vendor" className="text-xs font-medium text-zinc-300">
                   Normalize Merchant Name
                 </label>
                 <Input
+                  id="bank-rule-vendor"
                   value={renamedVendor}
                   onChange={(e) => setRenamedVendor(e.target.value)}
                   placeholder="e.g. Amazon Web Services, Uber, Chevron"
@@ -869,10 +919,11 @@ export default function BankRulesTab({
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-medium text-zinc-300">
+              <label htmlFor="bank-rule-notes" className="text-xs font-medium text-zinc-300">
                 Audit Notes / Description
               </label>
               <Input
+                id="bank-rule-notes"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="Optional explanation, e.g. Monthly cloud hosting write-off"
@@ -907,8 +958,11 @@ export default function BankRulesTab({
 
               {autoExclude && (
                 <div className="pl-6 flex items-center gap-2">
-                  <span className="text-xs text-zinc-400">Exclusion Reason:</span>
+                  <label htmlFor="bank-rule-exclusion-reason" className="text-xs text-zinc-400">
+                    Exclusion Reason:
+                  </label>
                   <Select
+                    id="bank-rule-exclusion-reason"
                     value={exclusionReason}
                     onChange={(e) => setExclusionReason(e.target.value)}
                     className="text-xs w-48"
@@ -949,6 +1003,7 @@ export default function BankRulesTab({
               type="submit"
               variant="primary"
               size="sm"
+              glow
               disabled={isSaving}
             >
               {isSaving ? (

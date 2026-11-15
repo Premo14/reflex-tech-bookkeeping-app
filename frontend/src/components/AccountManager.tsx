@@ -2,44 +2,18 @@ import { useState } from "react";
 import { Modal } from "./ui/Modal";
 import { Button } from "./ui/Button";
 import { Select } from "./ui/Select";
+import { Badge } from "./ui/Badge";
 import type { ChartAccount, CreateChartAccountInput, UpdateChartAccountInput } from "../types/models";
 import { createChartAccount, updateChartAccount, deleteChartAccount } from "../services/api";
 import { useConfirm } from "./ui/ConfirmDialog";
-
-export type { SubClassDef } from "../utils/accountHierarchy";
-export { ACCOUNT_SUBCLASSES, getSubClassForAccount, getAccountDepth } from "../utils/accountHierarchy";
-import type { SubClassDef } from "../utils/accountHierarchy";
-import { ACCOUNT_SUBCLASSES, getSubClassForAccount, getAccountDepth } from "../utils/accountHierarchy";
-
-
-export function getDescendantIds(rootId: number, allAccounts: ChartAccount[]): Set<number> {
-  const descendants = new Set<number>();
-  function recurse(parentId: number) {
-    for (const a of allAccounts) {
-      if (a.parentId === parentId && !descendants.has(a.id)) {
-        descendants.add(a.id);
-        recurse(a.id);
-      }
-    }
-  }
-  recurse(rootId);
-  return descendants;
-}
-
-export function getNextAvailableCodeInRange(min: number, max: number, existingAccounts: ChartAccount[]): string {
-  const existingCodes = new Set(existingAccounts.map(a => parseInt(a.code, 10)).filter(n => !isNaN(n)));
-  for (let candidate = min; candidate <= max; candidate += 10) {
-    if (!existingCodes.has(candidate)) {
-      return String(candidate);
-    }
-  }
-  for (let candidate = min; candidate <= max; candidate++) {
-    if (!existingCodes.has(candidate)) {
-      return String(candidate);
-    }
-  }
-  return String(min);
-}
+import {
+  ACCOUNT_SUBCLASSES,
+  SCHEDULE_C_OPTIONS,
+  getAccountDepth,
+  getDescendantIds,
+  getNextAvailableCodeInRange,
+  getSubClassForAccount,
+} from "../utils/accountHierarchy";
 
 interface AccountManagerProps {
   isOpen: boolean;
@@ -48,49 +22,30 @@ interface AccountManagerProps {
   refreshAccounts: () => void;
 }
 
-export const SCHEDULE_C_OPTIONS = [
-  { value: "", label: "-- None / Not Applicable --" },
-  { value: "Line 1 - Gross receipts or sales", label: "Line 1 - Gross receipts or sales (Revenue)" },
-  { value: "Line 2 - Returns and allowances", label: "Line 2 - Returns & allowances" },
-  { value: "Line 4 - Cost of goods sold", label: "Line 4 - Cost of goods sold (COGS)" },
-  { value: "Line 6 - Other income", label: "Line 6 - Other income (Interest, refunds)" },
-  { value: "Line 8 - Advertising", label: "Line 8 - Advertising & marketing" },
-  { value: "Line 9 - Car and truck expenses", label: "Line 9 - Car and truck expenses" },
-  { value: "Line 10 - Commissions and fees", label: "Line 10 - Commissions and fees" },
-  { value: "Line 11 - Contract labor", label: "Line 11 - Contract labor (1099)" },
-  { value: "Line 12 - Depletion", label: "Line 12 - Depletion" },
-  { value: "Line 13 - Depreciation", label: "Line 13 - Depreciation & Sec 179" },
-  { value: "Line 14 - Employee benefit programs", label: "Line 14 - Employee benefits" },
-  { value: "Line 15 - Insurance (other than health)", label: "Line 15 - Insurance (liability, business)" },
-  { value: "Line 16a - Mortgage interest", label: "Line 16a - Mortgage interest" },
-  { value: "Line 16b - Other interest", label: "Line 16b - Other interest (loans, credit card interest)" },
-  { value: "Line 17 - Legal and professional services", label: "Line 17 - Legal and professional services" },
-  { value: "Line 18 - Office expense", label: "Line 18 - Office expense & supplies" },
-  { value: "Line 19 - Pension and profit-sharing", label: "Line 19 - Pension and profit-sharing" },
-  { value: "Line 20a - Rent (vehicles, machinery)", label: "Line 20a - Rent (vehicles, machinery, equipment)" },
-  { value: "Line 20b - Rent or lease (other business property)", label: "Line 20b - Rent/lease (office, property)" },
-  { value: "Line 21 - Repairs and maintenance", label: "Line 21 - Repairs and maintenance" },
-  { value: "Line 22 - Supplies", label: "Line 22 - Supplies & materials" },
-  { value: "Line 23 - Taxes and licenses", label: "Line 23 - Taxes and licenses" },
-  { value: "Line 24a - Travel", label: "Line 24a - Travel & lodging" },
-  { value: "Line 24b - Deductible meals (50%)", label: "Line 24b - Deductible meals (50% IRS limit)" },
-  { value: "Line 25 - Utilities", label: "Line 25 - Utilities (electric, internet, phone)" },
-  { value: "Line 26 - Wages", label: "Line 26 - Wages & salaries" },
-  { value: "Line 27a - Other expenses", label: "Line 27a - Other expenses (Software, bank fees, misc)" },
-];
+interface AccountFormData {
+  code?: string;
+  subClassId?: string;
+  name?: string;
+  type?: ChartAccount["type"];
+  parentId?: number;
+  description?: string;
+  scheduleCLine?: string;
+  active?: boolean;
+  isDefault?: boolean;
+}
 
 export default function AccountManager({ isOpen, onClose, accounts, refreshAccounts }: AccountManagerProps) {
   const { confirm } = useConfirm();
   const [isCreating, setIsCreating] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [formData, setFormData] = useState<any>({});
+  const [formData, setFormData] = useState<AccountFormData>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
 
   if (!isOpen) return null;
 
-  const accountTypes = ["ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"];
+  const accountTypes: ChartAccount["type"][] = ["ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"];
 
   const TYPE_METADATA: Record<string, { label: string; desc: string }> = {
     ASSET: { label: "Assets", desc: "Bank accounts, cash on hand, receivables, inventory" },
@@ -153,12 +108,12 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
     setError("");
   };
 
-  const handleTypeChange = (newType: string) => {
+  const handleTypeChange = (newType: ChartAccount["type"]) => {
     const subClasses = ACCOUNT_SUBCLASSES[newType] || [];
     const defaultSubClass = subClasses[0];
     const suggestedCode = defaultSubClass
       ? getNextAvailableCodeInRange(defaultSubClass.min, defaultSubClass.max, accounts)
-      : ((defaultSubClass as SubClassDef | undefined)?.prefix || "10") + "10";
+      : "1010";
 
     setFormData({
       ...formData,
@@ -232,11 +187,12 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
       return;
     }
 
+    const effectiveType = formData.type || "EXPENSE";
     // Smart Soft Guardrails: Hierarchy and Category validation
     if (formData.parentId) {
       const parentAcc = accounts.find(a => a.id === formData.parentId);
       if (parentAcc) {
-        const childSubClass = getSubClassForAccount(formData.type, cleanCode);
+        const childSubClass = getSubClassForAccount(effectiveType, cleanCode);
         const parentSubClass = getSubClassForAccount(parentAcc.type, parentAcc.code);
         const warnings: string[] = [];
 
@@ -277,11 +233,13 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
     setIsSaving(true);
     try {
       const payload = {
-        ...formData,
         code: cleanCode,
         name: cleanName,
+        type: effectiveType,
+        parentId: formData.parentId,
         description: (formData.description || "").trim(),
         scheduleCLine: (formData.scheduleCLine || "").trim(),
+        active: formData.active ?? true,
       };
       if (isCreating) {
         await createChartAccount(payload as CreateChartAccountInput);
@@ -294,8 +252,8 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
       }
       refreshAccounts();
       handleCancel();
-    } catch (err: any) {
-      setError(err.message || "Failed to save account");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to save account");
     } finally {
       setIsSaving(false);
     }
@@ -312,8 +270,8 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
     try {
       await deleteChartAccount(id);
       refreshAccounts();
-    } catch (err: any) {
-      setError(err.message || "Failed to delete account (it may have associated transactions).");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to delete account (it may have associated transactions).");
     }
   };
 
@@ -345,32 +303,38 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
           <div className={`flex-1 overflow-y-auto pr-3 space-y-4 custom-scrollbar min-h-0 max-h-[calc(90vh-140px)] ${(isCreating || editingId) ? 'hidden md:block' : 'block'}`}>
             <div className="flex justify-between items-center">
               <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Existing Accounts</h3>
-              <button 
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
                 onClick={handleCreateNew}
-                className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded-md transition-colors border border-emerald-500/20"
+                className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 border-emerald-500/20 touch-glow-emerald"
               >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                <svg className="w-3.5 h-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
                 New Account
-              </button>
+              </Button>
             </div>
 
             {/* Quick Search */}
             <div className="relative">
+              <label htmlFor="coa-search" className="sr-only">Search accounts by name or code</label>
               <input
+                id="coa-search"
                 type="text"
                 placeholder="Search accounts by name or code..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-8 pr-7 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
               />
-              <svg className="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-2" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
               {searchQuery && (
                 <button
                   type="button"
+                  aria-label="Clear account search"
                   onClick={() => setSearchQuery("")}
-                  className="text-zinc-500 hover:text-white absolute right-2.5 top-1.5 text-xs p-0.5"
+                  className="text-zinc-500 hover:text-white absolute right-2.5 top-1.5 text-xs p-0.5 cursor-pointer"
                 >
                   ✕
                 </button>
@@ -378,7 +342,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
             </div>
 
             {error && !isCreating && !editingId && (
-              <div className="p-2.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-xs">
+              <div role="alert" className="p-2.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-xs">
                 {error}
               </div>
             )}
@@ -426,9 +390,9 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                                 );
                               })()}
                               {acc.isDefault && (
-                                <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded uppercase tracking-wider font-bold">
+                                <Badge variant="success" className="py-0! px-1.5! text-[9px]">
                                   Default
-                                </span>
+                                </Badge>
                               )}
                               {acc.scheduleCLine && (
                                 <span className="text-[10px] bg-amber-500/10 text-amber-300 border border-amber-500/20 px-1.5 py-0.2 rounded font-medium truncate max-w-44" title={`IRS Schedule C: ${acc.scheduleCLine}`}>
@@ -436,9 +400,9 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                                 </span>
                               )}
                               {!acc.active && (
-                                <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 rounded uppercase tracking-wider font-semibold">
+                                <Badge variant="danger" className="py-0! px-1.5! text-[9px]">
                                   Inactive
-                                </span>
+                                </Badge>
                               )}
                             </div>
                             <div className="text-[11px] text-zinc-400 truncate mt-0.5">
@@ -450,16 +414,28 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                             </div>
                           </div>
                           <div className="flex items-center gap-1 ml-3 shrink-0">
-                            <button onClick={() => handleEdit(acc)} className="text-zinc-400 hover:text-white p-1 transition-colors" title="Edit">
-                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                            <button
+                              type="button"
+                              aria-label={`Edit account ${acc.code}`}
+                              onClick={() => handleEdit(acc)}
+                              className="text-zinc-400 hover:text-white p-1.5 rounded-lg touch-glow-emerald transition-colors cursor-pointer"
+                              title="Edit"
+                            >
+                              <svg className="w-3.5 h-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                             </button>
                             {acc.isDefault ? (
-                              <span className="text-zinc-600 p-1 cursor-not-allowed" title="Default accounts cannot be deleted (toggle Active to hide)">
-                                <svg className="w-3.5 h-3.5 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                              <span className="text-zinc-600 p-1.5 cursor-not-allowed" title="Default accounts cannot be deleted (toggle Active to hide)">
+                                <svg className="w-3.5 h-3.5 opacity-40" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                               </span>
                             ) : (
-                              <button onClick={() => handleDelete(acc.id, acc.code)} className="text-zinc-400 hover:text-red-400 p-1 transition-colors" title="Delete">
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                              <button
+                                type="button"
+                                aria-label={`Delete account ${acc.code}`}
+                                onClick={() => handleDelete(acc.id, acc.code)}
+                                className="text-zinc-400 hover:text-red-400 p-1.5 rounded-lg touch-glow-red transition-colors cursor-pointer"
+                                title="Delete"
+                              >
+                                <svg className="w-3.5 h-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                               </button>
                             )}
                           </div>
@@ -475,7 +451,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
           {/* RIGHT: Edit/Create Form */}
           <div className={`md:w-84 shrink-0 flex flex-col justify-center my-auto max-h-[calc(90vh-140px)] min-w-0 max-w-full ${(isCreating || editingId) ? 'block flex-1' : 'hidden md:flex'}`}>
             {(isCreating || editingId) ? (
-              <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 shadow-xl flex flex-col max-h-full overflow-hidden min-w-0">
+              <div className="surface-glass rounded-xl p-3.5 shadow-xl flex flex-col max-h-full overflow-hidden min-w-0">
                 <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-800/80 shrink-0">
                   <div className="flex items-center gap-2">
                     <button 
@@ -486,14 +462,14 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                       ← Back
                     </button>
                     <h3 className="text-xs font-semibold text-white flex items-center gap-1.5 uppercase tracking-wider">
-                      <svg className="w-3.5 h-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                      <svg className="w-3.5 h-3.5 text-emerald-500" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                       {isCreating ? "Create Account" : isEditingDefault ? "Edit Default Account" : "Edit Custom Account"}
                     </h3>
                   </div>
                 </div>
 
                 {(error && (isCreating || editingId)) && (
-                  <div className="mb-2 p-2 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-xs shrink-0">
+                  <div role="alert" className="mb-2 p-2 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-xs shrink-0">
                     {error}
                   </div>
                 )}
@@ -501,16 +477,17 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                 <div className="space-y-2 overflow-y-auto overflow-x-hidden pr-1 custom-scrollbar flex-1 min-h-0 min-w-0">
                   <div>
                     <div className="flex items-center justify-between mb-0.5">
-                      <label className={labelCls}>Type</label>
+                      <label htmlFor="coa-type" className={labelCls}>Type</label>
                       {isEditingDefault && (
                         <span className="text-[10px] text-zinc-500">Locked on default accounts</span>
                       )}
                     </div>
                     <Select 
+                      id="coa-type"
                       disabled={isEditingDefault}
                       className={`${inputCls} ${isEditingDefault ? 'opacity-60 cursor-not-allowed bg-zinc-900/80' : ''}`} 
                       value={formData.type || "EXPENSE"} 
-                      onChange={e => handleTypeChange(e.target.value)}
+                      onChange={e => handleTypeChange(e.target.value as ChartAccount["type"])}
                     >
                       {accountTypes.map(t => <option key={t} value={t}>{t}</option>)}
                     </Select>
@@ -518,7 +495,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
 
                   <div>
                     <div className="flex items-center justify-between mb-0.5">
-                      <label className={labelCls}>Sub-Category</label>
+                      <label htmlFor="coa-subclass" className={labelCls}>Sub-Category</label>
                       {currentSubClass && (
                         <span className="text-[10px] text-zinc-500 font-mono">
                           {currentSubClass.min}–{currentSubClass.max}
@@ -526,6 +503,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                       )}
                     </div>
                     <Select
+                      id="coa-subclass"
                       className={inputCls}
                       value={currentSubClass?.id || ""}
                       onChange={e => handleSubCategoryChange(e.target.value)}
@@ -540,7 +518,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
 
                   <div>
                     <div className="flex items-center justify-between mb-0.5">
-                      <label className={labelCls}>
+                      <label htmlFor="coa-code-suffix" className={labelCls}>
                         Account Code (4 Digits)
                       </label>
                       <span className="text-[10px] text-emerald-400/90 font-mono font-medium">
@@ -552,6 +530,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                         <span>{currentPrefix}</span>
                       </div>
                       <input 
+                        id="coa-code-suffix"
                         type="text" 
                         inputMode="numeric"
                         pattern="[0-9]*"
@@ -565,8 +544,9 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                   </div>
 
                   <div>
-                    <label className={labelCls}>Account Name</label>
+                    <label htmlFor="coa-name" className={labelCls}>Account Name</label>
                     <input 
+                      id="coa-name"
                       type="text" 
                       placeholder="e.g. Checking Account" 
                       value={formData.name || ""} 
@@ -576,8 +556,9 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                   </div>
 
                   <div>
-                    <label className={labelCls}>Parent Account (Optional)</label>
+                    <label htmlFor="coa-parent" className={labelCls}>Parent Account (Optional)</label>
                     <Select 
+                      id="coa-parent"
                       className={inputCls}
                       value={formData.parentId ? String(formData.parentId) : ""} 
                       onChange={e => setFormData({ ...formData, parentId: e.target.value ? Number(e.target.value) : undefined })}
@@ -599,8 +580,9 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                   </div>
 
                   <div>
-                    <label className={labelCls}>IRS Schedule C Line (Tax Mapping)</label>
+                    <label htmlFor="coa-schedule-c" className={labelCls}>IRS Schedule C Line (Tax Mapping)</label>
                     <Select
+                      id="coa-schedule-c"
                       className={inputCls}
                       value={formData.scheduleCLine || ""}
                       onChange={e => setFormData({ ...formData, scheduleCLine: e.target.value })}
@@ -617,8 +599,9 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                   </div>
 
                   <div>
-                    <label className={labelCls}>Description (Optional)</label>
+                    <label htmlFor="coa-description" className={labelCls}>Description (Optional)</label>
                     <textarea 
+                      id="coa-description"
                       className={`${inputCls} resize-none h-12`} 
                       placeholder="e.g. Operating checking account or notes"
                       value={formData.description || ""} 
@@ -627,24 +610,28 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                   </div>
 
                   {!isCreating && (
-                    <div 
-                      className="flex items-center gap-2 pt-0.5 cursor-pointer group w-fit"
+                    <button
+                      type="button"
+                      role="checkbox"
+                      aria-checked={Boolean(formData.active)}
+                      className="flex items-center gap-2 pt-0.5 cursor-pointer group w-fit focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400 rounded px-0.5"
                       onClick={() => setFormData({ ...formData, active: !formData.active })}
                     >
                       <div className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition-all duration-200 ${formData.active ? 'bg-emerald-500 border-emerald-500 text-black shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 border-white/10 text-transparent group-hover:border-white/20'}`}>
-                        <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
+                        <svg className="w-2.5 h-2.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
                       </div>
                       <span className="text-xs font-medium text-zinc-300 group-hover:text-white transition-colors select-none">Account is Active</span>
-                    </div>
+                    </button>
                   )}
                 </div>
 
                 {/* Sticky Pinned Buttons */}
-                <div className="mt-2.5 pt-2.5 border-t border-zinc-800 flex gap-2 shrink-0 bg-zinc-950">
+                <div className="mt-2.5 pt-2.5 border-t border-zinc-800 flex gap-2 shrink-0 bg-zinc-950/60">
                   <Button variant="secondary" size="sm" onClick={handleCancel} className="flex-1">Cancel</Button>
                   <Button 
                     variant="primary" 
                     size="sm"
+                    glow
                     onClick={handleSave} 
                     disabled={isSaving} 
                     isLoading={isSaving}
