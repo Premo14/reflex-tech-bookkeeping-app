@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "./ui/Button";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
+import { useConfirm } from "./ui/ConfirmDialog";
+import { getDemoStatus, seedDemoData, resetDemoData, removeDemoData } from "../services/api";
+import { useLiveEvent } from "../utils/useLiveSync";
 import type { ChartAccount } from "../types/models";
 import UploadModal from "./UploadModal";
 import AccountManager from "./AccountManager";
@@ -44,7 +47,95 @@ export default function Header({
   const [showReportsModal, setShowReportsModal] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [accountSearch, setAccountSearch] = useState("");
+  const [demoActive, setDemoActive] = useState(false);
+  const [demoBusyAction, setDemoBusyAction] = useState<"seed" | "reset" | "remove" | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const { confirm, alert } = useConfirm();
+
+  const fetchDemoStatus = async () => {
+    try {
+      const status = await getDemoStatus();
+      setDemoActive(Boolean(status?.active));
+    } catch {
+      // Non-critical status check; ignore transient startup errors
+    }
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    getDemoStatus()
+      .then((status) => {
+        if (mounted) {
+          setDemoActive(Boolean(status?.active));
+        }
+      })
+      .catch(() => {
+        // Non-critical status check; ignore transient startup errors
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useLiveEvent(["TRANSACTIONS_UPDATED", "EXPENSES_UPDATED", "INVOICES_UPDATED"], () => {
+    fetchDemoStatus();
+  });
+
+  const handleSeedDemo = async () => {
+    setDemoBusyAction("seed");
+    try {
+      const res = await seedDemoData();
+      setDemoActive(Boolean(res?.demo?.active ?? true));
+      await refreshData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to seed demo data";
+      await alert({ title: "Demo Seed Failed", message: msg, variant: "danger" });
+    } finally {
+      setDemoBusyAction(null);
+    }
+  };
+
+  const handleResetDemo = async () => {
+    const ok = await confirm({
+      title: "Reset Demo Data?",
+      message: "All seeded demo statements, transactions, synthetic receipts, and demo invoices will be reset to their clean starting state. Any non-demo records you imported or entered yourself remain untouched.",
+      confirmText: "Reset Demo Data",
+      variant: "primary",
+    });
+    if (!ok) return;
+    setDemoBusyAction("reset");
+    try {
+      const res = await resetDemoData();
+      setDemoActive(Boolean(res?.demo?.active ?? true));
+      await refreshData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to reset demo data";
+      await alert({ title: "Demo Reset Failed", message: msg, variant: "danger" });
+    } finally {
+      setDemoBusyAction(null);
+    }
+  };
+
+  const handleRemoveDemo = async () => {
+    const ok = await confirm({
+      title: "Remove Demo Data?",
+      message: "This removes all demo statements, transactions, synthetic receipt PNGs, and demo invoices. Any real bank imports, receipts, or invoices you created separately are kept safe.",
+      confirmText: "Remove Demo Data",
+      variant: "danger",
+    });
+    if (!ok) return;
+    setDemoBusyAction("remove");
+    try {
+      const res = await removeDemoData();
+      setDemoActive(Boolean(res?.demo?.active ?? false));
+      await refreshData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to remove demo data";
+      await alert({ title: "Demo Removal Failed", message: msg, variant: "danger" });
+    } finally {
+      setDemoBusyAction(null);
+    }
+  };
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -52,8 +143,17 @@ export default function Header({
         setIsDropdownOpen(false);
       }
     }
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsDropdownOpen(false);
+      }
+    }
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
   }, []);
 
   const selectedAccount = activeAccountId ? accounts.find(a => a.id === activeAccountId) : null;
@@ -135,14 +235,16 @@ export default function Header({
           </Button>
         </div>
       )}
-      <header className="px-4 sm:px-6 py-3 border-b border-white/10 flex flex-wrap items-center justify-between gap-3 shrink-0 bg-zinc-950/70">
+      <header className="px-4 sm:px-6 py-3 border-b border-white/10 surface-glass flex flex-wrap items-center justify-between gap-3 shrink-0 relative z-30">
         <div className="flex items-center gap-3 flex-wrap">
           {/* Mobile Top Bar (Hamburger Menu) */}
           <div className="flex items-center lg:hidden">
-            <Button variant="ghost"
+            <Button
+              variant="ghost"
               size="sm"
+              aria-label="Open navigation sidebar"
               onClick={() => setIsSidebarOpen(true)}
-              className="p-1.5 -ml-1 mr-2 text-zinc-400 hover:text-white rounded-lg transition-colors"
+              className="p-1.5! -ml-1 mr-2 text-zinc-400 hover:text-white"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
             </Button>
@@ -154,8 +256,11 @@ export default function Header({
               <div className="relative" ref={dropdownRef}>
                 <button
                   type="button"
+                  aria-label="Select active account"
+                  aria-haspopup="listbox"
+                  aria-expanded={isDropdownOpen}
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className={`bg-zinc-900 border ${isDropdownOpen ? 'border-emerald-500 ring-1 ring-emerald-500/20' : 'border-white/10 hover:border-white/20'} text-white rounded-lg px-3 py-1.5 text-xs font-semibold transition-all shadow-sm flex items-center justify-between w-full sm:w-auto sm:min-w-[220px] cursor-pointer`}
+                  className={`bg-zinc-900 border ${isDropdownOpen ? 'border-emerald-500 glow-border-emerald' : 'border-white/10 hover:border-white/20'} touch-glow-emerald text-white rounded-lg px-3 py-1.5 text-xs font-semibold transition-all shadow-sm flex items-center justify-between w-full sm:w-auto sm:min-w-[220px] cursor-pointer`}
                 >
                   <span className="min-w-0 flex items-center gap-2 overflow-hidden">
                     {isAccountsLoading && (
@@ -188,14 +293,15 @@ export default function Header({
                           className="w-full bg-zinc-950 border border-zinc-800 rounded-md pl-7 pr-6 py-1 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
                           autoFocus
                         />
-                        <svg className="w-3.5 h-3.5 text-zinc-500 absolute left-2 top-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-3.5 h-3.5 text-zinc-400 absolute left-2 top-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                         {accountSearch && (
                           <button
                             type="button"
+                            aria-label="Clear account filter"
                             onClick={() => setAccountSearch("")}
-                            className="text-zinc-500 hover:text-white absolute right-2.5 top-1.5 text-xs p-0.5"
+                            className="text-zinc-400 hover:text-white absolute right-2.5 top-1.5 text-xs p-0.5 cursor-pointer"
                           >
                             ✕
                           </button>
@@ -273,18 +379,20 @@ export default function Header({
         {/* Global Actions */}
         <div className="flex items-center gap-2 flex-wrap">
           {onOpenInvoices && (
-            <button
-              type="button"
+            <Button
+              variant="purple"
+              size="sm"
+              glow
               onClick={onOpenInvoices}
               title="Invoices & Client Receivables"
-              className="group text-left px-2.5 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 transition flex items-center gap-2 shrink-0 cursor-pointer"
+              className="group shrink-0"
             >
-              <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-3.5 h-3.5 text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              <span className="text-xs font-semibold text-indigo-200">Invoices</span>
-              <span className="text-indigo-400 group-hover:translate-x-0.5 transition-transform text-xs">→</span>
-            </button>
+              <span>Invoices</span>
+              <span className="text-purple-300 motion-safe:group-hover:translate-x-0.5 transition-transform text-xs">→</span>
+            </Button>
           )}
           <Button variant="secondary" size="sm" onClick={() => setShowReportsModal(true)} title="View Reports">
             <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
@@ -294,15 +402,60 @@ export default function Header({
             <svg className="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
             <span>Lock Books</span>
           </Button>
-          <Button variant="primary"
+          <Button
+            variant="primary"
             size="sm"
+            glow
             onClick={() => setShowUploadModal(true)}
             title="Upload Files"
-            className="flex items-center justify-center gap-1.5 shadow-sm"
+            className="shrink-0"
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
             <span>Upload Files</span>
           </Button>
+
+          <div
+            className="inline-flex items-center gap-1 p-0.5 rounded-lg bg-zinc-900/90 border border-white/10 shrink-0"
+            title="Client Demo Sandbox Controls (safe alongside real data)"
+          >
+            <span className="hidden xl:inline-flex items-center gap-1 px-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+              <span className={`w-1.5 h-1.5 rounded-full ${demoActive ? "bg-emerald-400" : "bg-zinc-600"}`} />
+              Demo
+            </span>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleSeedDemo}
+              disabled={demoBusyAction !== null || demoActive}
+              isLoading={demoBusyAction === "seed"}
+              title={demoActive ? "Demo data is already active — use Reset Demo Data to refresh" : "Populate comprehensive 2026 demo bookkeeping dataset"}
+              className="px-2! py-1! text-[11px]!"
+            >
+              Seed Demo Data
+            </Button>
+            <Button
+              variant="warning"
+              size="sm"
+              onClick={handleResetDemo}
+              disabled={demoBusyAction !== null}
+              isLoading={demoBusyAction === "reset"}
+              title="Clear demo records and re-seed fresh initial demo state"
+              className="px-2! py-1! text-[11px]!"
+            >
+              Reset Demo Data
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={handleRemoveDemo}
+              disabled={demoBusyAction !== null || !demoActive}
+              isLoading={demoBusyAction === "remove"}
+              title={!demoActive ? "No demo data currently loaded" : "Remove all demo data without disturbing non-demo records"}
+              className="px-2! py-1! text-[11px]!"
+            >
+              Remove Demo Data
+            </Button>
+          </div>
         </div>
       </header>
 

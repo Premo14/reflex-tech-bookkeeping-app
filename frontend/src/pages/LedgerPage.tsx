@@ -1,5 +1,10 @@
-import { useEffect, useState } from "react";
-import { getChartAccounts, getSettings, getReviewQueueCounts, type ReviewStatusType } from "../services/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  getChartAccounts,
+  getSettings,
+  getReviewQueueCounts,
+  type ReviewStatusType,
+} from "../services/api";
 import type { ChartAccount } from "../types/models";
 
 import Sidebar from "../components/Sidebar";
@@ -9,6 +14,7 @@ import ReviewModal from "../components/ReviewModal";
 import AppSettingsModal from "../components/AppSettingsModal";
 import InvoicingModal from "../components/InvoicingModal";
 import { useLiveEvent } from "../utils/useLiveSync";
+import { addDaysToISODate } from "../utils/dateUtils";
 
 export default function LedgerPage() {
   const [accounts, setAccounts] = useState<ChartAccount[]>([]);
@@ -20,13 +26,14 @@ export default function LedgerPage() {
   const [isAccountsLoading, setIsAccountsLoading] = useState(true);
   const [isQueueLoading, setIsQueueLoading] = useState(true);
   const [isSettingsLoading, setIsSettingsLoading] = useState(true);
-  
+
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
-  const [reviewStatusType, setReviewStatusType] = useState<ReviewStatusType>('PENDING');
+  const [reviewStatusType, setReviewStatusType] = useState<ReviewStatusType>("PENDING");
   const [appSettingsModalOpen, setAppSettingsModalOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'storage' | 'rules'>('storage');
+  const [settingsTab, setSettingsTab] = useState<"storage" | "rules">("storage");
   const [invoicingModalOpen, setInvoicingModalOpen] = useState(false);
   const [arDeepLinkInvoiceId, setArDeepLinkInvoiceId] = useState<number | null>(null);
+  const [arDeepLinkMode, setArDeepLinkMode] = useState<"inspect" | "edit" | "print">("print");
   const [initialRuleData, setInitialRuleData] = useState<{
     name?: string;
     descriptionKeyword?: string;
@@ -39,40 +46,32 @@ export default function LedgerPage() {
     categoryAccountId?: number | null;
   }) => {
     setInitialRuleData(data || null);
-    setSettingsTab('rules');
+    setSettingsTab("rules");
     setAppSettingsModalOpen(true);
     setIsSidebarOpen(false);
   };
+
   const [pendingCount, setPendingCount] = useState(0);
   const [excludedCount, setExcludedCount] = useState(0);
   const [warningsIgnoredCount, setWarningsIgnoredCount] = useState(0);
   const [deletedCount, setDeletedCount] = useState(0);
   const [viewUnlinkedTrigger, setViewUnlinkedTrigger] = useState(0);
   const [viewUncategorizedTrigger, setViewUncategorizedTrigger] = useState(0);
-  const [hasInitializedOpenBooks, setHasInitializedOpenBooks] = useState(false);
-
-  function addDays(dateStr: string, days: number): string {
-    if (!dateStr) return "";
-    const [y, m, d] = dateStr.split("T")[0].split("-").map(Number);
-    const dt = new Date(y, m - 1, d + days);
-    const ny = dt.getFullYear();
-    const nm = String(dt.getMonth() + 1).padStart(2, "0");
-    const nd = String(dt.getDate()).padStart(2, "0");
-    return `${ny}-${nm}-${nd}`;
-  }
+  const hasInitializedOpenBooksRef = useRef(false);
+  const prevClosedDateRef = useRef<string>("");
 
   const handleViewItems = (date: string) => {
     setStartDate("");
     setEndDate(date);
-    setViewUnlinkedTrigger(prev => prev + 1);
+    setViewUnlinkedTrigger((prev) => prev + 1);
   };
 
   const handleViewUncategorized = () => {
-    setViewUncategorizedTrigger(prev => prev + 1);
+    setViewUncategorizedTrigger((prev) => prev + 1);
   };
 
-  const fetchQueueCounts = async () => {
-    setIsQueueLoading(true);
+  const fetchQueueCounts = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setIsQueueLoading(true);
     try {
       const counts = await getReviewQueueCounts();
       setPendingCount(counts.pending);
@@ -84,10 +83,10 @@ export default function LedgerPage() {
     } finally {
       setIsQueueLoading(false);
     }
-  };
+  }, []);
 
-  const fetchAccounts = async () => {
-    setIsAccountsLoading(true);
+  const fetchAccounts = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setIsAccountsLoading(true);
     try {
       const data = await getChartAccounts();
       setAccounts(data || []);
@@ -96,53 +95,73 @@ export default function LedgerPage() {
     } finally {
       setIsAccountsLoading(false);
     }
-  };
+  }, []);
 
-  const fetchSettings = async () => {
-    setIsSettingsLoading(true);
+  const fetchSettings = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setIsSettingsLoading(true);
     try {
       const data = await getSettings();
       setSettings(data || {});
-      if (!hasInitializedOpenBooks && data?.["BooksClosedDate"]) {
-        setHasInitializedOpenBooks(true);
-        const nextDay = addDays(data["BooksClosedDate"], 1);
-        setStartDate(nextDay);
+      const closedDate = data?.["BooksClosedDate"] || "";
+      const prevClosedDate = prevClosedDateRef.current;
+      prevClosedDateRef.current = closedDate;
+
+      if (!hasInitializedOpenBooksRef.current && closedDate) {
+        hasInitializedOpenBooksRef.current = true;
+        setStartDate(addDaysToISODate(closedDate, 1));
         setEndDate("");
+      } else if (prevClosedDate !== closedDate) {
+        if (closedDate) {
+          hasInitializedOpenBooksRef.current = true;
+          setStartDate(addDaysToISODate(closedDate, 1));
+          setEndDate("");
+        } else {
+          hasInitializedOpenBooksRef.current = false;
+          setStartDate("");
+          setEndDate("");
+        }
       }
     } catch (err) {
       console.error("Failed to load settings:", err);
     } finally {
       setIsSettingsLoading(false);
     }
-  };
+  }, []);
 
-  const fetchData = async () => {
-    await Promise.all([fetchAccounts(), fetchSettings(), fetchQueueCounts()]);
-  };
+  const fetchData = useCallback(async () => {
+    await Promise.all([fetchAccounts(true), fetchSettings(true), fetchQueueCounts(true)]);
+  }, [fetchAccounts, fetchSettings, fetchQueueCounts]);
 
   useEffect(() => {
-    fetchAccounts();
-    fetchSettings();
-    fetchQueueCounts();
-  }, []);
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      void fetchAccounts(false);
+      void fetchSettings(false);
+      void fetchQueueCounts(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [fetchAccounts, fetchSettings, fetchQueueCounts]);
 
   // Live real-time updates from background tasks
   useLiveEvent(["QUEUE_UPDATED", "RECONCILIATION_UPDATED"], () => {
-    fetchQueueCounts();
+    void fetchQueueCounts(false);
   });
 
   useLiveEvent(["ACCOUNTS_UPDATED", "TRANSACTIONS_UPDATED", "RULES_UPDATED"], () => {
-    fetchAccounts();
-    fetchQueueCounts();
+    void fetchAccounts(false);
+    void fetchQueueCounts(false);
   });
 
   useLiveEvent("SETTINGS_UPDATED", () => {
-    fetchSettings();
+    void fetchSettings(false);
   });
 
   return (
-    <div className="flex h-screen bg-zinc-900 font-sans text-zinc-100 selection:bg-zinc-700 overflow-hidden relative">
-      <Sidebar 
+    <div className="flex h-screen bg-[#050505] font-sans text-zinc-100 selection:bg-zinc-700 overflow-hidden relative">
+      <Sidebar
         startDate={startDate}
         setStartDate={setStartDate}
         endDate={endDate}
@@ -154,15 +173,23 @@ export default function LedgerPage() {
         warningsIgnoredCount={warningsIgnoredCount}
         deletedCount={deletedCount}
         booksClosedDate={settings["BooksClosedDate"] || ""}
-        onOpenReview={(type) => { setReviewStatusType(type); setReviewModalOpen(true); setIsSidebarOpen(false); }}
-        onOpenSettings={() => { setSettingsTab('storage'); setAppSettingsModalOpen(true); setIsSidebarOpen(false); }}
+        onOpenReview={(type) => {
+          setReviewStatusType(type);
+          setReviewModalOpen(true);
+          setIsSidebarOpen(false);
+        }}
+        onOpenSettings={() => {
+          setSettingsTab("storage");
+          setAppSettingsModalOpen(true);
+          setIsSidebarOpen(false);
+        }}
         isQueueLoading={isQueueLoading}
         isSettingsLoading={isSettingsLoading}
-        companyName={settings["CompanyName"] || "Reflex Technologies LLC"}
+        companyName={settings["CompanyName"] || "Unnamed Company"}
       />
-      
-      <main className="flex-1 flex flex-col h-screen overflow-hidden min-w-0 bg-[#0a0a0a]">
-        <Header 
+
+      <main className="flex-1 flex flex-col h-screen overflow-hidden min-w-0 bg-[#050505]">
+        <Header
           setIsSidebarOpen={setIsSidebarOpen}
           accounts={accounts}
           activeAccountId={activeAccountId}
@@ -171,16 +198,21 @@ export default function LedgerPage() {
           settings={settings}
           onViewItems={handleViewItems}
           onViewUncategorized={handleViewUncategorized}
-          onOpenInvoices={() => setInvoicingModalOpen(true)}
+          onOpenInvoices={() => {
+            setArDeepLinkInvoiceId(null);
+            setArDeepLinkMode("inspect");
+            setInvoicingModalOpen(true);
+          }}
           isAccountsLoading={isAccountsLoading}
           startDate={startDate}
           endDate={endDate}
           onOpenInvoiceDetail={(id) => {
             setArDeepLinkInvoiceId(id);
+            setArDeepLinkMode("inspect");
             setInvoicingModalOpen(true);
           }}
         />
-        <LedgerGrid 
+        <LedgerGrid
           startDate={startDate}
           endDate={endDate}
           accounts={accounts}
@@ -189,18 +221,35 @@ export default function LedgerPage() {
           viewUncategorizedTrigger={viewUncategorizedTrigger}
           onItemsChanged={fetchData}
           onCreateRule={(data) => handleOpenRules(data)}
-          onOpenInvoices={() => setInvoicingModalOpen(true)}
+          onOpenInvoices={() => {
+            setArDeepLinkInvoiceId(null);
+            setArDeepLinkMode("inspect");
+            setInvoicingModalOpen(true);
+          }}
+          onEditInvoice={(inv) => {
+            setArDeepLinkInvoiceId(inv.id);
+            setArDeepLinkMode("edit");
+            setInvoicingModalOpen(true);
+          }}
+          onPrintInvoice={(inv) => {
+            setArDeepLinkInvoiceId(inv.id);
+            setArDeepLinkMode("print");
+            setInvoicingModalOpen(true);
+          }}
         />
       </main>
-      <ReviewModal 
-        isOpen={reviewModalOpen} 
-        onClose={() => setReviewModalOpen(false)} 
-        statusType={reviewStatusType} 
-        refreshData={fetchData} 
+      <ReviewModal
+        isOpen={reviewModalOpen}
+        onClose={() => setReviewModalOpen(false)}
+        statusType={reviewStatusType}
+        refreshData={fetchData}
       />
       <AppSettingsModal
         isOpen={appSettingsModalOpen}
-        onClose={() => { setAppSettingsModalOpen(false); setInitialRuleData(null); }}
+        onClose={() => {
+          setAppSettingsModalOpen(false);
+          setInitialRuleData(null);
+        }}
         settings={settings}
         refreshSettings={fetchData}
         initialTab={settingsTab}
@@ -214,6 +263,8 @@ export default function LedgerPage() {
           setArDeepLinkInvoiceId(null);
         }}
         initialInvoiceId={arDeepLinkInvoiceId ?? undefined}
+        initialMode={arDeepLinkMode}
+        companyName={settings["CompanyName"] || "Unnamed Company"}
         onInvoicesUpdated={fetchData}
       />
     </div>

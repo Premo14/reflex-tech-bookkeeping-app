@@ -24,6 +24,35 @@ export function formatDate(dateStr: string | null | undefined): string {
 }
 
 /**
+ * Formats an ISO date string ("YYYY-MM-DD" or timestamp) as zero-padded "MM/DD/YYYY".
+ */
+export function formatDateMMDDYYYY(dateStr: string): string {
+  if (!dateStr) return "";
+  const parts = dateStr.split("T")[0].split("-");
+  if (parts.length === 3 && /^\d+$/.test(parts[0]) && /^\d+$/.test(parts[1]) && /^\d+$/.test(parts[2])) {
+    const [y, m, d] = parts;
+    return `${m.padStart(2, "0")}/${d.padStart(2, "0")}/${y}`;
+  }
+  const dt = new Date(dateStr);
+  if (isNaN(dt.getTime())) return "";
+  const m = String(dt.getMonth() + 1).padStart(2, "0");
+  const d = String(dt.getDate()).padStart(2, "0");
+  return `${m}/${d}/${dt.getFullYear()}`;
+}
+
+/**
+ * Adds a signed number of calendar days to a "YYYY-MM-DD" string without UTC drift.
+ */
+export function addDaysToISODate(dateStr: string, days: number): string {
+  if (!dateStr) return "";
+  const [y, m, d] = dateStr.split("T")[0].split("-").map(Number);
+  if (!y || !m || !d) return "";
+  const dt = new Date(y, m - 1, d + days);
+  if (isNaN(dt.getTime())) return "";
+  return toLocalISODate(dt);
+}
+
+/**
  * Returns a local calendar date as "YYYY-MM-DD" without UTC timezone conversion shifts.
  */
 export function toLocalISODate(d: Date = new Date()): string {
