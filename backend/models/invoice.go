@@ -14,12 +14,12 @@ type Invoice struct {
 	IssueDate         time.Time        `gorm:"not null" json:"issueDate"`
 	DueDate           time.Time        `gorm:"not null" json:"dueDate"`
 	Items             string           `gorm:"type:text" json:"items"` // JSON encoded line items [{description, quantity, unitPrice, amount}]
-	Subtotal          Money     `gorm:"type:decimal(12,2);not null;default:0" json:"subtotal"`
+	Subtotal          Money     `gorm:"not null;default:0" json:"subtotal"`
 	TaxRate           float64   `gorm:"type:decimal(5,2);default:0" json:"taxRate"`
-	TaxAmount         Money     `gorm:"type:decimal(12,2);default:0" json:"taxAmount"`
-	TotalAmount       Money     `gorm:"type:decimal(12,2);not null;default:0" json:"totalAmount"`
-	AmountPaid        Money     `gorm:"type:decimal(12,2);not null;default:0" json:"amountPaid"`
-	BalanceDue        Money     `gorm:"type:decimal(12,2);not null;default:0" json:"balanceDue"`
+	TaxAmount         Money     `gorm:"default:0" json:"taxAmount"`
+	TotalAmount       Money     `gorm:"not null;default:0" json:"totalAmount"`
+	AmountPaid        Money     `gorm:"not null;default:0" json:"amountPaid"`
+	BalanceDue        Money     `gorm:"not null;default:0" json:"balanceDue"`
 	Notes             string           `gorm:"type:text" json:"notes"`
 	PaymentTerms      string           `gorm:"size:100;default:'Net 30'" json:"paymentTerms"`
 	Status            string           `gorm:"size:30;not null;default:'DRAFT'" json:"status"` // DRAFT, SENT, PARTIALLY_PAID, PAID, OVERDUE, VOID
@@ -28,6 +28,8 @@ type Invoice struct {
 	BankTransaction   *BankTransaction `gorm:"foreignKey:BankTransactionID" json:"bankTransaction"`
 	CategoryAccountID *uint            `gorm:"index" json:"categoryAccountId"`
 	CategoryAccount   *ChartAccount    `gorm:"foreignKey:CategoryAccountID" json:"categoryAccount"`
+	DeclinedTxIDs     string           `gorm:"type:text" json:"-"` // Comma-wrapped bank tx IDs manually unmatched from this invoice
+	LinkedExpenses    []Expense        `gorm:"foreignKey:InvoiceID" json:"linkedExpenses,omitempty"`
 	CreatedAt         time.Time        `json:"createdAt"`
 	UpdatedAt         time.Time        `json:"updatedAt"`
 }

@@ -17,6 +17,9 @@ import (
 
 // GetRules lists all bank rules ordered by priority ascending.
 func GetRules(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	var rules []models.BankRule
 	if err := db.DB.Preload("CategoryAccount").Order("priority ASC, id ASC").Find(&rules).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch bank rules"})
@@ -26,6 +29,9 @@ func GetRules(c fiber.Ctx) error {
 
 // GetRule returns a single rule by ID.
 func GetRule(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	idParam := c.Params("id")
 	id, err := strconv.ParseUint(idParam, 10, 64)
 	if err != nil {
@@ -53,8 +59,33 @@ func validateRuleConditions(conditions []models.RuleCondition) error {
 	return nil
 }
 
+// validateActiveRuleCategory normalizes an optional CategoryAccountID and verifies it points to an active ChartAccount.
+func validateActiveRuleCategory(categoryAccountID *uint) (*uint, error) {
+	catID := normalizeOptionalID(categoryAccountID)
+	if catID == nil {
+		return nil, nil
+	}
+	var cat models.ChartAccount
+	if err := db.DB.Where("id = ? AND active = ?", *catID, true).First(&cat).Error; err != nil {
+		return nil, fmt.Errorf("Selected category account does not exist or is inactive")
+	}
+	return catID, nil
+}
+
+// broadcastRuleAppliedUpdates notifies connected clients when rule execution modifies transactions.
+func broadcastRuleAppliedUpdates(appliedCount int) {
+	if appliedCount > 0 {
+		events.Broadcast("TRANSACTIONS_UPDATED", nil)
+		events.Broadcast("SUMMARY_UPDATED", nil)
+		events.Broadcast("QUEUE_UPDATED", nil)
+	}
+}
+
 // CreateRule creates a new automated bank rule.
 func CreateRule(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	type CreateRuleReq struct {
 		Name              string                 `json:"name"`
 		Priority          *int                   `json:"priority"`
@@ -84,6 +115,11 @@ func CreateRule(c fiber.Ctx) error {
 	}
 
 	if err := validateRuleConditions(req.Conditions); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	catID, err := validateActiveRuleCategory(req.CategoryAccountID)
+	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
@@ -118,7 +154,7 @@ func CreateRule(c fiber.Ctx) error {
 		Active:            active,
 		MatchLogic:        matchLogic,
 		ConditionsJSON:    string(conditionsJSON),
-		CategoryAccountID: req.CategoryAccountID,
+		CategoryAccountID: catID,
 		RenamedVendor:     strings.TrimSpace(req.RenamedVendor),
 		AutoConfirm:       req.AutoConfirm,
 		AutoExclude:       req.AutoExclude,
@@ -133,6 +169,7 @@ func CreateRule(c fiber.Ctx) error {
 	appliedCount := 0
 	if req.ApplyImmediately {
 		appliedCount, _ = utils.ApplyAllRulesToExisting(db.DB)
+		broadcastRuleAppliedUpdates(appliedCount)
 	}
 
 	db.DB.Preload("CategoryAccount").First(&rule, rule.ID)
@@ -146,6 +183,9 @@ func CreateRule(c fiber.Ctx) error {
 
 // UpdateRule updates an existing bank rule.
 func UpdateRule(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	idParam := c.Params("id")
 	id, err := strconv.ParseUint(idParam, 10, 64)
 	if err != nil {
@@ -212,7 +252,11 @@ func UpdateRule(c fiber.Ctx) error {
 	if req.ClearCategory {
 		updates["category_account_id"] = nil
 	} else if req.CategoryAccountID != nil {
-		updates["category_account_id"] = req.CategoryAccountID
+		catID, err := validateActiveRuleCategory(req.CategoryAccountID)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+		updates["category_account_id"] = catID
 	}
 	if req.RenamedVendor != nil {
 		updates["renamed_vendor"] = strings.TrimSpace(*req.RenamedVendor)
@@ -239,6 +283,7 @@ func UpdateRule(c fiber.Ctx) error {
 	appliedCount := 0
 	if req.ApplyImmediately {
 		appliedCount, _ = utils.ApplyAllRulesToExisting(db.DB)
+		broadcastRuleAppliedUpdates(appliedCount)
 	}
 
 	db.DB.Preload("CategoryAccount").First(&rule, rule.ID)
@@ -252,14 +297,21 @@ func UpdateRule(c fiber.Ctx) error {
 
 // DeleteRule deletes a rule by ID.
 func DeleteRule(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	idParam := c.Params("id")
 	id, err := strconv.ParseUint(idParam, 10, 64)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid rule ID"})
 	}
 
-	if err := db.DB.Delete(&models.BankRule{}, id).Error; err != nil {
+	res := db.DB.Delete(&models.BankRule{}, id)
+	if res.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete rule"})
+	}
+	if res.RowsAffected == 0 {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Rule not found"})
 	}
 
 	events.Broadcast("RULES_UPDATED", nil)
@@ -268,6 +320,9 @@ func DeleteRule(c fiber.Ctx) error {
 
 // ReorderRules updates rule priorities based on an array of rule IDs in the desired order.
 func ReorderRules(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	var ruleIDs []uint
 	if err := c.Bind().Body(&ruleIDs); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Expected array of rule IDs"})
@@ -280,7 +335,9 @@ func ReorderRules(c fiber.Ctx) error {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to reorder rules"})
 		}
 	}
-	tx.Commit()
+	if err := tx.Commit().Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to commit rule order"})
+	}
 
 	events.Broadcast("RULES_UPDATED", nil)
 	return c.JSON(fiber.Map{"status": "success", "message": "Rules reordered"})
@@ -288,10 +345,14 @@ func ReorderRules(c fiber.Ctx) error {
 
 // ApplyAllRules triggers evaluation of all active bank rules across open-period transactions.
 func ApplyAllRules(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	count, err := utils.ApplyAllRulesToExisting(db.DB)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to apply bank rules: " + err.Error()})
 	}
+	broadcastRuleAppliedUpdates(count)
 	return c.JSON(fiber.Map{
 		"status":       "success",
 		"appliedCount": count,
@@ -301,6 +362,9 @@ func ApplyAllRules(c fiber.Ctx) error {
 
 // TestRulePreview evaluates a draft rule against recent transactions without saving changes.
 func TestRulePreview(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	type TestReq struct {
 		MatchLogic string                 `json:"matchLogic"`
 		Conditions []models.RuleCondition `json:"conditions"`
@@ -313,6 +377,10 @@ func TestRulePreview(c fiber.Ctx) error {
 
 	if len(req.Conditions) == 0 {
 		return c.JSON(fiber.Map{"matchCount": 0, "sampleMatches": []interface{}{}})
+	}
+
+	if err := validateRuleConditions(req.Conditions); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	conditionsJSON, err := json.Marshal(req.Conditions)
@@ -339,6 +407,9 @@ func TestRulePreview(c fiber.Ctx) error {
 
 // GetRuleSuggestions detects recurring payee categorizations that do not yet have an automated BankRule.
 func GetRuleSuggestions(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	// Query top payees with >= 2 transactions categorized to the same category
 	type candidateRow struct {
 		CategoryAccountID uint   `json:"categoryAccountId"`
@@ -360,7 +431,7 @@ func GetRuleSuggestions(c fiber.Ctx) error {
 
 	// Fetch existing active rules to filter out already-automated descriptions
 	var activeRules []models.BankRule
-	db.DB.Where("active = true").Find(&activeRules)
+	db.DB.Where("active = ?", true).Find(&activeRules)
 
 	var suggestions []fiber.Map
 	for _, cand := range candidates {
@@ -376,10 +447,11 @@ func GetRuleSuggestions(c fiber.Ctx) error {
 
 		if !alreadyCovered && cand.CategoryAccountID > 0 {
 			var cat models.ChartAccount
-			if err := db.DB.First(&cat, cand.CategoryAccountID).Error; err == nil {
+			if err := db.DB.Where("id = ? AND active = ?", cand.CategoryAccountID, true).First(&cat).Error; err == nil {
 				cleanKeyword := strings.TrimSpace(cand.SampleDesc)
-				if len(cleanKeyword) > 24 {
-					cleanKeyword = cleanKeyword[:24]
+				runes := []rune(cleanKeyword)
+				if len(runes) > 24 {
+					cleanKeyword = string(runes[:24])
 				}
 				suggestions = append(suggestions, fiber.Map{
 					"payeeKeyword":      cleanKeyword,

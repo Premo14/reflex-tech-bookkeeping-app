@@ -6,6 +6,9 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 // Money stores a monetary value as integer cents internally to avoid
@@ -136,6 +139,17 @@ func (m *Money) Scan(value interface{}) error {
 // Value implements driver.Valuer so GORM can write decimal columns.
 func (m Money) Value() (driver.Value, error) {
 	return float64(m.Cents) / 100, nil
+}
+
+// GormDBDataType selects decimal(12,2) on PostgreSQL and real on SQLite so whole-dollar
+// floats written by Value() are not coerced to integer storage class by SQLite NUMERIC affinity.
+func (Money) GormDBDataType(db *gorm.DB, _ *schema.Field) string {
+	switch db.Dialector.Name() {
+	case "sqlite":
+		return "real"
+	default:
+		return "decimal(12,2)"
+	}
 }
 
 // MarshalJSON produces a JSON number with exactly 2 decimal places.
