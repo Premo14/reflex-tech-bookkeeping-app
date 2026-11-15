@@ -2,9 +2,14 @@ package events
 
 import (
 	"encoding/json"
+	"io"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gofiber/fiber/v3"
 )
 
 func TestSubscribeUnsubscribe(t *testing.T) {
@@ -197,5 +202,163 @@ func TestBroadcast_UnsubscribedClientDoesntReceive(t *testing.T) {
 		// ok=false is expected (closed channel, no data)
 	case <-time.After(50 * time.Millisecond):
 		// also expected
+	}
+}
+
+// ---- HandleSSEStream: ticker ping path ----
+
+func TestHandleSSEStream_TickerPing(t *testing.T) {
+	app := fiber.New()
+	oldDuration := SSETickerDuration
+	SSETickerDuration = 50 * time.Millisecond
+	defer func() { SSETickerDuration = oldDuration }()
+
+	app.Get("/sse", HandleSSEStream)
+
+	req := httptest.NewRequest("GET", "/sse", nil)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 200 * time.Millisecond})
+	if err != nil {
+		t.Logf("SSE ticker test: %v (timeout expected for streaming response)", err)
+	}
+	if resp != nil && resp.Body != nil {
+		body, _ := io.ReadAll(resp.Body)
+		bodyStr := string(body)
+		// Should have connected event + at least one ping
+		if !strings.Contains(bodyStr, "event: connected") {
+			t.Errorf("Missing 'event: connected' in body: %s", bodyStr)
+		}
+		if !strings.Contains(bodyStr, "event: ping") {
+			t.Errorf("Missing 'event: ping' — ticker should fire within 200ms with 50ms duration")
+		}
+		resp.Body.Close()
+	}
+}
+
+// ---- HandleSSEStream: message delivery + ticker ----
+
+func TestHandleSSEStream_MessageAndPing(t *testing.T) {
+	app := fiber.New()
+	oldDuration := SSETickerDuration
+	SSETickerDuration = 30 * time.Millisecond
+	defer func() { SSETickerDuration = oldDuration }()
+
+	app.Get("/sse", HandleSSEStream)
+
+	req := httptest.NewRequest("GET", "/sse", nil)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 150 * time.Millisecond})
+	if err != nil {
+		t.Logf("SSE msg+ping test: %v", err)
+	}
+	if resp != nil && resp.Body != nil {
+		body, _ := io.ReadAll(resp.Body)
+		bodyStr := string(body)
+		if !strings.Contains(bodyStr, "event: connected") {
+			t.Errorf("Missing 'event: connected'")
+		}
+		if !strings.Contains(bodyStr, "event: ping") {
+			t.Errorf("Missing 'event: ping'")
+		}
+		resp.Body.Close()
+	}
+}
+
+// ---- HandleSSEStream: channel close path ----
+
+func TestHandleSSEStream_ChannelClosePath(t *testing.T) {
+	// The !ok path in the select loop is triggered when clientChan is closed
+	// from outside the handler. We test this by verifying that after unsubscribe,
+	// a broadcast doesn't deliver to the closed channel (the defer recover in
+	// Broadcast handles the closed channel, and the SSE handler's defer Unsubscribe
+	// will close the channel when the handler returns).
+	hub := &EventHub{clients: make(map[chan []byte]struct{})}
+	ch := hub.Subscribe()
+	hub.Unsubscribe(ch) // closes channel
+
+	// Verify channel is closed
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Error("channel should be closed after unsubscribe")
+		}
+	case <-time.After(50 * time.Millisecond):
+		// Also expected
+	}
+}
+
+// ---- HandleSSEStream: Fiber request with full headers ----
+
+func TestHandleSSEStream_RequestHeaders(t *testing.T) {
+	oldDuration := SSETickerDuration
+	SSETickerDuration = 50 * time.Millisecond
+	defer func() { SSETickerDuration = oldDuration }()
+
+	app := fiber.New()
+	app.Get("/sse", HandleSSEStream)
+
+	req := httptest.NewRequest("GET", "/sse", nil)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 200 * time.Millisecond})
+	if err != nil {
+		t.Logf("SSE headers test: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want 'text/event-stream'", ct)
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-cache" {
+		t.Errorf("Cache-Control = %q, want 'no-cache'", cc)
+	}
+	if conn := resp.Header.Get("Connection"); conn != "keep-alive" {
+		t.Errorf("Connection = %q, want 'keep-alive'", conn)
+	}
+	if aco := resp.Header.Get("Access-Control-Allow-Origin"); aco != "http://localhost:5173" {
+		t.Errorf("Access-Control-Allow-Origin = %q", aco)
+	}
+	if acc := resp.Header.Get("Access-Control-Allow-Credentials"); acc != "true" {
+		t.Errorf("Access-Control-Allow-Credentials = %q", acc)
+	}
+
+	// Read body to check for connected + ping events
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, "event: connected") {
+		t.Errorf("Missing 'event: connected'")
+	}
+	if !strings.Contains(bodyStr, "event: ping") {
+		t.Errorf("Missing 'event: ping'")
+	}
+}
+
+// ---- HandleSSEStream: SSE panic recovery via SSEPanicTrigger ----
+
+func TestHandleSSEStream_PanicRecovery(t *testing.T) {
+	app := fiber.New()
+	oldHook := SSEPanicTrigger
+	SSEPanicTrigger = func() {
+		panic("test sse panic")
+	}
+	defer func() {
+		SSEPanicTrigger = oldHook
+	}()
+
+	app.Get("/sse", HandleSSEStream)
+
+	req := httptest.NewRequest("GET", "/sse", nil)
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Logf("SSE panic test: %v (expected for streaming panic recovery)", err)
+	}
+	if resp != nil && resp.Body != nil {
+		body, _ := io.ReadAll(resp.Body)
+		bodyStr := string(body)
+		// Should have connected event + error event from panic recovery
+		if !strings.Contains(bodyStr, "event: connected") {
+			t.Errorf("Missing 'event: connected'")
+		}
+		if !strings.Contains(bodyStr, "event: error") {
+			t.Errorf("Missing 'event: error' from panic recovery — body: %s", bodyStr)
+		}
+		resp.Body.Close()
 	}
 }

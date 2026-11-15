@@ -79,6 +79,14 @@ func Broadcast(eventType string, payload interface{}) {
 	Hub.Broadcast(eventType, payload)
 }
 
+// SSETickerDuration controls the SSE keep-alive ping interval.
+// The default is 20 seconds. Set to a shorter duration in tests.
+var SSETickerDuration = 20 * time.Second
+
+// SSEPanicTrigger is called before the main select loop for testing purposes.
+// Set to a non-nil function in tests to inject a panic and verify defer recover.
+var SSEPanicTrigger func()
+
 // HandleSSEStream streams server-sent events to connected browser clients.
 func HandleSSEStream(c fiber.Ctx) error {
 	c.Set("Content-Type", "text/event-stream")
@@ -109,8 +117,13 @@ func HandleSSEStream(c fiber.Ctx) error {
 			return
 		}
 
-		ticker := time.NewTicker(20 * time.Second)
+		ticker := time.NewTicker(SSETickerDuration)
 		defer ticker.Stop()
+
+		// Test hook: allow tests to inject a panic to verify defer recover
+		if SSEPanicTrigger != nil {
+			SSEPanicTrigger()
+		}
 
 		for {
 			select {

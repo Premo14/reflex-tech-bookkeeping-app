@@ -19,12 +19,17 @@ var (
 )
 
 func init() {
+	setPaths(os.Getenv("DOCUMENT_DATA_PATH"))
+}
+
+// setPaths sets the current host and container paths from the environment.
+// Exported via lowercase visibility so tests in the same package can call it.
+func setPaths(envPath string) {
 	currentContainerDir = "/app/documents"
-	currentHostPath = os.Getenv("DOCUMENT_DATA_PATH")
-	if currentHostPath == "" {
+	if envPath == "" {
 		currentHostPath = "./document-data"
 	} else {
-		currentHostPath = NormalizeDropboxHostPath(currentHostPath)
+		currentHostPath = NormalizeDropboxHostPath(envPath)
 		currentContainerDir = ResolveHostToContainer(currentHostPath)
 	}
 }

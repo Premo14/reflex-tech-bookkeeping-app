@@ -280,3 +280,128 @@ func TestBankRules_JSONConstruction(t *testing.T) {
 		}
 	}
 }
+
+// ---- defaultAccounts: all types accounted for ----
+
+func TestDefaultAccounts_Types(t *testing.T) {
+	types := make(map[string]int)
+	for _, entry := range defaultAccounts {
+		types[entry.Type]++
+	}
+	expectedTypes := map[string]int{"ASSET": 6, "LIABILITY": 5, "EQUITY": 3, "REVENUE": 4, "EXPENSE": 23}
+	for wantType, wantCount := range expectedTypes {
+		if got := types[wantType]; got != wantCount {
+			t.Errorf("Type %s count = %d, want %d", wantType, got, wantCount)
+		}
+	}
+}
+
+// ---- defaultAccounts: all have ScheduleCLine ----
+
+func TestDefaultAccounts_ScheduleCLines(t *testing.T) {
+	revenueAndExpense := 0
+	for _, entry := range defaultAccounts {
+		if entry.Type == "REVENUE" || entry.Type == "EXPENSE" {
+			revenueAndExpense++
+			if entry.ScheduleCLine == "" {
+				t.Errorf("Account %s (%s) missing ScheduleCLine", entry.Code, entry.Name)
+			}
+		}
+	}
+	if revenueAndExpense != 27 {
+		t.Errorf("Expected 27 REVENUE+EXPENSE accounts, got %d", revenueAndExpense)
+	}
+}
+
+// ---- defaultAccounts: valid COA code format ----
+
+func TestDefaultAccounts_CodeFormat(t *testing.T) {
+	for _, entry := range defaultAccounts {
+		if len(entry.Code) != 4 {
+			t.Errorf("Code %q for %s is not 4 digits", entry.Code, entry.Name)
+		}
+		for _, c := range entry.Code {
+			if c < '0' || c > '9' {
+				t.Errorf("Code %q contains non-digit for %s", entry.Code, entry.Name)
+			}
+		}
+	}
+}
+
+// ---- defaultBankRules: all rules have unique names ----
+
+func TestDefaultBankRules_UniqueNames(t *testing.T) {
+	nameCount := make(map[string]int)
+	for _, entry := range defaultBankRules {
+		nameCount[entry.Name]++
+	}
+	for name, count := range nameCount {
+		if count > 1 {
+			t.Errorf("Duplicate bank rule name %q (%d times)", name, count)
+		}
+	}
+}
+
+// ---- defaultBankRules: all keywords are non-empty ----
+
+func TestDefaultBankRules_NoEmptyKeywords(t *testing.T) {
+	for i, entry := range defaultBankRules {
+		for j, kw := range entry.Keywords {
+			if kw == "" {
+				t.Errorf("Rule %d (%s) has empty keyword at index %d", i, entry.Name, j)
+			}
+		}
+	}
+}
+
+// ---- seedEntry: verify all 41 accounts ----
+
+func TestDefaultAccounts_AllPresent(t *testing.T) {
+	expectedCodes := []string{
+		"1010", "1020", "1030", "1100", "1200", "1300",
+		"2010", "2020", "2030", "2100", "2510",
+		"3010", "3020", "3110",
+		"4010", "4090", "4110", "4210",
+		"5000", "5010", "5015", "5020", "5025", "5030", "5040", "5050", "5060", "5070", "5080", "5090",
+		"5110", "5120", "5210", "5310", "5410", "5510", "5610", "5710", "5720", "5810", "5910",
+	}
+	codeMap := make(map[string]bool)
+	for _, entry := range defaultAccounts {
+		codeMap[entry.Code] = true
+	}
+	for _, wantCode := range expectedCodes {
+		if !codeMap[wantCode] {
+			t.Errorf("Missing expected COA code %s", wantCode)
+		}
+	}
+}
+
+// ---- defaultBankRules: asset/liability/equity accounts have no ScheduleC mapping ----
+
+func TestDefaultAccounts_NonTaxAccountsNoScheduleC(t *testing.T) {
+	for _, entry := range defaultAccounts {
+		if entry.Type == "ASSET" || entry.Type == "LIABILITY" || entry.Type == "EQUITY" {
+			if entry.ScheduleCLine != "" {
+				t.Errorf("Account %s (%s) is %s but has ScheduleCLine: %s",
+					entry.Code, entry.Name, entry.Type, entry.ScheduleCLine)
+			}
+		}
+	}
+}
+
+// ---- defaultBankRules: account codes span valid ranges ----
+
+func TestDefaultBankRules_AccountCodeRanges(t *testing.T) {
+	// Bank rules should only reference expense accounts (5xxx)
+	expenseCodes := make(map[string]bool)
+	for _, entry := range defaultAccounts {
+		if entry.Type == "EXPENSE" {
+			expenseCodes[entry.Code] = true
+		}
+	}
+	for _, rule := range defaultBankRules {
+		if !expenseCodes[rule.AccountCode] {
+			t.Errorf("Rule %q references non-expense account code %s", rule.Name, rule.AccountCode)
+		}
+	}
+}

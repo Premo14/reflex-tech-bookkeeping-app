@@ -743,3 +743,82 @@ func TestCopyFile_UmaskReset(t *testing.T) {
 	// umask should not be 0 — copyFile should restore caller's umask
 	_ = currentUmask // copyFile uses defer for umask reset
 }
+
+// ---- moveDirectory: rename-fail copy+remove fallback ----
+
+func TestMoveDirectory_RenameFailsCopyRemove(t *testing.T) {
+	// When os.Rename fails (e.g. destination directory already exists),
+	// moveDirectory should fall back to copyDir + RemoveAll.
+	srcDir := t.TempDir() + "/src"
+	os.MkdirAll(srcDir, 0755)
+	os.WriteFile(filepath.Join(srcDir, "data.txt"), []byte("test"), 0644)
+
+	// Pre-create the destination directory so os.Rename fails with EEXIST
+	dstDir := t.TempDir() + "/dst"
+	os.MkdirAll(dstDir, 0755)
+
+	err := moveDirectory(srcDir, dstDir)
+	if err != nil {
+		t.Fatalf("moveDirectory copy+remove fallback error = %v", err)
+	}
+
+	// Verify the file was copied to the pre-existing destination
+	data, err := os.ReadFile(filepath.Join(dstDir, "data.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(dst/src/data.txt) error = %v", err)
+	}
+	if string(data) != "test" {
+		t.Errorf("dst/src/data.txt content = %q, want %q", data, "test")
+	}
+
+	// Source should have been removed by RemoveAll
+	_, err = os.Stat(srcDir)
+	if err == nil {
+		t.Error("source directory should have been removed after copy")
+	}
+}
+
+// ---- SafeMove: destination directory (rename fails, copy also fails) ----
+
+func TestSafeMove_DstIsDirectory(t *testing.T) {
+	// Rename a file to a directory path — fails with EISDIR.
+	// Then copyFile also fails because dst is a directory.
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "file.txt")
+	os.WriteFile(src, []byte("data"), 0644)
+
+	// Create destination as a directory
+	dstDir := t.TempDir() + "/dst"
+	os.MkdirAll(dstDir, 0755)
+
+	err := SafeMove(src, dstDir)
+	if err == nil {
+		t.Error("SafeMove should fail when destination is a directory")
+	}
+	if !strings.Contains(err.Error(), "safe move copy failed") {
+		t.Errorf("Expected 'safe move copy failed', got: %v", err)
+	}
+}
+
+// ---- init: setPaths else branch coverage (env var set) ----
+
+func TestSetPaths_EnvVarSet(t *testing.T) {
+	setPaths("/home/user/custom")
+
+	hostPath := GetCurrentHostPath()
+	expected := "/home/user/custom/document-data"
+	if hostPath != expected {
+		t.Errorf("setPaths(%q) hostPath = %q, want %q", "/home/user/custom", hostPath, expected)
+	}
+}
+
+// ---- init: setPaths empty env (default branch) ----
+
+func TestSetPaths_EmptyEnv(t *testing.T) {
+	setPaths("")
+
+	hostPath := GetCurrentHostPath()
+	if hostPath != "./document-data" {
+		t.Errorf("setPaths(\"\") hostPath = %q, want %q", hostPath, "./document-data")
+	}
+}
