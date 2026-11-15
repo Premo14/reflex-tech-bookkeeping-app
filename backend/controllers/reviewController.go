@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"reflex-tech-bookkeeping-app-api/constants"
 	"reflex-tech-bookkeeping-app-api/db"
-	"reflex-tech-bookkeeping-app-api/events"
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/utils"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -15,6 +17,28 @@ import (
 )
 
 const booksClosedDateKey = "BooksClosedDate"
+
+// removeUnreferencedReceiptFile removes a physical receipt file if no database record
+// references it and its path stays safely inside the processed storage directory.
+func removeUnreferencedReceiptFile(uri string) {
+	if uri == "" || db.DB == nil {
+		return
+	}
+	var remainingCount int64
+	db.DB.Model(&models.Receipt{}).Where("document_uri = ?", uri).Count(&remainingCount)
+	if remainingCount > 0 {
+		return
+	}
+	cleaned := filepath.Clean(uri)
+	processedDir := filepath.Clean(constants.GetProcessedPath())
+	if processedDir != "" && cleaned != processedDir && !strings.HasPrefix(cleaned, processedDir+string(filepath.Separator)) {
+		fmt.Printf("Warning: refusing to delete receipt file outside processed dir: %s\n", uri)
+		return
+	}
+	if err := os.Remove(cleaned); err != nil && !os.IsNotExist(err) {
+		fmt.Printf("Warning: failed to delete physical receipt file %s: %v\n", cleaned, err)
+	}
+}
 
 // getBooksClosedDate returns the current BooksClosedDate, or ok=false when no period is locked.
 func getBooksClosedDate(tx *gorm.DB) (closed time.Time, raw string, ok bool) {
@@ -32,6 +56,9 @@ func getBooksClosedDate(tx *gorm.DB) (closed time.Time, raw string, ok bool) {
 // GetReviewQueueCounts returns integer counts for all review queues.
 // Used by the sidebar to display badges without transferring the entire transaction graph.
 func GetReviewQueueCounts(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	closedDate, _, hasClosed := getBooksClosedDate(db.DB)
 
 	var pendingTxCount int64
@@ -82,6 +109,9 @@ func GetReviewQueueCounts(c fiber.Ctx) error {
 //   - WARNINGS_IGNORED: items that are in the books but whose warnings were silenced
 //   - DELETED: items soft-deleted from the books, held for 30 days before permanent purge
 func GetReviewQueue(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	status := c.Query("status", "PENDING")
 	if status != "PENDING" && status != "IGNORED" && status != "WARNINGS_IGNORED" && status != "DELETED" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "status must be PENDING, IGNORED, WARNINGS_IGNORED or DELETED"})
@@ -110,13 +140,7 @@ func GetReviewQueue(c fiber.Ctx) error {
 
 			// Remove physical files if no other receipt references them
 			for _, r := range oldReceipts {
-				if r.DocumentURI != "" {
-					var remainingCount int64
-					db.DB.Model(&models.Receipt{}).Where("document_uri = ?", r.DocumentURI).Count(&remainingCount)
-					if remainingCount == 0 {
-						_ = os.Remove(r.DocumentURI)
-					}
-				}
+				removeUnreferencedReceiptFile(r.DocumentURI)
 			}
 		}
 	}
@@ -230,6 +254,9 @@ func writeReviewAudit(tx *gorm.DB, items []GroupItem, action, reason, note, grou
 
 // ResolveQueueItems applies a review decision to a set of items atomically.
 func ResolveQueueItems(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	var req ResolveRequest
 	if err := c.Bind().JSON(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid input"})
@@ -342,6 +369,9 @@ func ResolveQueueItems(c fiber.Ctx) error {
 			resp["affected"] = requested
 
 		case "delete":
+			if locked := groupLockedItem(requested); locked != nil {
+				return newResolveError(fiber.StatusForbidden, "Cannot delete items from a locked accounting period. Unlock the books first.")
+			}
 			txIDs, expIDs := splitItemIDs(requested)
 			now := time.Now()
 			if len(txIDs) > 0 {
@@ -371,9 +401,7 @@ func ResolveQueueItems(c fiber.Ctx) error {
 
 	// Allowing or (un)ignoring warnings changes which items are flagged.
 	utils.RunReconciliation()
-	events.Broadcast("QUEUE_UPDATED", nil)
-	events.Broadcast("TRANSACTIONS_UPDATED", nil)
-	events.Broadcast("EXPENSES_UPDATED", nil)
+	broadcastReconciliationSync()
 
 	return c.JSON(resp)
 }
@@ -456,6 +484,9 @@ type BatchCategorizeRequest struct {
 
 // BatchCategorizeItems updates the category on multiple transactions and expenses in a single atomic transaction.
 func BatchCategorizeItems(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	var req BatchCategorizeRequest
 	if err := c.Bind().JSON(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid input"})
@@ -586,9 +617,7 @@ func BatchCategorizeItems(c fiber.Ctx) error {
 	}
 
 	utils.RunReconciliation()
-	events.Broadcast("TRANSACTIONS_UPDATED", nil)
-	events.Broadcast("RECONCILIATION_UPDATED", nil)
-	events.Broadcast("QUEUE_UPDATED", nil)
+	broadcastReconciliationSync()
 
 	return c.JSON(fiber.Map{
 		"status":  "success",

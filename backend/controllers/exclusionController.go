@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"fmt"
-	"os"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/utils"
@@ -176,6 +175,9 @@ func parseExclusionInput(c fiber.Ctx) (exclusionInput, error) {
 // ExcludePreview describes everything that would be affected by excluding or restoring an
 // item, so the UI can warn the user before they confirm.
 func ExcludePreview(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	in, err := parseExclusionInput(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
@@ -198,6 +200,9 @@ func ExcludePreview(c fiber.Ctx) error {
 
 // ExcludeItem excludes an item and its entire link group from the books.
 func ExcludeItem(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	in, err := parseExclusionInput(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
@@ -224,15 +229,19 @@ func ExcludeItem(c fiber.Ctx) error {
 		txIDs, expIDs = collectLinkGroup(tx, in.Type, in.ID)
 	}
 	items := loadGroupItems(tx, txIDs, expIDs)
+	if len(items) == 0 {
+		tx.Rollback()
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Item not found."})
+	}
 
 	if locked := groupLockedItem(items); locked != nil {
 		tx.Rollback()
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "This item (or an item linked to it) is in a locked accounting period. Unlock the books first."})
 	}
 	for _, it := range items {
-		if it.ReviewStatus == "IGNORED" {
+		if it.ReviewStatus == "IGNORED" || it.ReviewStatus == "DELETED" {
 			tx.Rollback()
-			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "This item is already excluded."})
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "This item is already excluded or deleted."})
 		}
 	}
 
@@ -247,7 +256,6 @@ func ExcludeItem(c fiber.Ctx) error {
 	fields := map[string]interface{}{"review_status": "IGNORED", "exclusion_reason": in.Reason, "exclusion_note": in.Note}
 	if len(txIDs) > 0 {
 		tx.Model(&models.BankTransaction{}).Where("id IN ?", txIDs).Updates(fields)
-		// Drop any suggestions that involve an excluded item.
 		tx.Where("bank_transaction_id IN ? AND status = ?", txIDs, "suggested").Delete(&models.ExpenseBankTransaction{})
 	}
 	if len(expIDs) > 0 {
@@ -264,14 +272,17 @@ func ExcludeItem(c fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to exclude item"})
 	}
 
-	// Refresh suggestion flags for the items that were suggested against the excluded ones.
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.JSON(fiber.Map{"status": "success", "affected": items})
 }
 
 // RestoreItem restores an excluded item and its entire link group to the books.
 func RestoreItem(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	in, err := parseExclusionInput(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
@@ -281,6 +292,10 @@ func RestoreItem(c fiber.Ctx) error {
 
 	txIDs, expIDs := collectLinkGroup(tx, in.Type, in.ID)
 	items := loadGroupItems(tx, txIDs, expIDs)
+	if len(items) == 0 {
+		tx.Rollback()
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Item not found."})
+	}
 
 	for _, it := range items {
 		if it.ReviewStatus != "IGNORED" && it.ReviewStatus != "WARNINGS_IGNORED" {
@@ -311,12 +326,16 @@ func RestoreItem(c fiber.Ctx) error {
 	}
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.JSON(fiber.Map{"status": "success", "affected": items})
 }
 
 // RestoreBulk restores multiple excluded items and their link groups to the books atomically.
 func RestoreBulk(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	var in struct {
 		Items []bulkItemRef `json:"items"`
 	}
@@ -332,6 +351,10 @@ func RestoreBulk(c fiber.Ctx) error {
 
 	allTxIDs, allExpIDs := expandToLinkGroups(tx, txIDs, expIDs)
 	items := loadGroupItems(tx, allTxIDs, allExpIDs)
+	if len(items) == 0 {
+		tx.Rollback()
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Selected items not found."})
+	}
 
 	for _, it := range items {
 		if it.ReviewStatus != "IGNORED" && it.ReviewStatus != "WARNINGS_IGNORED" {
@@ -362,6 +385,7 @@ func RestoreBulk(c fiber.Ctx) error {
 	}
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.JSON(fiber.Map{"status": "success", "affected": items})
 }
@@ -401,6 +425,9 @@ func parseBulkItems(items []bulkItemRef) (txIDs []uint, expIDs []uint, err error
 // ExcludeBulkPreview describes everything that would be affected by excluding multiple items
 // along with their link groups.
 func ExcludeBulkPreview(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	var in struct {
 		Items []bulkItemRef `json:"items"`
 	}
@@ -432,6 +459,9 @@ func ExcludeBulkPreview(c fiber.Ctx) error {
 
 // ExcludeBulk excludes multiple items and their entire link groups from the books.
 func ExcludeBulk(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	var in bulkExclusionInput
 	if err := c.Bind().JSON(&in); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid input"})
@@ -459,15 +489,19 @@ func ExcludeBulk(c fiber.Ctx) error {
 		allTxIDs, allExpIDs = expandToLinkGroups(tx, txIDs, expIDs)
 	}
 	items := loadGroupItems(tx, allTxIDs, allExpIDs)
+	if len(items) == 0 {
+		tx.Rollback()
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Selected items not found."})
+	}
 
 	if locked := groupLockedItem(items); locked != nil {
 		tx.Rollback()
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "This selection (or an item linked to it) is in a locked accounting period. Unlock the books first."})
 	}
 	for _, it := range items {
-		if it.ReviewStatus == "IGNORED" {
+		if it.ReviewStatus == "IGNORED" || it.ReviewStatus == "DELETED" {
 			tx.Rollback()
-			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": fmt.Sprintf("Item '%s' is already excluded.", it.Label)})
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": fmt.Sprintf("Item '%s' is already excluded or deleted.", it.Label)})
 		}
 	}
 
@@ -500,12 +534,16 @@ func ExcludeBulk(c fiber.Ctx) error {
 	}
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.JSON(fiber.Map{"status": "success", "affected": items})
 }
 
 // DeleteBulk soft-deletes items and unlinks them from active books.
 func DeleteBulk(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	var in struct {
 		Items []bulkItemRef `json:"items"`
 	}
@@ -531,7 +569,6 @@ func DeleteBulk(c fiber.Ctx) error {
 		})
 	}
 
-	// Sever links in join table
 	if len(txIDs) > 0 {
 		tx.Where("bank_transaction_id IN ?", txIDs).Delete(&models.ExpenseBankTransaction{})
 	}
@@ -558,11 +595,15 @@ func DeleteBulk(c fiber.Ctx) error {
 	}
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 	return c.JSON(fiber.Map{"status": "success", "affected": items})
 }
 
 // RestoreDeletedBulk restores soft-deleted items back to active books (APPROVED).
 func RestoreDeletedBulk(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	var in struct {
 		Items []bulkItemRef `json:"items"`
 	}
@@ -576,6 +617,10 @@ func RestoreDeletedBulk(c fiber.Ctx) error {
 
 	tx := db.DB.Begin()
 	items := loadGroupItems(tx, txIDs, expIDs)
+	if len(items) == 0 {
+		tx.Rollback()
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Selected items not found."})
+	}
 	if locked := groupLockedItem(items); locked != nil {
 		tx.Rollback()
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
@@ -607,11 +652,15 @@ func RestoreDeletedBulk(c fiber.Ctx) error {
 	}
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 	return c.JSON(fiber.Map{"status": "success", "affected": items})
 }
 
 // MoveDeletedToExcludedBulk moves soft-deleted items into Excluded Items (IGNORED).
 func MoveDeletedToExcludedBulk(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	var in struct {
 		Items  []bulkItemRef `json:"items"`
 		Reason string        `json:"reason"`
@@ -620,8 +669,13 @@ func MoveDeletedToExcludedBulk(c fiber.Ctx) error {
 	if err := c.Bind().JSON(&in); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body."})
 	}
+	in.Reason = strings.ToUpper(strings.TrimSpace(in.Reason))
+	in.Note = strings.TrimSpace(in.Note)
 	if in.Reason == "" {
 		in.Reason = "OTHER"
+	}
+	if !validExclusionReasons[in.Reason] {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "A valid exclusion reason is required."})
 	}
 	txIDs, expIDs, err := parseBulkItems(in.Items)
 	if err != nil {
@@ -630,6 +684,10 @@ func MoveDeletedToExcludedBulk(c fiber.Ctx) error {
 
 	tx := db.DB.Begin()
 	items := loadGroupItems(tx, txIDs, expIDs)
+	if len(items) == 0 {
+		tx.Rollback()
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Selected items not found."})
+	}
 	if locked := groupLockedItem(items); locked != nil {
 		tx.Rollback()
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
@@ -666,11 +724,15 @@ func MoveDeletedToExcludedBulk(c fiber.Ctx) error {
 	}
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 	return c.JSON(fiber.Map{"status": "success", "affected": items})
 }
 
 // DeletePermanentBulk hard-deletes items permanently from the database.
 func DeletePermanentBulk(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	var in struct {
 		Items []bulkItemRef `json:"items"`
 	}
@@ -684,6 +746,10 @@ func DeletePermanentBulk(c fiber.Ctx) error {
 
 	tx := db.DB.Begin()
 	items := loadGroupItems(tx, txIDs, expIDs)
+	if len(items) == 0 {
+		tx.Rollback()
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Selected items not found."})
+	}
 	if locked := groupLockedItem(items); locked != nil {
 		tx.Rollback()
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
@@ -721,18 +787,13 @@ func DeletePermanentBulk(c fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to permanently delete items"})
 	}
 
-	// Clean up physical receipt files if no other receipt record references them
+	// Clean up physical receipt files safely inside processed dir
 	for _, uri := range fileURIsToCheck {
-		var remainingCount int64
-		db.DB.Model(&models.Receipt{}).Where("document_uri = ?", uri).Count(&remainingCount)
-		if remainingCount == 0 {
-			if err := os.Remove(uri); err != nil && !os.IsNotExist(err) {
-				fmt.Printf("Warning: failed to delete physical receipt file %s: %v\n", uri, err)
-			}
-		}
+		removeUnreferencedReceiptFile(uri)
 	}
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 	return c.JSON(fiber.Map{"status": "success"})
 }
 

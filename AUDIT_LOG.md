@@ -153,3 +153,12 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
   - Added nil-DB guards (`500`) across all 9 HTTP handlers, protected `reconciliationLastRun` read under mutex in `TriggerReconciliation`, guarded `DELETED` items, wrapped `MarkExpenseAsCash` in `db.DB.Transaction(...)`, and added `broadcastReconciliationSync()` SSE events.
 - **Coverage (`reconciliationController.go`)**: Helpers `100%`, `TriggerReconciliation` `100.0%`, `LinkExpenseToTransaction` `97.9%`, `GetUnlinkedItems` `98.0%`, `UnlinkExpense` `95.0%`, `LinkExpenseToInvoice` `95.7%`, `UnlinkExpenseFromInvoice` `93.8%`, `GetFlaggedItems` `92.9%`, `MarkExpenseAsCash` `88.9%`, `CreateAndLink` `88.6%`.
 - **Verification**: `go build ./...` ✅, `go vet ./...` ✅, `go test -count=1 ./controllers` ✅ (`45.1%`).
+
+## S09B: Controllers — Review Queue & Exclusions
+- **reviewController.go & exclusionController.go**:
+  - Added nil-DB guards (`500`) across all 14 exported HTTP handlers.
+  - Extracted shared path-traversal-safe `removeUnreferencedReceiptFile(uri)` checking `constants.GetProcessedPath()` prefix before `os.Remove` during both `GetReviewQueue?status=DELETED` 30-day purge and `DeletePermanentBulk`.
+  - Guarded `ResolveQueueItems` `action: "delete"` against locked periods via `groupLockedItem`.
+  - Added consistent `len(items) == 0 -> 404` checks, rejected `DELETED` items on `ExcludeItem`/`ExcludeBulk`, normalized/validated exclusion reasons on `MoveDeletedToExcludedBulk`, and wired `broadcastReconciliationSync()` SSE updates into all review/exclusion mutations.
+- **Coverage**: `GetReviewQueueCounts` 100.0%, `GetReviewQueue` 95.7%, `BatchCategorizeItems` 93.3%, `ResolveQueueItems` 87.1%, `ExcludePreview` 100.0%, `ExcludeBulkPreview` 100.0%, `DeleteBulk` 97.1%, `MoveDeletedToExcludedBulk` 94.9%, `RestoreBulk` 94.1%, `ExcludeBulk` 94.1%, `RestoreDeletedBulk` 93.9%, `RestoreItem` 93.5%, `ExcludeItem` 87.5%, `DeletePermanentBulk` 87.5%.
+- **Verification**: `go build ./...` ✅, `go vet ./...` ✅, `go test -count=1 ./controllers` ✅ (`60.4%`).
