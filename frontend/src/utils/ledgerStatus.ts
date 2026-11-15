@@ -83,3 +83,13 @@ export function matchesAmountQuery(amount: number, query: string): boolean {
     String(amount || 0).includes(q)
   );
 }
+
+/**
+ * Human-readable labels for ledger item exclusion reasons.
+ */
+export const EXCLUSION_REASON_LABELS: Record<string, string> = {
+  DUPLICATE: "Duplicate entry",
+  PERSONAL: "Personal expense",
+  CLOSED_PERIOD: "Declined during review",
+  OTHER: "Other",
+};

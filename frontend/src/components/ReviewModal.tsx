@@ -21,7 +21,8 @@ import {
   type ReviewStatusType,
 } from "../services/api";
 import { useLiveEvent } from "../utils/useLiveSync";
-import ExcludeItemModal, { EXCLUSION_REASON_LABELS } from "./ExcludeItemModal";
+import ExcludeItemModal from "./ExcludeItemModal";
+import { EXCLUSION_REASON_LABELS } from "../utils/ledgerStatus";
 import DetailDrawer from "./DetailDrawer";
 import { getGroupedAccounts } from "../utils/accountHierarchy";
 import { formatDate } from "../utils/dateUtils";
@@ -1480,7 +1481,7 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
                     : "No items match your search or filters."}
                 </p>
                 {rows.length === 0 && (
-                  <p className="text-xs text-zinc-500 max-w-md mx-auto">
+                  <p className="text-xs text-zinc-400 max-w-md mx-auto">
                     {isPending
                       ? "All transactions and expenses are reconciled and approved."
                       : isIgnored

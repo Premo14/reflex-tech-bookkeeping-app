@@ -6,7 +6,8 @@ import { Select } from "./ui/Select";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
 import Pagination from "./ui/Pagination";
 import ReactDOM from "react-dom";
-import ExcludeItemModal, { EXCLUSION_REASON_LABELS } from "./ExcludeItemModal";
+import ExcludeItemModal from "./ExcludeItemModal";
+import { EXCLUSION_REASON_LABELS } from "../utils/ledgerStatus";
 import SplitExpenseModal from "./SplitExpenseModal";
 import {
   getTransactionDetail, getExpenseDetail,
@@ -14,18 +15,28 @@ import {
   deleteTransaction, deleteExpense,
   getUnlinkedItems,
   linkExpenseToTransaction, unlinkExpenseFromTransaction,
+  linkExpenseToInvoice, unlinkExpenseFromInvoice,
   createAndLink, uploadReceiptToExpense, deleteReceipt,
   getSettings, getChartAccounts, resolveReviewItems, restoreItem,
-  getInvoice, matchInvoicePayment, unmatchInvoicePayment, getInvoiceCandidates, getInvoices
+  getInvoice, deleteInvoice, matchInvoicePayment, markInvoicePaidCash, unmatchInvoicePayment, getInvoiceCandidates, getInvoices
 } from "../services/api";
-import type { BankTransaction, Expense, ChartAccount, Invoice, ScoredDepositCandidate, InvoiceLineItem } from "../types/models";
+import type {
+  BankTransaction,
+  Expense,
+  ChartAccount,
+  Invoice,
+  ScoredDepositCandidate,
+  ScoredExpenseCandidate,
+  ScoredTransactionCandidate,
+  InvoiceLineItem,
+} from "../types/models";
 import CreateExpenseForm from "./CreateExpenseForm";
 import CreateTransactionForm from "./CreateTransactionForm";
+import { SuggestedMatchesList } from "./SuggestedMatchesList";
 import { getGroupedAccounts } from "../utils/accountHierarchy";
 import { formatDate, formatPaymentTerms } from "../utils/dateUtils";
 import { useLiveEvent } from "../utils/useLiveSync";
 import { extractCleanVendor } from "../utils/vendorUtils";
-import { computeMatchScore } from "../utils/matchConfidence";
 
 const CURRENCIES = [
   "USD", "EUR", "GBP", "CAD", "AUD", "JPY", "INR", "CNY", "CHF", "SGD", 
@@ -44,9 +55,11 @@ interface DetailDrawerProps {
   onClose: () => void;
   onCreateRule?: (data: { name: string; descriptionKeyword: string; categoryAccountId?: number | null }) => void;
   onOpenInvoices?: () => void;
+  onEditInvoice?: (inv: Invoice) => void;
+  onPrintInvoice?: (inv: Invoice) => void;
 }
 
-export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenInvoices }: DetailDrawerProps) {
+export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenInvoices, onEditInvoice, onPrintInvoice }: DetailDrawerProps) {
   const { confirm, alert } = useConfirm();
   const activeRequestId = useRef(0);
   const [hasBackgroundUpdate, setHasBackgroundUpdate] = useState(false);
@@ -62,11 +75,18 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
   const [allOpenInvoices, setAllOpenInvoices] = useState<Invoice[]>([]);
   const [selectedInvoiceToMatch, setSelectedInvoiceToMatch] = useState<number | null>(null);
   const [isMatchingInvoice, setIsMatchingInvoice] = useState(false);
+  const [showCashPayPanel, setShowCashPayPanel] = useState(false);
+  const [cashPayDate, setCashPayDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [cashPayNotes, setCashPayNotes] = useState("");
+  const [isRecordingCashPay, setIsRecordingCashPay] = useState(false);
+  const [linkTargetMode, setLinkTargetMode] = useState<"tx" | "expense" | "invoice">("expense");
+  const [linkInvoices, setLinkInvoices] = useState<Invoice[]>([]);
+  const [isLinkingInvoice, setIsLinkingInvoice] = useState(false);
 
   const [confirmedExpenses, setConfirmedExpenses] = useState<Expense[]>([]);
-  const [suggestedExpenses, setSuggestedExpenses] = useState<Expense[]>([]);
+  const [suggestedExpenseCandidates, setSuggestedExpenseCandidates] = useState<ScoredExpenseCandidate[]>([]);
   const [confirmedTransactions, setConfirmedTransactions] = useState<BankTransaction[]>([]);
-  const [suggestedTransactions, setSuggestedTransactions] = useState<BankTransaction[]>([]);
+  const [suggestedTransactionCandidates, setSuggestedTransactionCandidates] = useState<ScoredTransactionCandidate[]>([]);
 
   const [activeExpenseIdx, setActiveExpenseIdx] = useState(0);
   const [activeTxIdx, setActiveTxIdx] = useState(0);
@@ -263,12 +283,35 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
 
   useEffect(() => {
     if (showLinkPanel) loadUnlinkedData();
-  }, [linkSearch, linkStartDate, linkEndDate, linkPage, showLinkPanel]);
+  }, [linkSearch, linkStartDate, linkEndDate, linkPage, showLinkPanel, linkTargetMode]);
 
   const loadUnlinkedData = async () => {
     try {
       const rootAmount = type === "transaction" ? activeTx?.amount : activeExpense?.amount;
       const rootDate = type === "transaction" ? activeTx?.date : activeExpense?.timestamp;
+      if (linkTargetMode === "invoice") {
+        const res = await getInvoices({ status: "ALL", search: linkSearch || undefined });
+        const absAmt = rootAmount ? Math.abs(rootAmount) : 0;
+        let candidates = (res.invoices || []).filter((inv) => {
+          if (inv.status === "VOID") return false;
+          // For transaction deposit payment matching, only show invoices with unpaid balance & no bank tx
+          if (type === "transaction" && (inv.status === "PAID" || inv.bankTransactionId)) return false;
+          if (linkStartDate && inv.issueDate && inv.issueDate.split("T")[0] < linkStartDate) return false;
+          if (linkEndDate && inv.issueDate && inv.issueDate.split("T")[0] > linkEndDate) return false;
+          return true;
+        });
+        if (absAmt > 0) {
+          candidates = candidates.sort((a, b) => {
+            const diffA = Math.abs((a.balanceDue ?? a.totalAmount) - absAmt);
+            const diffB = Math.abs((b.balanceDue ?? b.totalAmount) - absAmt);
+            return diffA - diffB;
+          });
+        }
+        setLinkInvoices(candidates);
+        setUnlinkedTotalPages(1);
+        return;
+      }
+
       const data = await getUnlinkedItems({
         search: linkSearch,
         startDate: linkStartDate,
@@ -292,12 +335,17 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
     if (resetIdx) {
       setActiveExpenseIdx(0);
       setActiveTxIdx(0);
+      setSuggestedExpenseCandidates([]);
+      setSuggestedTransactionCandidates([]);
       setInvoice(null);
       setInvoiceCandidates([]);
       setLinkedInvoice(null);
       setSuggestedInvoices([]);
       setAllOpenInvoices([]);
       setSelectedInvoiceToMatch(null);
+      setShowCashPayPanel(false);
+      setCashPayNotes("");
+      setCashPayDate(new Date().toISOString().split('T')[0]);
     }
     setIsEditingExpense(false);
     setIsEditingTx(false);
@@ -319,7 +367,8 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
         loadedReview = data.transaction.reviewStatus;
         setTx(data.transaction);
         setConfirmedExpenses(data.confirmedExpenses);
-        setSuggestedExpenses(data.suggestedExpenses);
+        setSuggestedExpenseCandidates(data.suggestedExpenseCandidates || []);
+        setSuggestedTransactionCandidates([]);
         setLinkedInvoice(data.linkedInvoice || null);
         setSuggestedInvoices(data.suggestedInvoices || []);
 
@@ -357,7 +406,8 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
         loadedReview = data.expense.reviewStatus || "";
         setExpense(data.expense);
         setConfirmedTransactions(data.confirmedTransactions);
-        setSuggestedTransactions(data.suggestedTransactions);
+        setSuggestedTransactionCandidates(data.suggestedTransactionCandidates || []);
+        setSuggestedExpenseCandidates([]);
         
         // Find which expense in the active transaction's linked expenses matches the loaded expense
         const activeTxItem = data.confirmedTransactions[0];
@@ -419,7 +469,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
     }
   };
 
-  useLiveEvent(["TRANSACTIONS_UPDATED", "EXPENSES_UPDATED", "RECONCILIATION_UPDATED"], () => {
+  useLiveEvent(["TRANSACTIONS_UPDATED", "EXPENSES_UPDATED", "RECONCILIATION_UPDATED", "INVOICES_UPDATED"], () => {
     if (!id || !type) return;
     if (isEditingExpense || isEditingTx) {
       setHasBackgroundUpdate(true);
@@ -477,10 +527,10 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
         }
       } else {
         if ((e.key === "a" || e.key === "A") && !isClosed) {
-          if (type === "transaction" && suggestedExpenses.length > 0) {
-            handleApproveSuggestedExpense(suggestedExpenses[0].id);
-          } else if (type === "receipt" && suggestedTransactions.length > 0) {
-            handleApproveSuggestedTx(suggestedTransactions[0].id);
+          if (type === "transaction" && suggestedExpenseCandidates.length > 0 && suggestedExpenseCandidates[0].score >= 50) {
+            handleApproveSuggestedMatch("expense", suggestedExpenseCandidates[0].expense.id);
+          } else if (type === "receipt" && suggestedTransactionCandidates.length > 0 && suggestedTransactionCandidates[0].score >= 50) {
+            handleApproveSuggestedMatch("tx", suggestedTransactionCandidates[0].transaction.id);
           }
         }
       }
@@ -491,11 +541,11 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
     showCreateModal, showReceiptModal, excludeTarget, ignoreTarget,
     actionChoiceModal, conflictModalData, overAllocatedModalData,
     replaceOrAddModalData, allowConfirmTarget, onClose,
-    type, suggestedExpenses, suggestedTransactions, activeExpense, isClosed
+    type, suggestedExpenseCandidates, suggestedTransactionCandidates, activeExpense, isClosed
   ]);
 
   const validateForm = async (formState: any, isTx: boolean): Promise<boolean> => {
-    let amt = Number(formState.amount);
+    const amt = Number(formState.amount);
     if (!amt || isNaN(amt) || amt === 0) {
       await alert({ title: "Invalid Amount", message: "Please enter a valid amount." });
       return false;
@@ -755,10 +805,14 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
     }
   };
 
-  const handleUnmatchInvoicePayment = async (invId: number) => {
+  const handleUnmatchInvoicePayment = async (invId: number, linkedTxInfo?: BankTransaction | null, invNumber?: string) => {
+    const txDesc = linkedTxInfo
+      ? `"${linkedTxInfo.description}" (${formatMoney(linkedTxInfo.amount)} on ${formatDate(linkedTxInfo.date)})`
+      : "its linked payment record";
+    const invLabel = invNumber || `INV-${invId}`;
     const ok = await confirm({
       title: "Unlink Payment",
-      message: "Are you sure you want to unlink this invoice from the bank transaction? The invoice will return to unpaid status.",
+      message: `Unlink ${txDesc} from invoice ${invLabel}? The invoice will return to SENT status.`,
       confirmText: "Unlink Payment",
       variant: "danger"
     });
@@ -775,8 +829,87 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
     }
   };
 
+  const handleMarkInvoicePaidCash = async (invId: number) => {
+    setIsRecordingCashPay(true);
+    try {
+      const res = await markInvoicePaidCash(invId, {
+        paidDate: cashPayDate,
+        notes: cashPayNotes.trim() || undefined,
+      });
+      setShowCashPayPanel(false);
+      setCashPayNotes("");
+      await loadData();
+      await alert({
+        title: "Marked Paid in Cash",
+        message: res.message || "Invoice marked paid in cash and recorded to Cash on Hand (1030).",
+      });
+    } catch (err: any) {
+      await alert({ title: "Cash Payment Failed", message: err.message || "Failed to record cash payment", variant: "danger" });
+    } finally {
+      setIsRecordingCashPay(false);
+    }
+  };
+
+  const handleDeleteInvoiceRecord = async (inv: Invoice) => {
+    const ok = await confirm({
+      title: "Delete Invoice",
+      message: `Delete invoice ${inv.invoiceNumber || `INV-${inv.id}`} for ${inv.clientName}?`,
+      confirmText: "Delete Invoice",
+      variant: "danger"
+    });
+    if (!ok) return;
+
+    try {
+      await deleteInvoice(inv.id);
+      handleClose();
+    } catch (err: any) {
+      await alert({ title: "Delete Failed", message: err.message || "Failed to delete invoice", variant: "danger" });
+    }
+  };
+
+  const handleUnlinkExpenseInvoice = async (expId: number, invNumber?: string) => {
+    const ok = await confirm({
+      title: "Unlink Invoice",
+      message: `Remove the association between this expense and invoice ${invNumber || ""}?`,
+      confirmText: "Unlink",
+      variant: "danger"
+    });
+    if (!ok) return;
+
+    setIsLinkingInvoice(true);
+    try {
+      await unlinkExpenseFromInvoice(expId);
+      await loadData(false);
+    } catch (err: any) {
+      await alert({ title: "Unlink Failed", message: err.message || "Failed to unlink invoice", variant: "danger" });
+    } finally {
+      setIsLinkingInvoice(false);
+    }
+  };
+
   const handleLink = async () => {
     if (selectedLinkId === null) return;
+    if (linkTargetMode === "invoice") {
+      if (type === "transaction" && tx) {
+        await handleMatchInvoicePayment(selectedLinkId, tx.id);
+        setShowLinkPanel(false);
+        setSelectedLinkId(null);
+      } else if (type === "receipt" && activeExpense) {
+        setIsLinkingInvoice(true);
+        try {
+          await linkExpenseToInvoice(activeExpense.id, selectedLinkId);
+          setShowLinkPanel(false);
+          setSelectedLinkId(null);
+          await loadData(false);
+        } catch (err: any) {
+          await alert({ title: "Link Failed", message: err.message || "Failed to link expense to invoice", variant: "danger" });
+        } finally {
+          setIsLinkingInvoice(false);
+        }
+      }
+      return;
+    }
+
     const isAlreadyLinked = type === "transaction" ? expensesList.length > 0 : transactionsList.length > 0;
     if (isAlreadyLinked) {
       setReplaceOrAddModalData({ selectedLinkId, isCreateMode: false });
@@ -796,22 +929,23 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
     setActionChoiceModal({ action, targetType, targetId });
   };
 
-  const handleApproveSuggestedExpense = async (expId: number) => {
-    if (!tx) return;
-    if (expensesList.length > 0) {
-      setReplaceOrAddModalData({ suggestedExpId: expId, isCreateMode: false, isSuggested: true });
+  const handleApproveSuggestedMatch = async (candidateKind: "expense" | "tx", candidateId: number) => {
+    if (candidateKind === "expense") {
+      if (!tx) return;
+      if (expensesList.length > 0) {
+        setReplaceOrAddModalData({ suggestedExpId: candidateId, isCreateMode: false, isSuggested: true });
+        return;
+      }
+      await executeLink(candidateId, tx.id);
       return;
     }
-    await executeLink(expId, tx.id);
-  };
 
-  const handleApproveSuggestedTx = async (txId: number) => {
     if (!expense) return;
     if (transactionsList.length > 0) {
-      setReplaceOrAddModalData({ suggestedTxId: txId, isCreateMode: false, isSuggested: true });
+      setReplaceOrAddModalData({ suggestedTxId: candidateId, isCreateMode: false, isSuggested: true });
       return;
     }
-    await executeLink(expense.id, txId);
+    await executeLink(expense.id, candidateId);
   };
 
   const handleCreate = async () => {
@@ -983,16 +1117,72 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
 
   const renderLinkPicker = () => {
     if (!showLinkPanel) return null;
+    const isInvoiceMode = linkTargetMode === "invoice";
+    const isNonDepositTxInvoice = isInvoiceMode && type === "transaction" && (!tx || tx.amount <= 0);
+    const hasEmptyList = isInvoiceMode
+      ? linkInvoices.length === 0
+      : type === "transaction"
+        ? unlinked.expenses.length === 0
+        : unlinked.transactions.length === 0;
+
     return (
       <div className="border border-white/10 bg-zinc-900/90 rounded-xl p-3.5 sm:p-4 backdrop-blur-md mt-4 shadow-xl">
-        <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-4 border-b border-zinc-800 pb-3 gap-3">
-          <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <span>Link Existing {type === "transaction" ? "Expense" : "Transaction"}</span>
-            </h2>
-            <p className="text-xs text-zinc-400 mt-0.5">Select a matching record to link.</p>
+        <div className="flex flex-col gap-3 mb-4 border-b border-zinc-800 pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <span>
+                  Link Existing{" "}
+                  {isInvoiceMode
+                    ? "Invoice"
+                    : type === "transaction"
+                      ? "Expense"
+                      : "Transaction"}
+                </span>
+              </h2>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                {isInvoiceMode
+                  ? type === "transaction"
+                    ? "Match this bank deposit to an open client invoice."
+                    : "Associate this receipt/expense with a client invoice."
+                  : "Select a matching record to link."}
+              </p>
+            </div>
+            <div className="inline-flex bg-zinc-950 p-0.5 rounded-lg border border-white/10">
+              {type === "transaction" ? (
+                <button
+                  type="button"
+                  onClick={() => { setLinkTargetMode("expense"); setSelectedLinkId(null); setLinkPage(1); }}
+                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
+                    !isInvoiceMode ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  Expenses
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => { setLinkTargetMode("tx"); setSelectedLinkId(null); setLinkPage(1); }}
+                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
+                    !isInvoiceMode ? "bg-blue-500/20 text-blue-300 border border-blue-500/30" : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  Bank Transactions
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => { setLinkTargetMode("invoice"); setSelectedLinkId(null); setLinkPage(1); }}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
+                  isInvoiceMode ? "bg-indigo-500/20 text-indigo-300 border border-indigo-500/30" : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                Invoices
+              </button>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2 w-full xl:w-auto">
+
+          <div className="flex flex-wrap items-center gap-2 w-full">
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-zinc-400 font-medium">From</span>
               <Input type="date" value={linkStartDate} onChange={(e) => { setLinkStartDate(e.target.value); setLinkPage(1); }} className="text-xs py-1 w-32" title="Start Date" />
@@ -1001,15 +1191,62 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
               <span className="text-xs text-zinc-400 font-medium">To</span>
               <Input type="date" value={linkEndDate} onChange={(e) => { setLinkEndDate(e.target.value); setLinkPage(1); }} className="text-xs py-1 w-32" title="End Date" />
             </div>
-            <Input type="text" placeholder="Search Amount / Text..." value={linkSearch} onChange={(e) => { setLinkSearch(e.target.value); setLinkPage(1); }} className="w-full sm:w-40 text-xs py-1 flex-1" />
+            <Input type="text" placeholder={isInvoiceMode ? "Search Client / Invoice #..." : "Search Amount / Text..."} value={linkSearch} onChange={(e) => { setLinkSearch(e.target.value); setLinkPage(1); }} className="w-full sm:w-44 text-xs py-1 flex-1" />
           </div>
         </div>
+
+        {isNonDepositTxInvoice && (
+          <div className="mb-3 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs">
+            Only incoming deposits (+ positive amount) can settle a client invoice payment. Select the <strong>Expenses</strong> tab to link debit purchases.
+          </div>
+        )}
+
+        {type === "receipt" && !isInvoiceMode && activeExpense?.tender?.toLowerCase() === "cash" && (
+          <div className="mb-3 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs">
+            Cash expenses are auto-balanced without bank statement matching. Switch to the <strong>Invoices</strong> tab to attach this cash slip to a client invoice.
+          </div>
+        )}
+
         <div className="max-h-80 overflow-y-auto border border-zinc-800 rounded-md bg-zinc-950 mb-3">
-          {((type === "transaction" && unlinked.expenses.length === 0) || (type === "receipt" && unlinked.transactions.length === 0)) ? (
-            <div className="p-6 text-center text-zinc-400 text-sm">No unlinked items available.</div>
+          {hasEmptyList ? (
+            <div className="p-6 text-center text-zinc-400 text-sm">
+              {isInvoiceMode ? "No matching invoices found." : "No unlinked items available."}
+            </div>
           ) : (
             <ul className="divide-y divide-zinc-800">
-              {type === "transaction" && unlinked.expenses.map(e => (
+              {isInvoiceMode && linkInvoices.map((inv) => {
+                const bal = inv.balanceDue ?? inv.totalAmount;
+                return (
+                  <li key={inv.id}>
+                    <Card active={selectedLinkId === inv.id} onClick={() => setSelectedLinkId(inv.id)} className="flex-col! items-start! gap-1 cursor-pointer hover:bg-zinc-800/50">
+                      <div className="w-full flex justify-between items-center gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-mono text-xs font-bold text-indigo-400">{inv.invoiceNumber || `INV-${inv.id}`}</span>
+                          <span className="font-semibold text-white">{formatMoney(inv.totalAmount)}</span>
+                          {bal > 0 && bal < inv.totalAmount && (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                              Bal {formatMoney(bal)}
+                            </span>
+                          )}
+                          <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                            inv.status === "PAID" ? "bg-emerald-500/10 text-emerald-400" :
+                            inv.status === "OVERDUE" ? "bg-red-500/10 text-red-400" :
+                            "bg-blue-500/10 text-blue-300"
+                          }`}>
+                            {inv.status}
+                          </span>
+                        </div>
+                        <span className="text-xs text-zinc-400 shrink-0">{formatDate(inv.issueDate)}</span>
+                      </div>
+                      <div className="text-sm text-zinc-300 truncate w-full">
+                        {inv.clientName}{inv.clientEmail ? ` — ${inv.clientEmail}` : ""}
+                      </div>
+                    </Card>
+                  </li>
+                );
+              })}
+
+              {!isInvoiceMode && type === "transaction" && unlinked.expenses.map(e => (
                 <li key={e.id}>
                   <Card active={selectedLinkId === e.id} onClick={() => setSelectedLinkId(e.id)} className="flex-col! items-start! gap-1 cursor-pointer hover:bg-zinc-800/50">
                     <div className="w-full flex justify-between items-center">
@@ -1030,7 +1267,8 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                   </Card>
                 </li>
               ))}
-              {type === "receipt" && unlinked.transactions.map(t => (
+
+              {!isInvoiceMode && type === "receipt" && unlinked.transactions.map(t => (
                 <li key={t.id}>
                   <Card active={selectedLinkId === t.id} onClick={() => setSelectedLinkId(t.id)} className="flex-col! items-start! gap-1 cursor-pointer hover:bg-zinc-800/50">
                     <div className="w-full flex justify-between items-center">
@@ -1055,11 +1293,23 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
           )}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
-          <Pagination currentPage={linkPage} totalPages={unlinkedTotalPages} onPageChange={setLinkPage} />
+          {!isInvoiceMode ? (
+            <Pagination currentPage={linkPage} totalPages={unlinkedTotalPages} onPageChange={setLinkPage} />
+          ) : (
+            <span className="text-[11px] text-zinc-400">{linkInvoices.length} invoice{linkInvoices.length === 1 ? "" : "s"} shown</span>
+          )}
           <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => { setShowLinkPanel(false); setSelectedLinkId(null); }}>Cancel</Button>
             {selectedLinkId !== null && (
-              <Button variant="info" size="sm" onClick={handleLink}>Confirm Link</Button>
+              <Button
+                variant="info"
+                size="sm"
+                disabled={isNonDepositTxInvoice || (type === "receipt" && !isInvoiceMode && activeExpense?.tender?.toLowerCase() === "cash")}
+                isLoading={isLinkingInvoice || isMatchingInvoice}
+                onClick={handleLink}
+              >
+                {isInvoiceMode ? (type === "transaction" ? "Match & Mark Paid" : "Link to Invoice") : "Confirm Link"}
+              </Button>
             )}
           </div>
         </div>
@@ -1084,13 +1334,20 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
     const isPaid = invoice.status === 'PAID';
     const hasTx = !!(invoice.bankTransactionId || invoice.bankTransaction);
     const linkedTx = invoice.bankTransaction;
+    const isCashPayment = Boolean(
+      linkedTx && (
+        (linkedTx.isManual && linkedTx.fitId?.startsWith('CASH-INV-')) ||
+        linkedTx.chartAccount?.code === '1030' ||
+        linkedTx.description?.startsWith('Cash Payment —')
+      )
+    );
 
     return (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5 items-stretch relative">
         {/* LEFT COLUMN: INVOICE DETAILS */}
         <div className="bg-white/2 border border-white/5 rounded-xl p-4 sm:p-5 backdrop-blur-md shadow-lg flex flex-col space-y-4">
-          <div className="flex justify-between items-start border-b border-zinc-800 pb-3">
-            <div>
+          <div className="flex justify-between items-start border-b border-zinc-800 pb-3 gap-3">
+            <div className="min-w-0">
               <div className="flex items-center gap-2 mb-1 flex-wrap">
                 <span className="font-mono text-xs font-bold text-indigo-400">
                   {invoice.invoiceNumber || `INV-${invoice.id}`}
@@ -1106,9 +1363,9 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
               </div>
               <h2 className="text-base font-bold text-white">{invoice.clientName}</h2>
               {invoice.clientEmail && <p className="text-xs text-zinc-400 mt-0.5">{invoice.clientEmail}</p>}
-              {invoice.clientAddress && <p className="text-xs text-zinc-500 mt-0.5 whitespace-pre-line">{invoice.clientAddress}</p>}
+              {invoice.clientAddress && <p className="text-xs text-zinc-400 mt-0.5 whitespace-pre-line">{invoice.clientAddress}</p>}
             </div>
-            <div className="text-right">
+            <div className="text-right shrink-0">
               <span className="text-[10px] uppercase font-bold tracking-wider text-zinc-400 block">Total Due</span>
               <span className="text-xl font-black text-white font-mono">{formatMoney(invoice.totalAmount)}</span>
               {invoice.balanceDue !== undefined && invoice.balanceDue > 0 && !isPaid && (
@@ -1119,17 +1376,33 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
             </div>
           </div>
 
+          <div className="flex flex-wrap items-center gap-1.5 pb-1">
+            {onEditInvoice && (
+              <Button variant="secondary" size="sm" onClick={() => onEditInvoice(invoice)} className="text-xs">
+                Edit Invoice
+              </Button>
+            )}
+            {onPrintInvoice && (
+              <Button variant="ghost" size="sm" onClick={() => onPrintInvoice(invoice)} className="text-xs bg-white/5 hover:bg-white/10 text-zinc-200">
+                Print / PDF
+              </Button>
+            )}
+            <Button variant="danger" size="sm" onClick={() => handleDeleteInvoiceRecord(invoice)} className="text-xs ml-auto">
+              Delete
+            </Button>
+          </div>
+
           <div className="grid grid-cols-3 gap-3 text-xs p-3 bg-zinc-900/60 rounded-xl border border-white/5">
             <div>
-              <span className="text-zinc-500 block text-[10px] uppercase font-bold">Issue Date</span>
-              <span className="text-zinc-200 font-medium">{formatDate(invoice.issueDate)}</span>
+              <span className="text-zinc-400 block text-[10px] uppercase font-bold">Issue Date</span>
+              <span className="text-zinc-300 font-medium">{formatDate(invoice.issueDate)}</span>
             </div>
             <div>
-              <span className="text-zinc-500 block text-[10px] uppercase font-bold">Due Date</span>
-              <span className="text-zinc-200 font-medium">{formatDate(invoice.dueDate)}</span>
+              <span className="text-zinc-400 block text-[10px] uppercase font-bold">Due Date</span>
+              <span className="text-zinc-300 font-medium">{formatDate(invoice.dueDate)}</span>
             </div>
             <div>
-              <span className="text-zinc-500 block text-[10px] uppercase font-bold">Payment Window</span>
+              <span className="text-zinc-400 block text-[10px] uppercase font-bold">Payment Window</span>
               <span 
                 className="text-zinc-200 font-medium cursor-help underline decoration-dotted decoration-zinc-600 hover:text-white transition-colors"
                 title={`Payment terms: ${invoice.paymentTerms || 'Net 30'} (${formatPaymentTerms(invoice.paymentTerms || 'Net 30')})`}
@@ -1137,7 +1410,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
               >
                 {formatPaymentTerms(invoice.paymentTerms || "Net 30")}
               </span>
-              <span className="text-[10px] text-zinc-500 block font-normal mt-0.5">
+              <span className="text-[10px] text-zinc-400 block font-normal mt-0.5">
                 ({invoice.paymentTerms || "Net 30"})
               </span>
             </div>
@@ -1159,7 +1432,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                 <tbody className="divide-y divide-white/5">
                   {items.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="py-3 px-3 text-zinc-500 italic text-center">No line items specified</td>
+                      <td colSpan={4} className="py-3 px-3 text-zinc-400 italic text-center">No line items specified</td>
                     </tr>
                   ) : (
                     items.map((it, i) => (
@@ -1196,18 +1469,47 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
 
           {invoice.notes && (
             <div className="p-3 bg-zinc-900/40 border border-white/5 rounded-xl text-xs">
-              <span className="text-zinc-500 font-bold block mb-0.5">Notes:</span>
+              <span className="text-zinc-400 font-bold block mb-0.5">Notes:</span>
               <p className="text-zinc-300 italic">{invoice.notes}</p>
+            </div>
+          )}
+
+          {invoice.linkedExpenses && invoice.linkedExpenses.length > 0 && (
+            <div className="pt-2 border-t border-white/5 space-y-2">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                Linked Receipts / Expenses ({invoice.linkedExpenses.length})
+              </h4>
+              <div className="space-y-1.5">
+                {invoice.linkedExpenses.map((le) => (
+                  <div key={le.id} className="p-2.5 bg-zinc-900/60 border border-white/10 rounded-lg flex items-center justify-between gap-2 text-xs">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-white truncate">{le.vendor || le.description}</div>
+                      <div className="text-[11px] text-zinc-400">
+                        {formatDate(le.timestamp)} • {formatMoney(le.amount)}
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      isLoading={isLinkingInvoice}
+                      onClick={() => handleUnlinkExpenseInvoice(le.id, invoice.invoiceNumber)}
+                      className="text-[11px] text-zinc-400 hover:text-red-400 shrink-0"
+                    >
+                      Unlink
+                    </Button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
 
-        {/* RIGHT COLUMN: BANK DEPOSIT MATCHING */}
+        {/* RIGHT COLUMN: BANK & CASH DEPOSIT MATCHING */}
         <div className="bg-white/2 border border-white/5 rounded-xl p-4 sm:p-5 backdrop-blur-md shadow-lg flex flex-col space-y-4">
           <div className="flex justify-between items-center border-b border-zinc-800 pb-2.5">
             <h3 className="text-xs font-bold text-white tracking-tight flex items-center gap-1.5 uppercase">
               <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path></svg>
-              <span>Bank Payment Reconciliation</span>
+              <span>Payment & Deposit Reconciliation</span>
             </h3>
             {hasTx && (
               <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
@@ -1218,23 +1520,25 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
 
           {hasTx && linkedTx ? (
             <div className="p-4 bg-zinc-900/80 border border-emerald-500/30 rounded-xl space-y-3">
-              <div className="flex justify-between items-start">
-                <div>
+              <div className="flex justify-between items-start gap-2">
+                <div className="min-w-0">
                   <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-400 block mb-1">
-                    ✓ Paid via Bank Deposit
+                    {isCashPayment ? "✓ Paid in Cash (Cash on Hand)" : "✓ Paid via Bank Deposit"}
                   </span>
-                  <div className="text-base font-bold text-white">{linkedTx.description}</div>
-                  <div className="text-xs text-zinc-400 mt-0.5">Deposited: {formatDate(linkedTx.date)}</div>
+                  <div className="text-base font-bold text-white break-words">{linkedTx.description}</div>
+                  <div className="text-xs text-zinc-400 mt-0.5">
+                    {isCashPayment ? "Cash Received" : "Deposited"}: {formatDate(linkedTx.date)}
+                  </div>
                 </div>
-                <div className="text-right">
-                  <div className="text-xs text-zinc-400">Deposit Amount</div>
+                <div className="text-right shrink-0">
+                  <div className="text-xs text-zinc-400">Payment Amount</div>
                   <div className="text-base font-bold text-emerald-400">{formatMoney(linkedTx.amount)}</div>
                 </div>
               </div>
 
               {linkedTx.chartAccount && (
                 <div className="text-xs pt-2 border-t border-white/5 flex items-center gap-2 text-zinc-400">
-                  <span className="text-zinc-500">Bank Account:</span>
+                  <span className="text-zinc-400">{isCashPayment ? "Cash Account:" : "Bank Account:"}</span>
                   <span className="text-zinc-200 font-medium">{linkedTx.chartAccount.name} ({linkedTx.chartAccount.code})</span>
                 </div>
               )}
@@ -1244,7 +1548,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                   variant="danger"
                   size="sm"
                   isLoading={isMatchingInvoice}
-                  onClick={() => handleUnmatchInvoicePayment(invoice.id)}
+                  onClick={() => handleUnmatchInvoicePayment(invoice.id, linkedTx, invoice.invoiceNumber)}
                   className="text-xs"
                 >
                   Unlink Payment
@@ -1254,53 +1558,87 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
           ) : (
             <div className="space-y-4 flex-1 flex flex-col">
               <p className="text-xs text-zinc-400 leading-relaxed">
-                Match an incoming deposit from your bank register to mark this invoice as paid and balance your accounts receivable.
+                Match an incoming bank deposit below or mark this invoice as paid in cash to post directly to Cash on Hand (1030).
               </p>
 
-              {invoiceCandidates.length > 0 ? (
-                <div className="space-y-2">
-                  <div className="text-xs font-bold text-zinc-300 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
-                    Suggested Bank Deposit Matches ({invoiceCandidates.length})
+              {!isPaid && invoice.status !== 'VOID' && (
+                <div className="p-3 bg-emerald-500/5 border border-emerald-500/20 rounded-xl space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-bold text-emerald-300">Paid in Physical Cash?</div>
+                      <div className="text-[11px] text-zinc-400">Records a balanced deposit on Cash on Hand without waiting for bank feed sync.</div>
+                    </div>
+                    <Button
+                      variant={showCashPayPanel ? "ghost" : "primary"}
+                      size="sm"
+                      onClick={() => setShowCashPayPanel((p) => !p)}
+                      className="text-xs shrink-0"
+                    >
+                      {showCashPayPanel ? "Cancel" : "Mark Paid in Cash"}
+                    </Button>
                   </div>
-                  {invoiceCandidates.map((cand) => (
-                    <div key={cand.transaction.id} className="p-3 bg-zinc-900/90 border border-blue-500/30 rounded-xl hover:border-blue-500/60 transition-colors">
-                      <div className="flex justify-between items-start gap-2">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 mb-0.5">
-                            <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.2 rounded">
-                              {cand.score}% Match
-                            </span>
-                            <span className="text-[10px] text-zinc-400">{cand.reason}</span>
-                          </div>
-                          <div className="text-sm font-semibold text-white truncate">{cand.transaction.description}</div>
-                          <div className="text-[11px] text-zinc-400">
-                            {formatDate(cand.transaction.date)} • {cand.transaction.chartAccount?.name || "Checking"}
-                          </div>
+
+                  {showCashPayPanel && (
+                    <div className="pt-2.5 border-t border-emerald-500/20 space-y-2.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] font-bold uppercase text-zinc-400 block mb-1">Cash Payment Date</label>
+                          <Input
+                            type="date"
+                            value={cashPayDate}
+                            onChange={(e) => setCashPayDate(e.target.value)}
+                            className="text-xs py-1"
+                          />
                         </div>
-                        <div className="text-right shrink-0">
-                          <div className="text-sm font-bold text-emerald-400">{formatMoney(cand.transaction.amount)}</div>
-                          <Button
-                            variant="primary"
-                            size="sm"
-                            isLoading={isMatchingInvoice}
-                            onClick={() => handleMatchInvoicePayment(invoice.id, cand.transaction.id)}
-                            className="text-xs mt-1"
-                          >
-                            Match & Pay
-                          </Button>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase text-zinc-400 block mb-1">Memo / Note (Optional)</label>
+                          <Input
+                            type="text"
+                            placeholder="e.g. Received cash at job site"
+                            value={cashPayNotes}
+                            onChange={(e) => setCashPayNotes(e.target.value)}
+                            className="text-xs py-1"
+                          />
                         </div>
                       </div>
+                      <div className="flex justify-end">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          isLoading={isRecordingCashPay}
+                          onClick={() => handleMarkInvoicePaidCash(invoice.id)}
+                          className="text-xs font-bold"
+                        >
+                          Confirm Cash Payment ({formatMoney(invoice.balanceDue ?? invoice.totalAmount)})
+                        </Button>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="p-6 border border-dashed border-white/10 rounded-xl text-center text-zinc-400 text-xs">
-                  <svg className="w-8 h-8 text-zinc-600 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  <p className="font-medium text-zinc-300">No candidate bank deposits found</p>
-                  <p className="text-zinc-500 mt-1">When a matching customer deposit arrives on your bank statement, it will appear here for 1-click matching.</p>
+                  )}
                 </div>
               )}
+
+              <SuggestedMatchesList
+                title="Suggested Bank Deposit Matches"
+                isActionLoading={isMatchingInvoice}
+                items={invoiceCandidates.map((cand) => ({
+                  id: cand.transaction.id,
+                  score: cand.score,
+                  reason: cand.reason,
+                  title: cand.transaction.description,
+                  subtitle: `${formatDate(cand.transaction.date)} • ${cand.transaction.chartAccount?.name || "Checking"}`,
+                  amountLabel: formatMoney(cand.transaction.amount),
+                  amountClassName: "text-emerald-400",
+                  actionLabel: "Match & Pay",
+                  onAction: () => handleMatchInvoicePayment(invoice.id, cand.transaction.id),
+                }))}
+                emptyState={
+                  <div className="p-6 border border-dashed border-white/10 rounded-xl text-center text-zinc-400 text-xs">
+                    <svg className="w-8 h-8 text-zinc-500 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <p className="font-medium text-zinc-300">No candidate bank deposits found</p>
+                    <p className="text-zinc-400 mt-1">When a matching customer deposit arrives on your bank statement, it will appear here for 1-click matching.</p>
+                  </div>
+                }
+              />
             </div>
           )}
         </div>
@@ -1480,11 +1818,11 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
 
                           <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-white/5">
                             <div>
-                              <span className="text-zinc-500 block text-[11px]">Issue Date</span>
+                              <span className="text-zinc-400 block text-[11px]">Issue Date</span>
                               <span className="text-zinc-300 font-medium">{formatDate(linkedInvoice.issueDate)}</span>
                             </div>
                             <div>
-                              <span className="text-zinc-500 block text-[11px]">Due Date</span>
+                              <span className="text-zinc-400 block text-[11px]">Due Date</span>
                               <span className="text-zinc-300 font-medium">{formatDate(linkedInvoice.dueDate)}</span>
                             </div>
                           </div>
@@ -1495,7 +1833,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                                 variant="danger"
                                 size="sm"
                                 isLoading={isMatchingInvoice}
-                                onClick={() => handleUnmatchInvoicePayment(linkedInvoice.id)}
+                                onClick={() => handleUnmatchInvoicePayment(linkedInvoice.id, tx, linkedInvoice.invoiceNumber)}
                                 className="text-xs"
                               >
                                 Unlink Payment
@@ -1509,36 +1847,23 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                             This deposit can be matched to an outstanding client invoice, or categorized directly to a Revenue account in the right panel.
                           </p>
 
-                          {suggestedInvoices.length > 0 && (
-                            <div className="space-y-2">
-                              <div className="text-xs font-bold text-zinc-300 flex items-center gap-1.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400"></span>
-                                Suggested Invoice Matches ({suggestedInvoices.length})
-                              </div>
-                              {suggestedInvoices.map((sug) => (
-                                <div key={sug.id} className="p-3 bg-zinc-900/90 border border-indigo-500/30 rounded-xl hover:border-indigo-500/60 transition-colors">
-                                  <div className="flex justify-between items-start gap-2">
-                                    <div>
-                                      <div className="font-mono text-xs text-indigo-400 font-bold">{sug.invoiceNumber || `INV-${sug.id}`}</div>
-                                      <div className="text-sm font-semibold text-white">{sug.clientName}</div>
-                                      <div className="text-[11px] text-zinc-400">
-                                        Due: {formatDate(sug.dueDate)} • {sug.balanceDue !== undefined && sug.balanceDue < sug.totalAmount ? `Balance: ${formatMoney(sug.balanceDue)} (Total ${formatMoney(sug.totalAmount)})` : formatMoney(sug.totalAmount)}
-                                      </div>
-                                    </div>
-                                    <Button
-                                      variant="primary"
-                                      size="sm"
-                                      isLoading={isMatchingInvoice}
-                                      onClick={() => tx && handleMatchInvoicePayment(sug.id, tx.id)}
-                                      className="text-xs shrink-0"
-                                    >
-                                      Match & Mark Paid
-                                    </Button>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
+                          <SuggestedMatchesList
+                            title="Suggested Invoice Matches"
+                            accent="indigo"
+                            isActionLoading={isMatchingInvoice}
+                            items={suggestedInvoices.map((sug) => ({
+                              id: sug.id,
+                              eyebrow: sug.invoiceNumber || `INV-${sug.id}`,
+                              title: sug.clientName,
+                              subtitle: `Due: ${formatDate(sug.dueDate)} • ${
+                                sug.balanceDue !== undefined && sug.balanceDue < sug.totalAmount
+                                  ? `Balance: ${formatMoney(sug.balanceDue)} (Total ${formatMoney(sug.totalAmount)})`
+                                  : formatMoney(sug.totalAmount)
+                              }`,
+                              actionLabel: "Match & Mark Paid",
+                              onAction: () => tx && handleMatchInvoicePayment(sug.id, tx.id),
+                            }))}
+                          />
 
                           {allOpenInvoices.length > 0 && (
                             <div className="p-3.5 bg-zinc-900/40 border border-white/5 rounded-xl space-y-2 min-w-0">
@@ -1576,15 +1901,30 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                             </div>
                           )}
 
-                          {onOpenInvoices && (
-                            <div className="pt-2 mt-auto">
-                              <button
-                                type="button"
-                                onClick={onOpenInvoices}
-                                className="w-full py-2 px-3 border border-dashed border-white/10 hover:border-indigo-500/40 hover:bg-indigo-500/5 text-zinc-400 hover:text-indigo-300 rounded-xl text-xs font-medium transition-colors flex items-center justify-center gap-1.5"
+                          {!isClosed && (
+                            <div className="pt-2 mt-auto space-y-2">
+                              <Button
+                                variant={showLinkPanel ? "info" : "secondary"}
+                                size="sm"
+                                onClick={() => {
+                                  setLinkTargetMode("invoice");
+                                  setShowLinkPanel(p => !p);
+                                  setSelectedLinkId(null);
+                                }}
+                                className="w-full text-xs font-semibold justify-center"
                               >
-                                <span>+</span> Create New Invoice for this Deposit
-                              </button>
+                                {showLinkPanel ? "Close Link Existing Picker" : "Search & Link Existing Invoice"}
+                              </Button>
+                              {renderLinkPicker()}
+                              {onOpenInvoices && (
+                                <button
+                                  type="button"
+                                  onClick={onOpenInvoices}
+                                  className="w-full py-2 px-3 border border-dashed border-white/10 hover:border-indigo-500/40 hover:bg-indigo-500/5 text-zinc-400 hover:text-indigo-300 rounded-xl text-xs font-medium transition-colors flex items-center justify-center gap-1.5"
+                                >
+                                  <span>+</span> Create New Invoice for this Deposit
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1729,6 +2069,33 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                               ) : <p className="text-zinc-400 italic text-sm">Uncategorized</p>}
                             </div>
                             <div><label className={labelCls}>Notes</label>{editing ? <textarea className={inputCls} rows={3} value={form.notes} onChange={ev => setForm({ ...form, notes: ev.target.value })} /> : <p className="text-zinc-300 whitespace-pre-wrap">{e.notes || <span className="text-zinc-400 italic">No notes</span>}</p>}</div>
+
+                            {e.invoice && (
+                              <div className="p-3 bg-indigo-500/10 border border-indigo-500/25 rounded-xl flex items-center justify-between gap-2 text-xs">
+                                <div className="min-w-0">
+                                  <span className="text-[10px] uppercase font-bold tracking-wider text-indigo-300 block">
+                                    Linked Client Invoice
+                                  </span>
+                                  <div className="font-mono font-bold text-white truncate">
+                                    {e.invoice.invoiceNumber || `INV-${e.invoice.id}`} — {e.invoice.clientName}
+                                  </div>
+                                  <div className="text-[11px] text-zinc-400">
+                                    {formatMoney(e.invoice.totalAmount)} • {e.invoice.status}
+                                  </div>
+                                </div>
+                                {!isClosed && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    isLoading={isLinkingInvoice}
+                                    onClick={() => handleUnlinkExpenseInvoice(e.id, e.invoice?.invoiceNumber)}
+                                    className="text-xs text-zinc-300 hover:text-red-400 shrink-0"
+                                  >
+                                    Unlink
+                                  </Button>
+                                )}
+                              </div>
+                            )}
                             
                             <div className="pt-2 flex flex-col gap-2">
                               {e.receipts && e.receipts.length > 0 ? (
@@ -1764,14 +2131,18 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                             <Button
                               variant={showLinkPanel ? "info" : "secondary"}
                               size="sm"
-                              onClick={() => { setShowLinkPanel(p => !p); setSelectedLinkId(null); }}
+                              onClick={() => {
+                                setShowLinkPanel(p => {
+                                  if (!p) setLinkTargetMode("expense");
+                                  return !p;
+                                });
+                                setSelectedLinkId(null);
+                              }}
                               className="w-full text-xs font-semibold px-2 py-1.5 justify-center"
-                              title={showLinkPanel ? "Close Link Picker" : "Link Existing Expense"}
+                              title={showLinkPanel ? "Close Link Picker" : "Link Existing Expense or Invoice"}
                             >
                               <span className="truncate">
-                                {showLinkPanel ? "Close Picker" : (
-                                  <>Link Existing <span className="hidden xl:inline">Expense</span></>
-                                )}
+                                {showLinkPanel ? "Close Picker" : "Link Existing"}
                               </span>
                             </Button>
                             <Button
@@ -1899,7 +2270,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                                   <Button variant="ghost" className="text-xs text-orange-400 hover:bg-orange-500/10" onClick={() => handleCardAction("IGNORE", "expense", e.id)}>Ignore Warnings</Button>
                                 ) : (
                                   <div title="There are no issues with this item" className="cursor-not-allowed">
-                                    <Button variant="ghost" disabled className="text-xs text-zinc-500 pointer-events-none">Ignore Warnings</Button>
+                                    <Button variant="ghost" disabled className="text-xs text-zinc-400 pointer-events-none">Ignore Warnings</Button>
                                   </div>
                                 )
                               )
@@ -2132,7 +2503,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                                               )}
                                             </div>
                                           ) : (
-                                            <span className="text-zinc-500 italic text-xs">Uncategorized</span>
+                                            <span className="text-zinc-400 italic text-xs">Uncategorized</span>
                                           )}
                                           {exp.description && (
                                             <span className="text-[11px] text-zinc-400 truncate block">
@@ -2181,59 +2552,70 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                     );
                   })()}
 
-                  {type === "receipt" && !isClosed && activeExpense?.tender?.toLowerCase() !== "cash" && (
+                  {type === "receipt" && !isClosed && (
                     <>
-                      <div className="mt-4 pt-3 border-t border-zinc-800 grid grid-cols-2 gap-2">
+                      <div className={`mt-4 pt-3 border-t border-zinc-800 grid gap-2 ${activeExpense?.tender?.toLowerCase() !== "cash" ? "grid-cols-2" : "grid-cols-1"}`}>
                         <Button
                           variant={showLinkPanel ? "info" : "secondary"}
                           size="sm"
-                          onClick={() => { setShowLinkPanel(p => !p); setSelectedLinkId(null); }}
-                          className="w-full text-xs font-semibold px-2 py-1.5 justify-center"
-                          title={showLinkPanel ? "Close Link Picker" : "Link Existing Transaction"}
-                        >
-                          <span className="truncate">
-                            {showLinkPanel ? "Close Picker" : (
-                              <>Link Existing <span className="hidden xl:inline">Transaction</span></>
-                            )}
-                          </span>
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
                           onClick={() => {
-                            setShowCreateModal(true);
-                            const remainingAmt = activeExpense ? Math.max(0, activeExpense.amount - transactionsList.reduce((s, ct) => s + Math.abs(ct.amount), 0)) : 0;
-
-                            let defaultBankId: number | '' = '';
-                            const tender = activeExpense?.tender?.toLowerCase();
-                            if (tender === 'card') {
-                              const cc = accounts.find(a => a.type === 'LIABILITY' && a.code.startsWith('20') && a.active);
-                              defaultBankId = cc ? cc.id : (accounts.find(a => a.type === 'ASSET' && a.code === '1010' && a.active)?.id || '');
-                            } else if (tender === 'cash') {
-                              const cashAcc = accounts.find(a => a.code === '1030' && a.active);
-                              defaultBankId = cashAcc ? cashAcc.id : '';
-                            } else {
-                              const checking = accounts.find(a => a.code === '1010' && a.active);
-                              defaultBankId = checking ? checking.id : (accounts.find(a => (a.type === 'ASSET' || a.type === 'LIABILITY') && a.active)?.id || '');
-                            }
-
-                            setCreateForm({
-                              date: activeExpense?.timestamp ? activeExpense.timestamp.split('T')[0] : '',
-                              description: activeExpense?.vendor ? `${activeExpense.vendor}${activeExpense.description ? ` - ${activeExpense.description}` : ''}` : (activeExpense?.description || ''),
-                              amount: remainingAmt > 0 ? remainingAmt : (activeExpense?.amount || ''),
-                              transactionType: 'DEBIT',
-                              chartAccountId: defaultBankId,
-                              categoryAccountId: activeExpense?.chartAccountId || '',
+                            const isCashExp = activeExpense?.tender?.toLowerCase() === "cash";
+                            setShowLinkPanel(p => {
+                              if (!p) setLinkTargetMode(isCashExp ? "invoice" : "tx");
+                              return !p;
                             });
+                            setSelectedLinkId(null);
                           }}
-                          className="w-full text-xs font-semibold px-2 py-1.5 justify-center bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition"
-                          disabled={!canAddMoreTransactions}
-                          title="Create New Transaction"
+                          className="w-full text-xs font-semibold px-2 py-1.5 justify-center"
+                          title={showLinkPanel ? "Close Link Picker" : "Link Existing Transaction or Invoice"}
                         >
                           <span className="truncate">
-                            Create New <span className="hidden xl:inline">Transaction</span>
+                            {showLinkPanel
+                              ? "Close Picker"
+                              : activeExpense?.tender?.toLowerCase() === "cash"
+                                ? "Link to Client Invoice"
+                                : "Link Existing"}
                           </span>
                         </Button>
+                        {activeExpense?.tender?.toLowerCase() !== "cash" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setShowCreateModal(true);
+                              const remainingAmt = activeExpense ? Math.max(0, activeExpense.amount - transactionsList.reduce((s, ct) => s + Math.abs(ct.amount), 0)) : 0;
+
+                              let defaultBankId: number | '' = '';
+                              const tender = activeExpense?.tender?.toLowerCase();
+                              if (tender === 'card') {
+                                const cc = accounts.find(a => a.type === 'LIABILITY' && a.code.startsWith('20') && a.active);
+                                defaultBankId = cc ? cc.id : (accounts.find(a => a.type === 'ASSET' && a.code === '1010' && a.active)?.id || '');
+                              } else if (tender === 'cash') {
+                                const cashAcc = accounts.find(a => a.code === '1030' && a.active);
+                                defaultBankId = cashAcc ? cashAcc.id : '';
+                              } else {
+                                const checking = accounts.find(a => a.code === '1010' && a.active);
+                                defaultBankId = checking ? checking.id : (accounts.find(a => (a.type === 'ASSET' || a.type === 'LIABILITY') && a.active)?.id || '');
+                              }
+
+                              setCreateForm({
+                                date: activeExpense?.timestamp ? activeExpense.timestamp.split('T')[0] : '',
+                                description: activeExpense?.vendor ? `${activeExpense.vendor}${activeExpense.description ? ` - ${activeExpense.description}` : ''}` : (activeExpense?.description || ''),
+                                amount: remainingAmt > 0 ? remainingAmt : (activeExpense?.amount || ''),
+                                transactionType: 'DEBIT',
+                                chartAccountId: defaultBankId,
+                                categoryAccountId: activeExpense?.chartAccountId || '',
+                              });
+                            }}
+                            className="w-full text-xs font-semibold px-2 py-1.5 justify-center bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition"
+                            disabled={!canAddMoreTransactions}
+                            title="Create New Transaction"
+                          >
+                            <span className="truncate">
+                              Create New <span className="hidden xl:inline">Transaction</span>
+                            </span>
+                          </Button>
+                        )}
                       </div>
                       {renderLinkPicker()}
                     </>
@@ -2330,7 +2712,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                               <Button variant="ghost" className="text-xs text-orange-400 hover:bg-orange-500/10" onClick={() => handleCardAction("IGNORE", "transaction", t.id)}>Ignore Warnings</Button>
                             ) : (
                               <div title="There are no issues with this item" className="cursor-not-allowed">
-                                <Button variant="ghost" disabled className="text-xs text-zinc-500 pointer-events-none">Ignore Warnings</Button>
+                                <Button variant="ghost" disabled className="text-xs text-zinc-400 pointer-events-none">Ignore Warnings</Button>
                               </div>
                             )
                           )
@@ -2345,136 +2727,43 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
               )}
 
               {/* SUGGESTED MATCHES */}
-              {type === "transaction" && suggestedExpenses.length > 0 && (
-                <div className="border border-blue-900/50 bg-blue-900/10 rounded-xl p-5">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2.5">
-                      <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                      <h3 className="text-base font-bold text-blue-400">Suggested Match{suggestedExpenses.length > 1 ? 'es' : ''}</h3>
-                    </div>
-                    {!isClosed && (
-                      <span className="text-[11px] text-zinc-400 bg-zinc-800/80 px-2 py-0.5 rounded border border-zinc-700">
-                        Press <kbd className="font-mono text-zinc-200 font-bold">A</kbd> to quick-approve
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-zinc-300 text-xs mb-3.5">Review scoring details below and approve if correct.</p>
-                  <div className="space-y-3">
-                    {suggestedExpenses.map(e => {
-                      const matchInfo = computeMatchScore(
-                        activeTx?.amount || 0,
-                        activeTx?.date || '',
-                        activeTx?.description || '',
-                        e.amount,
-                        e.timestamp,
-                        e.vendor
-                      );
-
-                      return (
-                        <div key={e.id} className="border border-blue-900/40 bg-zinc-950 rounded-xl p-3.5 flex flex-col gap-2.5">
-                          <div className="flex items-center justify-between gap-3 border-b border-zinc-800/80 pb-2">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                                matchInfo.score >= 90 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
-                                matchInfo.score >= 75 ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
-                                'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                              }`}>
-                                {matchInfo.score}% {matchInfo.label}
-                              </span>
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                {matchInfo.reasons.map((r, ri) => (
-                                  <span key={ri} className="text-[10px] text-zinc-400 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">
-                                    ✓ {r}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                            <Button 
-                              variant="primary" 
-                              size="sm"
-                              onClick={() => handleApproveSuggestedExpense(e.id)} 
-                              className="font-bold text-xs shrink-0"
-                            >
-                              Approve Link
-                            </Button>
-                          </div>
-
-                          <div className="text-xs grid grid-cols-2 sm:grid-cols-4 gap-2">
-                            <div><span className="text-zinc-500 text-[10px] block">Amount</span> <span className="font-bold text-white">{formatMoney(e.amount)}</span></div>
-                            <div><span className="text-zinc-500 text-[10px] block">Date</span> <span className="text-zinc-300">{formatDate(e.timestamp)}</span></div>
-                            <div><span className="text-zinc-500 text-[10px] block">Vendor</span> <span className="text-zinc-300 truncate block">{e.vendor || 'Unknown'}</span></div>
-                            <div><span className="text-zinc-500 text-[10px] block">Category</span> <span className="text-zinc-300 truncate block">{e.chartAccount?.name || 'Uncategorized'}</span></div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {type === "receipt" && suggestedTransactions.length > 0 && (
-                <div className="border border-blue-900/50 bg-blue-900/10 rounded-xl p-5">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2.5">
-                      <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                      <h3 className="text-base font-bold text-blue-400">Suggested Match{suggestedTransactions.length > 1 ? 'es' : ''}</h3>
-                    </div>
-                    {!isClosed && (
-                      <span className="text-[11px] text-zinc-400 bg-zinc-800/80 px-2 py-0.5 rounded border border-zinc-700">
-                        Press <kbd className="font-mono text-zinc-200 font-bold">A</kbd> to quick-approve
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-zinc-300 text-xs mb-3.5">Review scoring details below and approve if correct.</p>
-                  <div className="space-y-3">
-                    {suggestedTransactions.map(t => {
-                      const matchInfo = computeMatchScore(
-                        t.amount,
-                        t.date,
-                        t.description,
-                        activeExpense?.amount || 0,
-                        activeExpense?.timestamp || '',
-                        activeExpense?.vendor || ''
-                      );
-
-                      return (
-                        <div key={t.id} className="border border-blue-900/40 bg-zinc-950 rounded-xl p-3.5 flex flex-col gap-2.5">
-                          <div className="flex items-center justify-between gap-3 border-b border-zinc-800/80 pb-2">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                                matchInfo.score >= 90 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
-                                matchInfo.score >= 75 ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
-                                'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                              }`}>
-                                {matchInfo.score}% {matchInfo.label}
-                              </span>
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                {matchInfo.reasons.map((r, ri) => (
-                                  <span key={ri} className="text-[10px] text-zinc-400 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">
-                                    ✓ {r}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                            <Button 
-                              variant="primary" 
-                              size="sm"
-                              onClick={() => handleApproveSuggestedTx(t.id)} 
-                              className="font-bold text-xs shrink-0"
-                            >
-                              Approve Link
-                            </Button>
-                          </div>
-
-                          <div className="text-xs grid grid-cols-2 sm:grid-cols-4 gap-2">
-                            <div><span className="text-zinc-500 text-[10px] block">Amount</span> <span className="font-bold text-white">{formatMoney(t.amount)}</span></div>
-                            <div><span className="text-zinc-500 text-[10px] block">Date</span> <span className="text-zinc-300">{formatDate(t.date)}</span></div>
-                            <div className="col-span-2"><span className="text-zinc-500 text-[10px] block">Description</span> <span className="text-zinc-300 truncate block">{t.description}</span></div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+              {((type === "transaction" && suggestedExpenseCandidates.length > 0) ||
+                (type === "receipt" && suggestedTransactionCandidates.length > 0)) && (
+                <div className="p-4 bg-blue-950/20 border border-blue-900/40 rounded-2xl">
+                  <SuggestedMatchesList
+                    title={type === "transaction" ? "Suggested Expense Matches" : "Suggested Transaction Matches"}
+                    subtitleText="Review scored match candidates below and approve if correct."
+                    items={
+                      type === "transaction"
+                        ? suggestedExpenseCandidates.map((cand) => ({
+                            id: cand.expense.id,
+                            score: cand.score,
+                            reason: cand.reason,
+                            title: cand.expense.vendor || "Unknown Vendor",
+                            subtitle: `${formatDate(cand.expense.timestamp)} • ${cand.expense.chartAccount?.name || "Uncategorized"}`,
+                            amountLabel: formatMoney(cand.expense.amount),
+                            actionLabel: "Approve Link",
+                            onAction: () => handleApproveSuggestedMatch("expense", cand.expense.id),
+                          }))
+                        : suggestedTransactionCandidates.map((cand) => ({
+                            id: cand.transaction.id,
+                            score: cand.score,
+                            reason: cand.reason,
+                            title: cand.transaction.description,
+                            subtitle: `${formatDate(cand.transaction.date)} • ${cand.transaction.chartAccount?.name || cand.transaction.category?.name || "Checking"}`,
+                            amountLabel: formatMoney(cand.transaction.amount),
+                            actionLabel: "Approve Link",
+                            onAction: () => handleApproveSuggestedMatch("tx", cand.transaction.id),
+                          }))
+                    }
+                    showQuickApproveHint={
+                      !isClosed &&
+                      ((type === "transaction"
+                        ? suggestedExpenseCandidates[0]?.score
+                        : suggestedTransactionCandidates[0]?.score) ?? 0) >= 50
+                    }
+                    actionDisabled={isClosed}
+                  />
                 </div>
               )}
 
@@ -2582,7 +2871,7 @@ export default function DetailDrawer({ type, id, onClose, onCreateRule, onOpenIn
                             )}
                             <p className="text-zinc-400 text-xs mt-4 mb-2">{filename}</p>
                             {receipts.length > 1 && (
-                              <p className="text-zinc-500 text-xs font-semibold">Image {activeReceiptIdx + 1} of {receipts.length}</p>
+                              <p className="text-zinc-400 text-xs font-semibold">Image {activeReceiptIdx + 1} of {receipts.length}</p>
                             )}
                             {!isClosed && (
                               <div className="mt-4">
