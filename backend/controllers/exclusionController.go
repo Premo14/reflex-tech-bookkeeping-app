@@ -22,12 +22,12 @@ var validExclusionReasons = map[string]bool{
 
 // GroupItem is a compact description of one member of a link group.
 type GroupItem struct {
-	Type         string    `json:"type"` // "transaction" or "expense"
-	ID           uint      `json:"id"`
-	Label        string    `json:"label"`
-	Date         time.Time `json:"date"`
-	Amount       float64   `json:"amount"`
-	ReviewStatus string    `json:"reviewStatus"`
+	Type         string       `json:"type"` // "transaction" or "expense"
+	ID           uint         `json:"id"`
+	Label        string       `json:"label"`
+	Date         time.Time    `json:"date"`
+	Amount       models.Money `json:"amount"`
+	ReviewStatus string       `json:"reviewStatus"`
 }
 
 // collectLinkGroup returns the connected component (through confirmed expense<->transaction
@@ -124,14 +124,14 @@ func loadGroupItems(tx *gorm.DB, txIDs, expIDs []uint) []GroupItem {
 		var txs []models.BankTransaction
 		tx.Where("id IN ?", txIDs).Order("date ASC").Find(&txs)
 		for _, t := range txs {
-			items = append(items, GroupItem{"transaction", t.ID, t.Description, t.Date, t.Amount.Dollars(), t.ReviewStatus})
+			items = append(items, GroupItem{"transaction", t.ID, t.Description, t.Date, t.Amount, t.ReviewStatus})
 		}
 	}
 	if len(expIDs) > 0 {
 		var exps []models.Expense
 		tx.Where("id IN ?", expIDs).Order("timestamp ASC").Find(&exps)
 		for _, e := range exps {
-			items = append(items, GroupItem{"expense", e.ID, strings.TrimSpace(e.Vendor + " " + e.Description), e.Timestamp, e.Amount.Dollars(), e.ReviewStatus})
+			items = append(items, GroupItem{"expense", e.ID, strings.TrimSpace(e.Vendor + " " + e.Description), e.Timestamp, e.Amount, e.ReviewStatus})
 		}
 	}
 	return items

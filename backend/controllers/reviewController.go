@@ -371,9 +371,9 @@ func ResolveQueueItems(c fiber.Ctx) error {
 
 	// Allowing or (un)ignoring warnings changes which items are flagged.
 	utils.RunReconciliation()
-	BroadcastEvent("QUEUE_UPDATED", nil)
-	BroadcastEvent("TRANSACTIONS_UPDATED", nil)
-	BroadcastEvent("EXPENSES_UPDATED", nil)
+	events.Broadcast("QUEUE_UPDATED", nil)
+	events.Broadcast("TRANSACTIONS_UPDATED", nil)
+	events.Broadcast("EXPENSES_UPDATED", nil)
 
 	return c.JSON(resp)
 }
@@ -425,14 +425,14 @@ func reopenBooksForAllowedItems(tx *gorm.DB, allowed []GroupItem, groupID string
 		return
 	}
 	for _, t := range txs {
-		others = append(others, GroupItem{Type: "transaction", ID: t.ID, Label: t.Description, Date: t.Date, Amount: t.Amount.Dollars(), ReviewStatus: t.ReviewStatus})
+		others = append(others, GroupItem{Type: "transaction", ID: t.ID, Label: t.Description, Date: t.Date, Amount: t.Amount, ReviewStatus: t.ReviewStatus})
 	}
 	var exps []models.Expense
 	if err = tx.Where("review_status = ? AND timestamp >= ?", "PENDING", endOfClosed).Find(&exps).Error; err != nil {
 		return
 	}
 	for _, e := range exps {
-		others = append(others, GroupItem{Type: "expense", ID: e.ID, Label: e.Vendor, Date: e.Timestamp, Amount: e.Amount.Dollars(), ReviewStatus: e.ReviewStatus})
+		others = append(others, GroupItem{Type: "expense", ID: e.ID, Label: e.Vendor, Date: e.Timestamp, Amount: e.Amount, ReviewStatus: e.ReviewStatus})
 	}
 	if len(others) > 0 {
 		otherTx, otherExp := splitItemIDs(others)

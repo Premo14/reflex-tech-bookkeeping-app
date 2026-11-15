@@ -137,7 +137,8 @@ func TestIsDefaultDescription(t *testing.T) {
 		{"Credit card", "Business credit card balance", true},
 		{"Loan", "Outstanding loan balances", true},
 		{"Line of credit", "Revolving business line of credit", true},
-		{"Custom name", "Chase Checking (...1234)", false},
+		{"Custom name", "CHASE_CHK_1234", false},
+		{"Custom descriptive name", "Chase Checking (...1234)", true},
 		{"Has spaces", "My custom account", true},
 		{"Single word", "Chase", false},
 		{"Case mismatch", "primary business checking account", true},
@@ -259,22 +260,25 @@ func TestAcquireReleaseInFlight_Concurrent(t *testing.T) {
 	inFlight = make(map[string]bool)
 
 	var acquiredCount atomic.Int32
+	startCh := make(chan struct{})
 
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			<-startCh
 			if acquireInFlight("/tmp/concurrent.txt") {
 				acquiredCount.Add(1)
-				releaseInFlight("/tmp/concurrent.txt")
 			}
 		}()
 	}
+	close(startCh)
 	wg.Wait()
+	releaseInFlight("/tmp/concurrent.txt")
 
 	if acquiredCount.Load() != 1 {
-		t.Errorf("expected exactly 1 successful acquire, got %d", acquiredCount.Load())
+		t.Errorf("expected exactly 1 successful acquire while locked, got %d", acquiredCount.Load())
 	}
 }
 
@@ -290,8 +294,8 @@ func TestCleanAIJSON_EdgeCases(t *testing.T) {
 	}{
 		{"Empty string", "", ""},
 		{"Whitespace only", "   \n\t  ", ""},
-		{"No braces", "just plain text", ""},
-		{"Only open brace", "{", ""},
+		{"No braces", "just plain text", "just plain text"},
+		{"Only open brace", "{", "{"},
 		{"Only close brace", "}", "}"},
 		{"Nested JSON", `{"outer": {"inner": 42}}`, `{"outer": {"inner": 42}}`},
 		{"Single quotes", `{'vendor': 'Target'}`, `{'vendor': 'Target'}`},

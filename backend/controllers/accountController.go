@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflex-tech-bookkeeping-app-api/db"
+	"reflex-tech-bookkeeping-app-api/events"
 	"reflex-tech-bookkeeping-app-api/models"
 	"strings"
 
@@ -15,6 +16,10 @@ import (
 // (e.g. ?type=EXPENSE to populate an expense category picker).
 // Returns a flat list sorted by code. The frontend builds any tree structure it needs.
 func GetChartAccounts(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "database not initialized"})
+	}
+
 	accountType := c.Query("type")
 
 	var accounts []models.ChartAccount
@@ -38,6 +43,10 @@ func GetChartAccounts(c fiber.Ctx) error {
 
 // CreateChartAccount creates a new account in the chart of accounts.
 func CreateChartAccount(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "database not initialized"})
+	}
+
 	type createInput struct {
 		Code          string `json:"code"`
 		Name          string `json:"name"`
@@ -128,7 +137,7 @@ func CreateChartAccount(c fiber.Ctx) error {
 		})
 	}
 
-	BroadcastEvent("ACCOUNTS_UPDATED", nil)
+	events.Broadcast("ACCOUNTS_UPDATED", nil)
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"status":  "success",
@@ -139,6 +148,10 @@ func CreateChartAccount(c fiber.Ctx) error {
 // UpdateChartAccount updates an existing chart of accounts entry.
 // The Type field cannot be changed if the account has existing transactions or expenses.
 func UpdateChartAccount(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "database not initialized"})
+	}
+
 	id := c.Params("id")
 
 	var account models.ChartAccount
@@ -361,7 +374,7 @@ func UpdateChartAccount(c fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to update account"})
 	}
 
-	BroadcastEvent("ACCOUNTS_UPDATED", nil)
+	events.Broadcast("ACCOUNTS_UPDATED", nil)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":  "success",
@@ -374,6 +387,10 @@ func UpdateChartAccount(c fiber.Ctx) error {
 // If references exist, returns a 409 Conflict with a count breakdown.
 // For accounts with history or defaults, use UpdateChartAccount to set active=false instead.
 func DeleteChartAccount(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "database not initialized"})
+	}
+
 	id := c.Params("id")
 
 	var account models.ChartAccount
@@ -427,7 +444,7 @@ func DeleteChartAccount(c fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to delete account"})
 	}
 
-	BroadcastEvent("ACCOUNTS_UPDATED", nil)
+	events.Broadcast("ACCOUNTS_UPDATED", nil)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success"})
 }
@@ -514,6 +531,10 @@ func getPrefixForType(accountType string) string {
 
 // GetAccountAndDescendantIDs returns rootID and all recursive child sub-account IDs.
 func GetAccountAndDescendantIDs(rootID uint) []uint {
+	if db.DB == nil {
+		return []uint{rootID}
+	}
+
 	result := []uint{rootID}
 	visited := map[uint]bool{rootID: true}
 	queue := []uint{rootID}

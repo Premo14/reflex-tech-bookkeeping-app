@@ -4,19 +4,36 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflex-tech-bookkeeping-app-api/constants"
+	"reflex-tech-bookkeeping-app-api/db"
+	"reflex-tech-bookkeeping-app-api/events"
+	"reflex-tech-bookkeeping-app-api/models"
+	"reflex-tech-bookkeeping-app-api/utils"
 	"sort"
 	"strings"
 	"time"
-	"reflex-tech-bookkeeping-app-api/constants"
-	"reflex-tech-bookkeeping-app-api/db"
-	"reflex-tech-bookkeeping-app-api/models"
-	"reflex-tech-bookkeeping-app-api/utils"
 
 	"github.com/gofiber/fiber/v3"
 )
 
+// allowedSettingsKeys defines the set of settings that can be updated via UpdateSettings.
+// This prevents accidental or malicious overwrites of internal/unknown keys.
+var allowedSettingsKeys = map[string]bool{
+	"CompanyDefaultName":       true,
+	"DocumentDropboxPath":      true,
+	"BooksClosedDate":          true,
+	"HostHomePath":             true,
+	"CompanyName":              true,
+	"Currency":                 true,
+	"FiscalYearStart":          true,
+}
+
 // GetSettings retrieves all global settings.
 func GetSettings(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "database not initialized"})
+	}
+
 	var settings []models.AppSetting
 	if err := db.DB.Find(&settings).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch settings"})
@@ -56,6 +73,10 @@ func GetSettings(c fiber.Ctx) error {
 
 // UpdateSettings updates a specific global setting.
 func UpdateSettings(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "database not initialized"})
+	}
+
 	var input struct {
 		Key   string `json:"key"`
 		Value string `json:"value"`
@@ -65,6 +86,13 @@ func UpdateSettings(c fiber.Ctx) error {
 	}
 	if input.Key == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Key is required"})
+	}
+
+	// Whitelist check: reject updates to non-allowed settings keys
+	if !allowedSettingsKeys[input.Key] {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fmt.Sprintf("setting key '%s' is not allowed for updates", input.Key),
+		})
 	}
 
 	// Custom Validation and Dynamic Configuration for DocumentDropboxPath
@@ -143,19 +171,26 @@ func UpdateSettings(c fiber.Ctx) error {
 			NewDate:      input.Value,
 			Reason:       "Manual Update",
 		}
-		tx.Create(&auditLog)
+		if err := tx.Create(&auditLog).Error; err != nil {
+			tx.Rollback()
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to write audit log"})
+		}
 	}
 
 	tx.Commit()
-	BroadcastEvent("SETTINGS_UPDATED", nil)
+	events.Broadcast("SETTINGS_UPDATED", nil)
 	if input.Key == "BooksClosedDate" {
-		BroadcastEvent("QUEUE_UPDATED", nil)
+		events.Broadcast("QUEUE_UPDATED", nil)
 	}
 	return c.JSON(setting)
 }
 
 // GetAuditLogs retrieves history of BooksClosedDate changes.
 func GetAuditLogs(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "database not initialized"})
+	}
+
 	var logs []models.PeriodAuditLog
 	if err := db.DB.Order("created_at DESC").Find(&logs).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch audit logs"})
@@ -173,11 +208,11 @@ type ClosePreflight struct {
 	UnlinkedTxSamples   []GroupItem `json:"unlinkedTxSamples"`
 	UnlinkedExpSamples  []GroupItem `json:"unlinkedExpSamples"`
 	EarliestBlockerDate string      `json:"earliestBlockerDate"`
-	ExcludedTxCount       int64       `json:"excludedTxCount"`
-	ExcludedExpCount      int64       `json:"excludedExpCount"`
-	ExcludedTxTotal       float64     `json:"excludedTxTotal"`
-	ExcludedExpTotal      float64     `json:"excludedExpTotal"`
-	UncategorizedTxCount  int64       `json:"uncategorizedTxCount"`
+	ExcludedTxCount       int64        `json:"excludedTxCount"`
+	ExcludedExpCount      int64        `json:"excludedExpCount"`
+	ExcludedTxTotal       models.Money `json:"excludedTxTotal"`
+	ExcludedExpTotal      models.Money `json:"excludedExpTotal"`
+	UncategorizedTxCount  int64        `json:"uncategorizedTxCount"`
 	UncategorizedExpCount int64       `json:"uncategorizedExpCount"`
 }
 
@@ -206,7 +241,7 @@ func computeClosePreflight(dateStr string) (ClosePreflight, error) {
 	for i, t := range txs {
 		track(t.Date)
 		if i < 5 {
-			pf.UnlinkedTxSamples = append(pf.UnlinkedTxSamples, GroupItem{"transaction", t.ID, t.Description, t.Date, t.Amount.Dollars(), t.ReviewStatus})
+			pf.UnlinkedTxSamples = append(pf.UnlinkedTxSamples, GroupItem{"transaction", t.ID, t.Description, t.Date, t.Amount, t.ReviewStatus})
 		}
 	}
 
@@ -217,7 +252,7 @@ func computeClosePreflight(dateStr string) (ClosePreflight, error) {
 	for i, e := range exps {
 		track(e.Timestamp)
 		if i < 5 {
-			pf.UnlinkedExpSamples = append(pf.UnlinkedExpSamples, GroupItem{"expense", e.ID, e.Vendor + " " + e.Description, e.Timestamp, e.Amount.Dollars(), e.ReviewStatus})
+			pf.UnlinkedExpSamples = append(pf.UnlinkedExpSamples, GroupItem{"expense", e.ID, e.Vendor + " " + e.Description, e.Timestamp, e.Amount, e.ReviewStatus})
 		}
 	}
 
@@ -237,11 +272,15 @@ func computeClosePreflight(dateStr string) (ClosePreflight, error) {
 		}
 	}
 
-	// Informational: excluded items in range (these never block closing)
+	// Informational: excluded items in range (these never block closing).
+	// SUM returns decimal dollars from the DB; wrap in models.Money for integer cents + dollar JSON serialization.
+	var excludedTxFloat, excludedExpFloat float64
 	db.DB.Model(&models.BankTransaction{}).Where("date < ? AND review_status = ?", before, "IGNORED").
-		Select("COUNT(*), COALESCE(SUM(ABS(amount)), 0)").Row().Scan(&pf.ExcludedTxCount, &pf.ExcludedTxTotal)
+		Select("COUNT(*), COALESCE(SUM(ABS(amount)), 0)").Row().Scan(&pf.ExcludedTxCount, &excludedTxFloat)
+	pf.ExcludedTxTotal = models.NewMoney(excludedTxFloat)
 	db.DB.Model(&models.Expense{}).Where("timestamp < ? AND review_status = ?", before, "IGNORED").
-		Select("COUNT(*), COALESCE(SUM(amount), 0)").Row().Scan(&pf.ExcludedExpCount, &pf.ExcludedExpTotal)
+		Select("COUNT(*), COALESCE(SUM(amount), 0)").Row().Scan(&pf.ExcludedExpCount, &excludedExpFloat)
+	pf.ExcludedExpTotal = models.NewMoney(excludedExpFloat)
 
 	// Uncategorized items: in books but missing category (excluding confirmed-linked split transactions and LIABILITY card payment credits)
 	db.DB.Model(&models.BankTransaction{}).
@@ -267,6 +306,10 @@ func computeClosePreflight(dateStr string) (ClosePreflight, error) {
 
 // GetClosePreflight reports what (if anything) prevents closing the books through ?date=YYYY-MM-DD.
 func GetClosePreflight(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "database not initialized"})
+	}
+
 	date := c.Query("date")
 	if date == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "date is required"})
@@ -280,6 +323,10 @@ func GetClosePreflight(c fiber.Ctx) error {
 
 // BrowseDirectories lists subdirectories at the requested host path.
 func BrowseDirectories(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "database not initialized"})
+	}
+
 	defaultHome := constants.DetectHostHomeDir()
 	reqPath := strings.TrimSpace(c.Query("path"))
 	if reqPath == "" {
@@ -295,8 +342,10 @@ func BrowseDirectories(c fiber.Ctx) error {
 	}
 
 	// Sandboxing: confine browsing strictly to the host user's home directory
+	// Append "/" to prefix to prevent /Users/aj matching /Users/aj2
 	if defaultHome != "" && defaultHome != "/" {
-		if cleaned != defaultHome && !strings.HasPrefix(cleaned, defaultHome+"/") {
+		safePrefix := defaultHome + "/"
+		if cleaned != defaultHome && !strings.HasPrefix(cleaned, safePrefix) {
 			cleaned = defaultHome
 		}
 	}
@@ -329,8 +378,13 @@ func BrowseDirectories(c fiber.Ctx) error {
 	sort.Strings(dirs)
 
 	parent := filepath.Dir(cleaned)
-	if parent == cleaned || cleaned == defaultHome || len(parent) < len(defaultHome) || !strings.HasPrefix(parent, defaultHome) {
+	if parent == cleaned || cleaned == defaultHome || len(parent) < len(defaultHome) {
 		parent = ""
+	} else {
+		// Also guard against prefix-suffix collision
+		if !strings.HasPrefix(parent, defaultHome+"/") {
+			parent = ""
+		}
 	}
 
 	return c.JSON(fiber.Map{
