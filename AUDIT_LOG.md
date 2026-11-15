@@ -120,3 +120,14 @@ Append-only progress log. Each completed slice appends 6–10 concise lines belo
 - **Coverage**: `process` 73.7% (complex multipart form routing covered via `fasthttp.RequestCtx` + direct stubbed exec), `callOllama` 95.5%, `callOllamaVisionMulti` 90.9%, `health` 100%, `convertPDFToImages` 100%, `extractPDFText` 100%, `runTesseract` 100%, `runOCR` 100%. **Total: 86.1%** (from 38.3%).
 - **Not testable without Docker**: `main()` (server startup). `resizeImage` 79.2% (one branch), `resolveUploadMIME` 84.2% (minor edge case).
 - **Verification**: `go build ./...` ✅, `go vet ./...` ✅, all tests pass ✅, coverage 86.1% ≥ 85% target.
+
+## S07E: Coverage Backfill — `backend/utils/` Part 2 (Reconciler, Match, Rules, Demo)
+- **reconciler.go**: `CalculateMerchantFee` 100% (8 test cases covering $0→$1k), `EvaluateInvoiceDepositMatch` 95.7% (13 cases: exact match, invoice num, sole invoice, merchant fee net, declined, DRAFT/PAID, proximity window, nil inv/tx, date proximity), `findSubsetSum` 93.1%, `findSubsetSumDFS` 78.8%, `calculateExpenseSum` 100%, `toCents` 100%, `daysDifference` 100%, `calculateMatchScore` 83.3%, `normalizeString` 100%, `cleanForVendorMatch` 80%, `vendorMatchesDescription` 77.8%, `UpdateReconciliationStatuses` alias 100%.
+- **match_candidates.go**: `IsReviewStatusInBooks` 100%, `IsOpenAllocationStatus` 100%, `absInt64`/`maxInt64` 100%, `sumExpenseAbsCents`/`sumTransactionAbsCents` 100%, `pairDaysDistance` 100%, `mergeCandidateLists` 100%, `collectUniqueIDs` 100%, `isTransactionEligibleForExpenseMatching` 100%, `isExpenseEligibleForTransactionMatching` 100%.
+- **Accounting helpers**: `NormalizeTender` 100%, `IsCashTender` 100%.
+- **DB-dependent functions deferred** (require SQLite in-memory DB + schema): `RunReconciliation` 51.6%, `RunInvoiceReconciliation` 7.7%, `UpdateAllocationStatuses` 27.5%, `collectReconcilerMatches` 0%, `persistReconcilerSuggestions` 0%, `ScoreExpenseTxCandidate` 0%, `BuildTransaction*Candidates` 0%, `FindTransaction*MatchCandidates` 0%, `loadBalanceSheetAccountIDs` 0%, `loadAbsCentsByID` 0%, `batchLoadConfirmedStats` 0%.
+- **rulesEngine.go**: `EvaluateCondition` 62.1%, `evaluateStringOperator` 64.3%, `EvaluateRule` 76.5%. `ApplyBankRulesToTransaction` 14.3%, `ApplyAllRulesToExisting` 0%, `TestRulePreview` 15.4% (deferred).
+- **demo_seeder.go**: `GetDemoDatasetStatus` 30%, `RemoveDemoDataset` 3%, `ResetDemoDataset` 66.7%, `SeedDemoDataset` 0.7% (deferred).
+- **demo_receipt_png.go**: `drawBitmapText` 91.7%, `drawDottedRule` 100%, `wrapLine` 85.7%, `CreateDemoReceiptPNGToDir` 88.1%, `CreateDemoReceiptPNG` 0% (deferred).
+- **Overall utils/ package**: 43.3% (from 42.6% baseline). Non-DB helpers ≥77-100%.
+- **Verification**: `go build ./...` ✅, `go vet ./...` ✅, all tests pass ✅.
