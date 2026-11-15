@@ -145,36 +145,31 @@ func TestComputeOverallStatus(t *testing.T) {
 }
 
 func TestCheckOllamaHealth_NoModelsLoaded(t *testing.T) {
-	// Spin up a test server that returns empty models list
-	app := fiber.New()
-	app.Get("/api/tags", func(c fiber.Ctx) error {
-		return c.JSON(map[string]interface{}{
-			"models": []interface{}{},
-		})
-	})
-	go app.Listen(":19877")
-	defer app.Shutdown()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"models": []interface{}{}})
+	}))
+	defer srv.Close()
 
-	result := checkOllamaTags("http://127.0.0.1:19877/api/tags", 2*time.Second)
+	result := checkOllamaTags(srv.URL+"/api/tags", 2*time.Second)
 	if status, ok := result["status"].(string); !ok || status != "no_models_loaded" {
 		t.Errorf("expected 'no_models_loaded', got %v", result["status"])
 	}
 }
 
 func TestCheckOllamaHealth_ModelsPresent(t *testing.T) {
-	app := fiber.New()
-	app.Get("/api/tags", func(c fiber.Ctx) error {
-		return c.JSON(map[string]interface{}{
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"models": []interface{}{
 				map[string]interface{}{"name": "llama3.1:latest"},
 				map[string]interface{}{"name": "qwen2.5vl:3b"},
 			},
 		})
-	})
-	go app.Listen(":19878")
-	defer app.Shutdown()
+	}))
+	defer srv.Close()
 
-	result := checkOllamaTags("http://127.0.0.1:19878/api/tags", 2*time.Second)
+	result := checkOllamaTags(srv.URL+"/api/tags", 2*time.Second)
 	if ready, ok := result["ready"].(bool); !ok || !ready {
 		t.Errorf("expected ready=true, got %v", result["ready"])
 	}

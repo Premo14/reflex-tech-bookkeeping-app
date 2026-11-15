@@ -1,9 +1,9 @@
 package controllers
 
 import (
-	"strconv"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
+	"strconv"
 
 	"github.com/gofiber/fiber/v3"
 	"gorm.io/gorm"
@@ -17,15 +17,21 @@ import (
 //   - ?endDate=2026-12-31
 //   - ?accountId=5
 func GetSummary(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	startDate := c.Query("startDate")
-	endDate   := c.Query("endDate")
+	endDate := c.Query("endDate")
 	accountId := c.Query("accountId")
 
 	var accountIDs []uint
 	if accountId != "" {
-		if parsedID, err := strconv.ParseUint(accountId, 10, 32); err == nil {
-			accountIDs = GetAccountAndDescendantIDs(uint(parsedID))
+		parsedID, err := strconv.ParseUint(accountId, 10, 32)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid accountId"})
 		}
+		accountIDs = GetAccountAndDescendantIDs(uint(parsedID))
 	}
 
 	type amtResult struct{ Total float64 }
@@ -33,8 +39,13 @@ func GetSummary(c fiber.Ctx) error {
 	applyTxAccountFilter := func(q *gorm.DB) *gorm.DB {
 		if len(accountIDs) > 0 {
 			return q.Where("chart_account_id IN ? OR category_account_id IN ?", accountIDs, accountIDs)
-		} else if accountId != "" {
-			return q.Where("chart_account_id = ? OR category_account_id = ?", accountId, accountId)
+		}
+		return q
+	}
+
+	applyJoinedTxAccountFilter := func(q *gorm.DB) *gorm.DB {
+		if len(accountIDs) > 0 {
+			return q.Where("bt.chart_account_id IN ? OR bt.category_account_id IN ?", accountIDs, accountIDs)
 		}
 		return q
 	}
@@ -45,8 +56,6 @@ func GetSummary(c fiber.Ctx) error {
 				"expenses.chart_account_id IN ? OR expenses.id IN (SELECT ebt.expense_id FROM expense_bank_transactions ebt JOIN bank_transactions bt ON bt.id = ebt.bank_transaction_id WHERE ebt.status = 'confirmed' AND bt.chart_account_id IN ?)",
 				accountIDs, accountIDs,
 			)
-		} else if accountId != "" {
-			return q.Where("expenses.chart_account_id = ?", accountId)
 		}
 		return q
 	}
@@ -59,11 +68,7 @@ func GetSummary(c fiber.Ctx) error {
 		Joins("JOIN chart_accounts ca ON ca.id = bt.category_account_id").
 		Where("ca.type = ?", "REVENUE").
 		Where(inBooksClauseBT)
-	if len(accountIDs) > 0 {
-		revCatQ = revCatQ.Where("bt.chart_account_id IN ? OR bt.category_account_id IN ?", accountIDs, accountIDs)
-	} else if accountId != "" {
-		revCatQ = revCatQ.Where("bt.chart_account_id = ? OR bt.category_account_id = ?", accountId, accountId)
-	}
+	revCatQ = applyJoinedTxAccountFilter(revCatQ)
 	revCatQ = ApplyDateRange(revCatQ, "bt.date", startDate, endDate)
 	_ = revCatQ.Scan(&revCategorized)
 
@@ -75,15 +80,11 @@ func GetSummary(c fiber.Ctx) error {
 		Where("bt.category_account_id IS NULL").
 		Where("COALESCE(bank_ca.type, '') != ?", "LIABILITY").
 		Where(inBooksClauseBT)
-	if len(accountIDs) > 0 {
-		uncatDepQ = uncatDepQ.Where("bt.chart_account_id IN ? OR bt.category_account_id IN ?", accountIDs, accountIDs)
-	} else if accountId != "" {
-		uncatDepQ = uncatDepQ.Where("bt.chart_account_id = ? OR bt.category_account_id = ?", accountId, accountId)
-	}
+	uncatDepQ = applyJoinedTxAccountFilter(uncatDepQ)
 	uncatDepQ = ApplyDateRange(uncatDepQ, "bt.date", startDate, endDate)
 	_ = uncatDepQ.Scan(&uncatDeposits)
 
-	totalIncome := roundCents(revCategorized.Total + uncatDeposits.Total)
+	totalIncome := models.NewMoney(revCategorized.Total).Add(models.NewMoney(uncatDeposits.Total))
 
 	// 2. Bank Cash Flow (Deposits & Debits):
 	var totalDeposits amtResult
@@ -98,12 +99,10 @@ func GetSummary(c fiber.Ctx) error {
 	debQ = ApplyDateRange(debQ, "date", startDate, endDate)
 	_ = debQ.Scan(&totalDebits)
 
-	// 3. Operating Expenses:
-	// Matches P&L:
-	//   a) Confirmed Expense records (e.g. receipts/invoices) categorized under EXPENSE accounts or uncategorized
-	//   b) Unlinked bank transactions categorized under EXPENSE accounts (net -bt.amount for debits and refunds)
-	//   c) Unlinked uncategorized bank debits (Suspense)
-	//   d) Partial debit remainders for EXPENSE accounts or uncategorized
+	depositsMoney := models.NewMoney(totalDeposits.Total)
+	debitsMoney := models.NewMoney(totalDebits.Total)
+
+	// 3. Operating Expenses (matches P&L sources a–d):
 	var expFromReceipts amtResult
 	expQ := db.DB.Table("expenses").
 		Select("COALESCE(SUM(expenses.amount), 0) as total").
@@ -122,11 +121,7 @@ func GetSummary(c fiber.Ctx) error {
 		Where("ca.type = ?", "EXPENSE").
 		Where("bt.id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')").
 		Where(inBooksClauseBT)
-	if len(accountIDs) > 0 {
-		unlinkedDebQ = unlinkedDebQ.Where("bt.chart_account_id IN ? OR bt.category_account_id IN ?", accountIDs, accountIDs)
-	} else if accountId != "" {
-		unlinkedDebQ = unlinkedDebQ.Where("bt.chart_account_id = ? OR bt.category_account_id = ?", accountId, accountId)
-	}
+	unlinkedDebQ = applyJoinedTxAccountFilter(unlinkedDebQ)
 	unlinkedDebQ = ApplyDateRange(unlinkedDebQ, "bt.date", startDate, endDate)
 	_ = unlinkedDebQ.Scan(&unlinkedExpDebits)
 
@@ -150,15 +145,14 @@ func GetSummary(c fiber.Ctx) error {
 		Where("bt.allocation_status = 'PARTIALLY_ALLOCATED'").
 		Where("(ca.type = 'EXPENSE' OR bt.category_account_id IS NULL)").
 		Where(inBooksClauseBT)
-	if len(accountIDs) > 0 {
-		partQ = partQ.Where("bt.chart_account_id IN ? OR bt.category_account_id IN ?", accountIDs, accountIDs)
-	} else if accountId != "" {
-		partQ = partQ.Where("bt.chart_account_id = ? OR bt.category_account_id = ?", accountId, accountId)
-	}
+	partQ = applyJoinedTxAccountFilter(partQ)
 	partQ = ApplyDateRange(partQ, "bt.date", startDate, endDate)
 	_ = partQ.Scan(&partialDebitRemainder)
 
-	totalExpenses := roundCents(expFromReceipts.Total + unlinkedExpDebits.Total + uncatDebitTotal.Total + partialDebitRemainder.Total)
+	totalExpenses := models.NewMoney(expFromReceipts.Total).
+		Add(models.NewMoney(unlinkedExpDebits.Total)).
+		Add(models.NewMoney(uncatDebitTotal.Total)).
+		Add(models.NewMoney(partialDebitRemainder.Total))
 
 	// Total transaction count
 	var txCount int64
@@ -188,14 +182,14 @@ func GetSummary(c fiber.Ctx) error {
 	ulQ = ApplyDateRange(ulQ, "timestamp", startDate, endDate)
 	ulQ.Count(&unlinkedExpCount)
 
-	netCashflow := roundCents(totalDeposits.Total + totalDebits.Total)
-	netIncome := roundCents(totalIncome - totalExpenses)
+	netCashflow := depositsMoney.Add(debitsMoney)
+	netIncome := totalIncome.Sub(totalExpenses)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":           "success",
 		"totalIncome":      totalIncome,
-		"totalDeposits":    roundCents(totalDeposits.Total),
-		"totalDebits":      roundCents(totalDebits.Total),
+		"totalDeposits":    depositsMoney,
+		"totalDebits":      debitsMoney,
 		"totalExpenses":    totalExpenses,
 		"netCashflow":      netCashflow,
 		"netIncome":        netIncome,

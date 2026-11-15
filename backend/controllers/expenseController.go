@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"reflex-tech-bookkeeping-app-api/db"
+	"reflex-tech-bookkeeping-app-api/events"
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/utils"
 	"strconv"
@@ -18,10 +19,14 @@ import (
 // GetExpense fetches a single Expense and returns confirmed and suggested transaction
 // links as separate arrays so the UI can distinguish them without ambiguity.
 func GetExpense(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	id := c.Params("id")
 	var expense models.Expense
 
-	if err := db.DB.Preload("Receipts").Preload("ChartAccount").First(&expense, "id = ?", id).Error; err != nil {
+	if err := db.DB.Preload("Receipts").Preload("ChartAccount").Preload("Invoice").Preload("Invoice.CategoryAccount").First(&expense, "id = ?", id).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Expense not found"})
 	}
 
@@ -36,18 +41,15 @@ func GetExpense(c fiber.Ctx) error {
 		Order("bank_transactions.date ASC, bank_transactions.id ASC").
 		Find(&confirmedTransactions)
 
-	// Load suggested transactions — these are scoring system guesses awaiting user action.
-	var suggestedTransactions []models.BankTransaction
-	db.DB.Joins("JOIN expense_bank_transactions ebt ON ebt.bank_transaction_id = bank_transactions.id").
-		Where("ebt.expense_id = ? AND ebt.status = ?", expense.ID, "suggested").
-		Preload("ChartAccount").Preload("Category").
-		Find(&suggestedTransactions)
+	// Load ranked suggested transactions (persisted reconciler guesses + scored open debit candidates).
+	suggestedTransactionCandidates, suggestedTransactions := utils.FindExpenseMatchCandidates(db.DB, expense, confirmedTransactions)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"status":                "success",
-		"expense":               expense,
-		"confirmedTransactions": confirmedTransactions,
-		"suggestedTransactions": suggestedTransactions,
+		"status":                         "success",
+		"expense":                        expense,
+		"confirmedTransactions":          confirmedTransactions,
+		"suggestedTransactions":          suggestedTransactions,
+		"suggestedTransactionCandidates": suggestedTransactionCandidates,
 	})
 }
 
@@ -68,6 +70,10 @@ func ValidateExpenseCategory(acc *models.ChartAccount) error {
 // CreateExpense creates a manually entered expense (no file upload required).
 // Optional chartAccountId can be provided to categorize the expense.
 func CreateExpense(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	type createInput struct {
 		Date           *string `json:"date"`
 		Timestamp      *string `json:"timestamp"`
@@ -132,8 +138,8 @@ func CreateExpense(c fiber.Ctx) error {
 		Timestamp:        expenseTime,
 		Vendor:           input.Vendor,
 		Description:      input.Description,
-		Amount:           models.NewMoney(math.Abs(input.Amount.Dollars())),
-		TaxAmount:        models.NewMoney(math.Abs(input.TaxAmount.Dollars())),
+		Amount:           input.Amount.Abs(),
+		TaxAmount:        input.TaxAmount.Abs(),
 		Tender:           normTender,
 		ChartAccountID:   input.ChartAccountID,
 		Notes:            input.Notes,
@@ -147,6 +153,11 @@ func CreateExpense(c fiber.Ctx) error {
 	}
 
 	utils.RunReconciliation()
+	events.Broadcast("EXPENSES_UPDATED", nil)
+	events.Broadcast("TRANSACTIONS_UPDATED", nil)
+	events.Broadcast("RECONCILIATION_UPDATED", nil)
+	events.Broadcast("SUMMARY_UPDATED", nil)
+	events.Broadcast("QUEUE_UPDATED", nil)
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "success", "expense": expense})
 }
@@ -157,6 +168,10 @@ func CreateExpense(c fiber.Ctx) error {
 //   - ?periodId=123    filter to expenses within that period's date range
 //   - ?accountId=5     filter by ChartAccountID (which expense category)
 func GetExpenses(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 	accountId := c.Query("accountId")
@@ -168,23 +183,24 @@ func GetExpenses(c fiber.Ctx) error {
 	query = ApplyDateRange(query, "timestamp", startDate, endDate)
 
 	if accountId != "" {
-		if parsedID, err := strconv.ParseUint(accountId, 10, 32); err == nil {
-			accountIDs := GetAccountAndDescendantIDs(uint(parsedID))
-			query = query.Where(
-				"chart_account_id IN ? OR id IN (SELECT ebt.expense_id FROM expense_bank_transactions ebt JOIN bank_transactions bt ON bt.id = ebt.bank_transaction_id WHERE ebt.status = 'confirmed' AND bt.chart_account_id IN ?)",
-				accountIDs, accountIDs,
-			)
-		} else {
-			query = query.Where("chart_account_id = ?", accountId)
+		parsedID, err := strconv.ParseUint(accountId, 10, 32)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid accountId"})
 		}
+		accountIDs := GetAccountAndDescendantIDs(uint(parsedID))
+		query = query.Where(
+			"chart_account_id IN ? OR id IN (SELECT ebt.expense_id FROM expense_bank_transactions ebt JOIN bank_transactions bt ON bt.id = ebt.bank_transaction_id WHERE ebt.status = 'confirmed' AND bt.chart_account_id IN ?)",
+			accountIDs, accountIDs,
+		)
 	}
 
 	search := strings.TrimSpace(c.Query("search"))
 	if search != "" {
+		lowerSearch := "%" + strings.ToLower(search) + "%"
 		if val, err := strconv.ParseFloat(strings.TrimPrefix(search, "$"), 64); err == nil {
-			query = query.Where("vendor ILIKE ? OR description ILIKE ? OR notes ILIKE ? OR amount = ?", "%"+search+"%", "%"+search+"%", "%"+search+"%", math.Abs(val))
+			query = query.Where("LOWER(vendor) LIKE ? OR LOWER(description) LIKE ? OR LOWER(notes) LIKE ? OR amount = ?", lowerSearch, lowerSearch, lowerSearch, math.Abs(val))
 		} else {
-			query = query.Where("vendor ILIKE ? OR description ILIKE ? OR notes ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
+			query = query.Where("LOWER(vendor) LIKE ? OR LOWER(description) LIKE ? OR LOWER(notes) LIKE ?", lowerSearch, lowerSearch, lowerSearch)
 		}
 	}
 
@@ -213,6 +229,9 @@ func GetExpenses(c fiber.Ctx) error {
 	}
 	if limit < 1 {
 		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
 	}
 	offset := (page - 1) * limit
 
@@ -245,7 +264,7 @@ func GetExpenses(c fiber.Ctx) error {
 	// Preload confirmed BankTransactions so the frontend knows if it's linked
 	query.Order(orderClause).Preload("Receipts").Preload("BankTransactions", func(db *gorm.DB) *gorm.DB {
 		return db.Where("bank_transactions.id IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = ?)", "confirmed")
-	}).Preload("BankTransactions.Category").Preload("ChartAccount").Offset(offset).Limit(limit).Find(&expenses)
+	}).Preload("BankTransactions.Category").Preload("ChartAccount").Preload("Invoice").Offset(offset).Limit(limit).Find(&expenses)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":   "success",
@@ -258,6 +277,10 @@ func GetExpenses(c fiber.Ctx) error {
 
 // UpdateExpense allows updating fields on an expense, including its COA category.
 func UpdateExpense(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	id := c.Params("id")
 	var expense models.Expense
 
@@ -299,10 +322,10 @@ func UpdateExpense(c fiber.Ctx) error {
 		updates["description"] = *input.Description
 	}
 	if input.Amount != nil {
-		updates["amount"] = models.NewMoney(math.Abs(input.Amount.Dollars()))
+		updates["amount"] = input.Amount.Abs()
 	}
 	if input.TaxAmount != nil {
-		updates["tax_amount"] = models.NewMoney(math.Abs(input.TaxAmount.Dollars()))
+		updates["tax_amount"] = input.TaxAmount.Abs()
 	}
 	if input.CurrencyCode != nil {
 		updates["currency_code"] = *input.CurrencyCode
@@ -385,15 +408,27 @@ func UpdateExpense(c fiber.Ctx) error {
 		}
 	}
 
-	db.DB.Model(&expense).Updates(updates)
+	if err := db.DB.Model(&expense).Updates(updates).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update expense"})
+	}
 
 	utils.RunReconciliation()
+	events.Broadcast("EXPENSES_UPDATED", nil)
+	events.Broadcast("TRANSACTIONS_UPDATED", nil)
+	events.Broadcast("RECONCILIATION_UPDATED", nil)
+	events.Broadcast("SUMMARY_UPDATED", nil)
+	events.Broadcast("QUEUE_UPDATED", nil)
 
+	_ = db.DB.Preload("Receipts").Preload("ChartAccount").Preload("Invoice").First(&expense, "id = ?", expense.ID)
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success", "expense": expense})
 }
 
 // DeleteExpense soft-deletes an expense, unlinks it, and moves it to Deleted Items.
 func DeleteExpense(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	id := c.Params("id")
 	var expense models.Expense
 
@@ -408,25 +443,34 @@ func DeleteExpense(c fiber.Ctx) error {
 		})
 	}
 
-	// Delete join table relationships so it is unlinked from active books
-	db.DB.Where("expense_id = ?", id).Delete(&models.ExpenseBankTransaction{})
-
 	now := time.Now()
-	if err := db.DB.Model(&expense).Updates(map[string]interface{}{
-		"review_status": "DELETED",
-		"deleted_at":    now,
-	}).Error; err != nil {
+	if err := db.DB.Transaction(func(tx *gorm.DB) error {
+		// Delete join table relationships so it is unlinked from active books
+		if err := tx.Where("expense_id = ?", id).Delete(&models.ExpenseBankTransaction{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&expense).Updates(map[string]interface{}{
+			"review_status": "DELETED",
+			"deleted_at":    now,
+		}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&models.ItemAuditLog{
+			ItemType: "expense",
+			ItemID:   expense.ID,
+			Action:   "DELETED",
+			GroupID:  fmt.Sprintf("G%d", time.Now().UnixNano()),
+		}).Error
+	}); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete expense"})
 	}
 
-	db.DB.Create(&models.ItemAuditLog{
-		ItemType: "expense",
-		ItemID:   expense.ID,
-		Action:   "DELETED",
-		GroupID:  fmt.Sprintf("G%d", time.Now().UnixNano()),
-	})
-
 	utils.RunReconciliation()
+	events.Broadcast("EXPENSES_UPDATED", nil)
+	events.Broadcast("TRANSACTIONS_UPDATED", nil)
+	events.Broadcast("RECONCILIATION_UPDATED", nil)
+	events.Broadcast("SUMMARY_UPDATED", nil)
+	events.Broadcast("QUEUE_UPDATED", nil)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success"})
 }
@@ -446,11 +490,21 @@ type SplitExpenseInput struct {
 
 // SplitExpense splits an existing expense (receipt) into multiple distinct items (e.g. for co-mingled personal/business purchases).
 func SplitExpense(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+
 	id := c.Params("id")
 	var expense models.Expense
 
 	if err := db.DB.Preload("Receipts").First(&expense, "id = ?", id).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Expense not found"})
+	}
+
+	if expense.ReviewStatus == "DELETED" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Cannot split a deleted expense.",
+		})
 	}
 
 	if utils.IsDateInClosedPeriod(expense.Timestamp) {
@@ -471,23 +525,27 @@ func SplitExpense(c fiber.Ctx) error {
 	}
 
 	var totalSplitCents int64
-	for i, s := range input.Splits {
+	for i := range input.Splits {
+		s := &input.Splits[i]
 		if s.Amount.Cents <= 0 {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error": fmt.Sprintf("Split line %d must have an amount greater than 0", i+1),
 			})
 		}
-		// Validate chart account if provided
-		if s.ChartAccountID != nil && *s.ChartAccountID > 0 {
+		if s.ChartAccountID != nil && *s.ChartAccountID == 0 {
+			s.ChartAccountID = nil
+		}
+		// Validate chart account if provided: must exist, be active, and be EXPENSE (5xxx)
+		if s.ChartAccountID != nil {
 			var acc models.ChartAccount
-			if err := db.DB.Select("id, active, type").First(&acc, *s.ChartAccountID).Error; err != nil {
+			if err := db.DB.Select("id, code, name, active, type").First(&acc, *s.ChartAccountID).Error; err != nil {
 				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 					"error": fmt.Sprintf("Split line %d chart account not found", i+1),
 				})
 			}
-			if !acc.Active {
+			if err := ValidateExpenseCategory(&acc); err != nil {
 				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-					"error": fmt.Sprintf("Split line %d uses inactive chart account", i+1),
+					"error": fmt.Sprintf("Split line %d: %s", i+1, err.Error()),
 				})
 			}
 		}
@@ -625,11 +683,11 @@ func SplitExpense(c fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to commit expense split"})
 	}
 
-	BroadcastEvent("EXPENSES_UPDATED", nil)
-	BroadcastEvent("SUMMARY_UPDATED", nil)
-	BroadcastEvent("TRANSACTIONS_UPDATED", nil)
-	BroadcastEvent("RECONCILIATION_UPDATED", nil)
-	BroadcastEvent("QUEUE_UPDATED", nil)
+	events.Broadcast("EXPENSES_UPDATED", nil)
+	events.Broadcast("SUMMARY_UPDATED", nil)
+	events.Broadcast("TRANSACTIONS_UPDATED", nil)
+	events.Broadcast("RECONCILIATION_UPDATED", nil)
+	events.Broadcast("QUEUE_UPDATED", nil)
 	utils.RunReconciliation()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
