@@ -234,13 +234,48 @@ The `start.sh` and `start.bat` scripts inspect your machine and apply the optima
 
 ## 5. Tech Stack & Versions
 
-- **Backend API**: Go `1.27` with Fiber v3 (`v3.4.0`), GORM (`v1.31.2`), `ofxgo` (`v0.1.3`), `fsnotify` (`v1.10.1`), `goheif`
-- **File Processor**: Go `1.26.5` with `fasthttp` (`v1.73.0`), `disintegration/imaging` (`v1.6.2`), Tesseract OCR, Poppler `pdftoppm`
-- **Frontend Client**: React `19.2.8`, TypeScript `~6.0.2`, Vite `8.2.1`, Tailwind CSS `4.3.3`
-- **Database**: PostgreSQL `18.4-alpine3.24` with GORM auto-migrations and custom join tables
-- **Local AI Engine**: Ollama container hosting `qwen2.5vl:3b` (vision) and `llama3.1:8b` (reasoning)
-- **Reverse Proxy**: Nginx Alpine routing `/api` to backend:8080 and `/` to frontend:5173
-- **Network File Share**: Samba (`dperson/samba`) exposing SMB ports `139` and `445`
+```text
+┌─────────────────────────────────────────────────────────┐
+│                        Browser                          │
+│              React + TypeScript + Tailwind              │
+│                 http://localhost:5173                   │
+└──────────────────────┬──────────────────────────────────┘
+                       │ HTTP (via Nginx)
+┌──────────────────────▼──────────────────────────────────┐
+│                   Nginx (Docker)                        │
+│     Routes `/` to Frontend, `/api/` to Backend          │
+│               Exposed on port 5173                      │
+└─────────┬───────────────────────────────┬───────────────┘
+          │ /                             │ /api/ & /images/
+┌─────────▼───────────────┐     ┌─────────▼───────────────┐
+│     Frontend (Docker)   │     │      Backend (Docker)   │
+│       Vite dev server   │     │    Go Fiber · fsnotify  │
+│        (Internal)       │     │       (Internal)        │
+└─────────────────────────┘     └─────────┬───────────────┘
+                                          │ HTTP POST /process
+┌─────────────────────────────────────────▼───────────────┐
+│                 File Processor (Docker)                 │
+│         Go · Pillow · Tesseract · pdftoppm              │
+│                       (Internal)                        │
+└─────────┬───────────────────────────────────────────────┘
+          │ HTTP /api/generate
+┌─────────▼───────────────────────────────────────────────┐
+│                  Ollama (Docker)                        │
+│       qwen2.5vl:3b (images) · llama3.1:8b (text)        │
+│                       (Internal)                        │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│              PostgreSQL 18 (Docker)                     │
+│                 (Internal Only)                         │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│              Samba SMB Share (Docker)                   │
+│    \\<server-ip>\inbox  →  DOCUMENT_DATA_PATH/inbox/ │
+│            Exposed on ports 139, 445                    │
+└─────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -353,102 +388,62 @@ All API routes are served under `/api` via Nginx (port 5173) or directly on port
 
 ## 8. Configuration & Environment Variables
 
-Environment variables are stored in `.env`. Defaults work immediately without modification:
+This is a production-grade development environment. The entire stack (including the AI models, OCR, Database, and Web servers) runs inside a unified Docker Compose network. There are absolutely no host-level dependencies other than Docker itself.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `POSTGRES_HOST` | `postgres` | Database container host |
-| `POSTGRES_PORT` | `5432` | PostgreSQL internal port |
-| `POSTGRES_DB` | `reflex-tech-bookkeeping-app-postgres-db` | Database schema name |
-| `POSTGRES_USER` | `user` | Database user |
-| `POSTGRES_PASSWORD` | `pass` | Database password |
-| `OLLAMA_HOST` | `ollama:11434` | Ollama AI service host |
-| `DOCUMENT_DATA_PATH` | `./document-data` | Host directory storing document inbox and processed receipts |
-| `FILE_PROCESSOR_URL` | `http://file-processor:8081/process` | Microservice document endpoint |
+### Prerequisites
+- **Docker & Docker Compose**
+
+### 1. Configure Environment
+
+Copy the example environment file:
+```bash
+cp .env.example .env
+```
+
+If you want the inbox folder to live somewhere else (like your Desktop), update the `DOCUMENT_DATA_PATH` in `.env`:
+```env
+DOCUMENT_DATA_PATH=/path/to/your/Desktop/document-data
+```
+
+### 2. Start the Stack
+
+Run the following command to build and boot the entire infrastructure:
+```bash
+docker compose up -d --build
+```
+
+**Note on first boot:** The `ollama` container will take several minutes to automatically download the AI models (`llama3.1:8b` and `qwen2.5vl:3b`). The `file-processor` and `backend` containers will automatically wait for this to finish before booting.
+
+### 3. Access the Application
+
+Once all containers are healthy, open your browser to:
+- **http://localhost:5173**
+
+You can drop receipts directly into the `DOCUMENT_DATA_PATH/inbox/` folder on your machine, or connect to the SMB share at `\\localhost\inbox` (User: `scanner`, Pass: `password123`).
 
 ---
 
-## 9. Project Directory Structure
+## Service Endpoints
 
-```
-reflex-tech-bookkeeping-app/
-├── backend/                        # Go 1.27 Fiber API
-│   ├── main.go                     # Entry point, routes, fsnotify inbox watcher
-│   ├── controllers/                # REST handlers (transactions, reports, invoices, backups)
-│   ├── db/                         # PostgreSQL connection, migrations & COA seed
-│   ├── models/                     # Data models & exact Money integer-cent struct
-│   ├── events/                     # Server-Sent Events (SSE) live broadcaster
-│   ├── utils/                      # Reconciliation engine, OCR processor, OFX/CSV parsers
-│   └── Dockerfile.dev              # Backend container build
-├── file-processor/                 # Go 1.26.5 Ingestion & OCR Microservice
-│   ├── main.go                     # Image normalization, pdftoppm, Tesseract & Ollama dispatch
-│   ├── go.mod                      # fasthttp, disintegration/imaging
-│   └── Dockerfile.dev              # Container build with Poppler & Tesseract
-├── frontend/                       # React 19 Client
-│   ├── src/
-│   │   ├── components/             # LedgerGrid, DetailDrawer, InvoicingModal, ReportsModal
-│   │   ├── pages/LedgerPage.tsx    # Single-page unified ledger shell
-│   │   ├── services/api.ts         # Type-safe API client
-│   │   └── types/models.ts         # TypeScript data contracts
-│   ├── package.json                # React 19, Tailwind CSS 4, Vite 8
-│   └── eslint.config.js            # Flat ESLint configuration
-├── nginx/
-│   └── nginx.conf                  # Reverse proxy exposing port 5173
-├── ollama/                         # Local AI Runtime
-│   ├── Dockerfile                  # Containerized Ollama
-│   └── entrypoint.sh               # Auto-pulls llama3.1 and qwen2.5vl models
-├── document-data/                  # Mounted storage directory
-│   ├── inbox/                      # Incoming scanner / upload drop zone
-│   └── processed/                  # Stored receipts and statement files
-├── docker-compose.yml              # Base service orchestration
-├── docker-compose.nvidia.yml       # CUDA GPU overlay
-├── docker-compose.amd.yml          # ROCm GPU overlay
-├── start.sh                        # Hardware-detecting startup script (macOS/Linux)
-├── start.bat                       # Hardware-detecting startup script (Windows)
-├── stop.sh                         # Graceful shutdown script (macOS/Linux)
-├── stop.bat                        # Graceful shutdown script (Windows)
-└── README.md                       # Complete platform documentation
-```
+Only Nginx and the SMB share are exposed to your host machine. Everything else communicates securely inside the internal Docker network.
+
+| Service | Access |
+|---------|--------|
+| Web App (via Nginx) | http://localhost:5173 |
+| SMB Share (scanner drop) | `\\localhost\inbox` |
 
 ---
 
-## 10. Troubleshooting & Maintenance
+## Environment Variables
 
-### Checking Container Health
-```bash
-docker compose ps
-```
-
-### Viewing Logs in Real Time
-```bash
-# View all services
-docker compose logs -f
-
-# View backend only
-docker compose logs -f backend
-
-# View local AI Ollama download progress
-docker compose logs -f ollama
-```
-
-### Verifying System Status via API
-```bash
-curl -s http://localhost:5173/api/health
-```
-
-### Permissions on Network Scanner Inbox
-If network scanner uploads fail with permission errors, ensure `./document-data/inbox` is writable:
-```bash
-chmod -R 777 ./document-data
-```
-
-### Fresh Reset / Re-indexing
-To completely wipe all records and start with a fresh blank database:
-```bash
-docker compose down -v
-./start.sh
-```
-*(Note: `-v` deletes the PostgreSQL volume. Export a system backup first from Settings if you have data you wish to keep!)*
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POSTGRES_USER` | `user` | PostgreSQL username |
+| `POSTGRES_PASSWORD` | `pass` | PostgreSQL password |
+| `POSTGRES_DB` | `reflex-tech-bookkeeping-app-postgres-db` | Database name |
+| `DOCUMENT_DATA_PATH` | `./document-data` | Host path where the inbox/processed folders will be created |
+| `FILE_PROCESSOR_URL` | `http://file-processor:8081/process` | Internal Docker URL for the AI processor |
+| `OLLAMA_HOST` | `ollama:11434` | Internal Docker URL for Ollama |
 
 ---
 
