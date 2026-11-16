@@ -1,51 +1,144 @@
 package controllers
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/utils"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"gorm.io/gorm"
 )
 
 // GetTransactions fetches all BankTransactions along with their linked
 // Expenses and the physical Receipts, so the frontend can display them.
-// Expects optional query parameters: ?year=2026 & month=8 & search=walmart
+//
+// Optional query parameters:
+//   - ?periodId=123     filter to transactions within that period's date range
+//   - ?accountId=5      filter by ChartAccountID (which bank account)
+//   - ?search=walmart   ILIKE search on description
 func GetTransactions(c fiber.Ctx) error {
-	year := c.Query("year")
-	month := c.Query("month")
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
+	startDate := c.Query("startDate")
+	endDate := c.Query("endDate")
+	accountId := c.Query("accountId")
 	search := c.Query("search")
 
 	var txs []models.BankTransaction
-	query := db.DB.Model(&models.BankTransaction{})
+	query := db.DB.Model(&models.BankTransaction{}).Where("COALESCE(review_status, '') NOT IN ('IGNORED', 'DELETED')")
 
-	if year != "" {
-		query = query.Where("EXTRACT(YEAR FROM date) = ?", year)
+	// Filter by date range if provided
+	query = ApplyDateRange(query, "date", startDate, endDate)
+
+	if accountId != "" {
+		if parsedID, err := strconv.ParseUint(accountId, 10, 32); err == nil {
+			accountIDs := GetAccountAndDescendantIDs(uint(parsedID))
+			query = query.Where("chart_account_id IN ? OR category_account_id IN ?", accountIDs, accountIDs)
+		} else {
+			query = query.Where("chart_account_id = ? OR category_account_id = ?", accountId, accountId)
+		}
 	}
-	if month != "" {
-		query = query.Where("EXTRACT(MONTH FROM date) = ?", month)
-	}
+
+	search = strings.TrimSpace(search)
 	if search != "" {
-		query = query.Where("description ILIKE ?", "%"+search+"%")
+		lowerSearch := "%" + strings.ToLower(search) + "%"
+		if val, err := strconv.ParseFloat(strings.TrimPrefix(search, "$"), 64); err == nil {
+			query = query.Where("LOWER(description) LIKE ? OR LOWER(notes) LIKE ? OR LOWER(fit_id) LIKE ? OR ABS(amount) = ?", lowerSearch, lowerSearch, lowerSearch, math.Abs(val))
+		} else {
+			query = query.Where("LOWER(description) LIKE ? OR LOWER(notes) LIKE ? OR LOWER(fit_id) LIKE ?", lowerSearch, lowerSearch, lowerSearch)
+		}
 	}
 
-	query.Order("date DESC").Preload("Expenses.Receipts").Find(&txs)
+	statusFilter := strings.ToUpper(strings.TrimSpace(c.Query("status")))
+	switch statusFilter {
+	case "NEEDS_ATTENTION":
+		query = query.Where(needsAttentionClause)
+	case "UNLINKED":
+		query = query.Where("amount < 0 AND (allocation_status IS NULL OR allocation_status = '' OR allocation_status = 'UNLINKED')")
+	case "BALANCED":
+		query = query.Where("allocation_status = 'BALANCED' OR amount >= 0")
+	case "LINKED":
+		query = query.Where("allocation_status = 'BALANCED'")
+	case "PARTIALLY_ALLOCATED", "PARTIAL":
+		query = query.Where("allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL')")
+	case "OVER_ALLOCATED":
+		query = query.Where("allocation_status = 'OVER_ALLOCATED'")
+	case "UNCATEGORIZED":
+		query = query.Where("amount != 0").
+			Where("category_account_id IS NULL").
+			Where("(id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed') OR (amount < 0 AND allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL')))").
+			Where("NOT (amount > 0 AND chart_account_id IN (SELECT id FROM chart_accounts WHERE type = 'LIABILITY'))")
+	}
+
+	pageStr := c.Query("page", "1")
+	limitStr := c.Query("limit", "50")
+	page, _ := strconv.Atoi(pageStr)
+	limit, _ := strconv.Atoi(limitStr)
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 50
+	}
+	offset := (page - 1) * limit
+
+	var total int64
+	query.Count(&total)
+
+	sortBy := strings.ToLower(strings.TrimSpace(c.Query("sortBy", "date")))
+	sortOrder := strings.ToUpper(strings.TrimSpace(c.Query("sortOrder", "desc")))
+	if sortOrder != "ASC" {
+		sortOrder = "DESC"
+	}
+	secondaryOrder := "date " + sortOrder
+
+	priorityOrder := `CASE
+		WHEN COALESCE(review_status, '') IN ('WARNINGS_IGNORED', 'IGNORED') THEN 5
+		WHEN COALESCE(allocation_status, 'UNLINKED') = 'UNLINKED' AND has_suggestions = true THEN 0
+		WHEN allocation_status = 'OVER_ALLOCATED' THEN 1
+		WHEN allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL') THEN 2
+		WHEN amount < 0 AND COALESCE(allocation_status, 'UNLINKED') = 'UNLINKED' THEN 3
+		ELSE 4
+	END ASC, ` + secondaryOrder
+
+	orderClause := priorityOrder
+	if sortBy == "amount" {
+		orderClause = "ABS(amount) " + sortOrder + ", date DESC"
+	} else if sortOrder == "ASC" {
+		orderClause = "date ASC"
+	}
+
+	query.Order(orderClause).Preload("Expenses", func(db *gorm.DB) *gorm.DB {
+		return db.Where("expenses.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = ?)", "confirmed")
+	}).Preload("Expenses.Receipts").Preload("ChartAccount").Preload("Category").Offset(offset).Limit(limit).Find(&txs)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":       "success",
 		"transactions": txs,
+		"total":        total,
+		"page":         page,
+		"limit":        limit,
 	})
 }
 
 // GetTransaction fetches a single BankTransaction and returns confirmed and suggested
 // expense links as separate arrays so the UI can distinguish them without ambiguity.
 func GetTransaction(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	id := c.Params("id")
 	var tx models.BankTransaction
 
-	if err := db.DB.First(&tx, "id = ?", id).Error; err != nil {
+	if err := db.DB.Preload("ChartAccount").Preload("Category").First(&tx, "id = ?", id).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Transaction not found"})
 	}
 
@@ -53,36 +146,107 @@ func GetTransaction(c fiber.Ctx) error {
 	var confirmedExpenses []models.Expense
 	db.DB.Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
 		Where("ebt.bank_transaction_id = ? AND ebt.status = ?", tx.ID, "confirmed").
-		Preload("Receipts").
+		Preload("Receipts").Preload("ChartAccount").Preload("BankTransactions", func(db *gorm.DB) *gorm.DB {
+			return db.Where("bank_transactions.id IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = ?)", "confirmed").
+				Order("bank_transactions.date ASC, bank_transactions.id ASC")
+		}).Preload("BankTransactions.ChartAccount").Preload("BankTransactions.Category").
+		Order("expenses.timestamp ASC, expenses.id ASC").
 		Find(&confirmedExpenses)
 
-	// Load suggested expenses — scoring system guesses awaiting user action.
-	var suggestedExpenses []models.Expense
-	db.DB.Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
-		Where("ebt.bank_transaction_id = ? AND ebt.status = ?", tx.ID, "suggested").
-		Find(&suggestedExpenses)
+	// Load ranked suggested expenses (persisted reconciler guesses + scored open candidates).
+	suggestedExpenseCandidates, suggestedExpenses := utils.FindTransactionMatchCandidates(db.DB, tx, confirmedExpenses)
+
+	// Load linked invoice (if this bank transaction is matched to an invoice payment)
+	var linkedInvoice *models.Invoice
+	var inv models.Invoice
+	if err := db.DB.Preload("CategoryAccount").Where("bank_transaction_id = ?", tx.ID).First(&inv).Error; err == nil {
+		linkedInvoice = &inv
+	}
+
+	// Load suggested invoices for incoming deposits that are not yet linked to an invoice
+	var suggestedInvoices []models.Invoice
+	if linkedInvoice == nil && (tx.Amount.Dollars() > 0 || tx.TransactionType == "DEP") {
+		var openInvoices []models.Invoice
+		db.DB.Preload("CategoryAccount").Where("status IN ('SENT', 'PARTIALLY_PAID', 'OVERDUE')").Find(&openInvoices)
+		txAmt := tx.Amount.Dollars()
+		descLower := strings.ToLower(tx.Description)
+		for _, oInv := range openInvoices {
+			invBal := oInv.BalanceDue.Dollars()
+			if invBal <= 0 {
+				invBal = oInv.TotalAmount.Dollars() - oInv.AmountPaid.Dollars()
+			}
+			isExactAmount := math.Abs(invBal-txAmt) < 0.005 || math.Abs(oInv.TotalAmount.Dollars()-txAmt) < 0.005
+			isNameMatch := strings.Contains(descLower, strings.ToLower(oInv.ClientName)) || (len(oInv.ClientName) > 2 && strings.Contains(descLower, strings.ToLower(oInv.ClientName)))
+			if isExactAmount || isNameMatch {
+				suggestedInvoices = append(suggestedInvoices, oInv)
+			}
+		}
+	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"status":            "success",
-		"transaction":       tx,
-		"confirmedExpenses": confirmedExpenses,
-		"suggestedExpenses": suggestedExpenses,
+		"status":                     "success",
+		"transaction":                tx,
+		"confirmedExpenses":          confirmedExpenses,
+		"suggestedExpenses":          suggestedExpenses,
+		"suggestedExpenseCandidates": suggestedExpenseCandidates,
+		"linkedInvoice":              linkedInvoice,
+		"suggestedInvoices":          suggestedInvoices,
 	})
 }
 
+// ValidateBankAccount verifies that an account is active and belongs to ASSET or LIABILITY.
+func ValidateBankAccount(acc *models.ChartAccount) error {
+	if acc == nil {
+		return errors.New("bank account is required")
+	}
+	if !acc.Active {
+		return fmt.Errorf("cannot assign deactivated bank account '%s' (%s)", acc.Name, acc.Code)
+	}
+	if acc.Type != "ASSET" && acc.Type != "LIABILITY" {
+		return fmt.Errorf("bank account must be an ASSET or LIABILITY account (e.g. Checking or Credit Card), but '%s' is an %s account (%s)", acc.Name, acc.Type, acc.Code)
+	}
+	return nil
+}
+
+// ValidateTransactionCategory verifies that an account is active and belongs to a valid account type.
+func ValidateTransactionCategory(acc *models.ChartAccount) error {
+	if acc == nil {
+		return nil
+	}
+	if !acc.Active {
+		return fmt.Errorf("cannot assign deactivated category '%s' (%s)", acc.Name, acc.Code)
+	}
+	validTypes := map[string]bool{
+		"EXPENSE":   true,
+		"REVENUE":   true,
+		"EQUITY":    true,
+		"ASSET":     true,
+		"LIABILITY": true,
+	}
+	if !validTypes[acc.Type] {
+		return fmt.Errorf("transaction category must be a valid account type, but '%s' is an unknown %s account (%s)", acc.Name, acc.Type, acc.Code)
+	}
+	return nil
+}
+
 // CreateTransaction creates a manually entered bank transaction (no OFX import required).
-// bankStatementId is intentionally left null for manual entries.
+// BankStatementID is intentionally left null for manual entries.
 // The FITID is auto-generated to satisfy the unique constraint.
+// chartAccountId specifies the financial bank/credit card account (ASSET or LIABILITY).
+// categoryAccountId optionally specifies the transaction category (EXPENSE or REVENUE).
 func CreateTransaction(c fiber.Ctx) error {
 	type createInput struct {
-		Date            time.Time `json:"date"`
-		Description     string    `json:"description"`
-		Amount          float64   `json:"amount"`
-		TransactionType string    `json:"transactionType"`
-		// Year/Month are sent by the frontend from the URL params so the backend
-		// can validate the date falls within the correct accounting period.
-		Year  int `json:"year"`
-		Month int `json:"month"`
+		Date              *string `json:"date"`
+		Description       string  `json:"description"`
+		Amount            models.Money   `json:"amount"`
+		TransactionType   string  `json:"transactionType"`
+		ChartAccountID    *uint   `json:"chartAccountId"`
+		CategoryAccountID *uint   `json:"categoryAccountId"`
+		Notes             string  `json:"notes"`
+	}
+
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
 	}
 
 	var input createInput
@@ -90,42 +254,91 @@ func CreateTransaction(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid input"})
 	}
 
-	// Validate the date falls within the requested year/month.
-	if input.Year > 0 && input.Month > 0 {
-		if input.Date.Year() != input.Year || int(input.Date.Month()) != input.Month {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "The transaction date must be within the selected month",
-			})
+	var txTime time.Time
+	if input.Date != nil && *input.Date != "" {
+		if t, err := time.Parse(time.RFC3339, *input.Date); err == nil {
+			txTime = t
+		} else if t, err := time.Parse("2006-01-02", *input.Date); err == nil {
+			txTime = t
 		}
+	}
+	if txTime.IsZero() {
+		txTime = time.Now().UTC()
+	}
 
-		if utils.IsMonthClosed(input.Year, input.Month) {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot create a transaction in a closed accounting period."})
+	// Guard against creating transactions in a closed period
+	if utils.IsDateInClosedPeriod(txTime) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Cannot create a transaction in a closed accounting period.",
+		})
+	}
+
+	// Validate bank/source account (must be active ASSET or LIABILITY)
+	if input.ChartAccountID == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Bank / Card account is required for transactions",
+		})
+	}
+	var bankAccount models.ChartAccount
+	if err := db.DB.First(&bankAccount, *input.ChartAccountID).Error; err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Bank account not found"})
+	}
+	if err := ValidateBankAccount(&bankAccount); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	// Validate category account if provided: must be active EXPENSE (5xxx) or REVENUE (4xxx)
+	if input.CategoryAccountID != nil {
+		var catAccount models.ChartAccount
+		if err := db.DB.First(&catAccount, *input.CategoryAccountID).Error; err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Category account not found"})
 		}
-	} else {
-		if utils.IsMonthClosed(input.Date.Year(), int(input.Date.Month())) {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot create a transaction in a closed accounting period."})
+		if err := ValidateTransactionCategory(&catAccount); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
 	}
 
+	allocationStatus := "UNLINKED"
+	if input.Amount.Dollars() >= 0 {
+		allocationStatus = "BALANCED"
+	}
+
 	tx := models.BankTransaction{
-		Date:            input.Date,
-		Description:     input.Description,
-		Amount:          input.Amount,
-		TransactionType: input.TransactionType,
+		Date:              txTime,
+		Description:       input.Description,
+		Amount:            input.Amount,
+		TransactionType:   input.TransactionType,
+		ChartAccountID:    input.ChartAccountID,
+		CategoryAccountID: input.CategoryAccountID,
+		Notes:             input.Notes,
 		// Synthetic FITID satisfies the unique constraint on manually entered rows.
-		FITID: fmt.Sprintf("MANUAL-%d", time.Now().UnixNano()),
+		FITID:            fmt.Sprintf("MANUAL-%d", time.Now().UnixNano()),
+		IsManual:         true,
+		AllocationStatus: allocationStatus,
+		ReviewStatus:     "APPROVED",
 		// BankStatementID left nil — manual entries don't belong to an imported statement.
+	}
+
+	// Auto-evaluate bank rules if category is unassigned
+	if tx.CategoryAccountID == nil {
+		utils.ApplyBankRulesToTransaction(&tx, db.DB)
 	}
 
 	if err := db.DB.Create(&tx).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create transaction"})
 	}
 
+	utils.RunReconciliation()
+	broadcastReconciliationSync()
+
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "success", "transaction": tx})
 }
 
-// UpdateTransaction allows updating fields on a transaction
+// UpdateTransaction allows updating fields on a transaction.
 func UpdateTransaction(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	id := c.Params("id")
 	var tx models.BankTransaction
 
@@ -133,32 +346,132 @@ func UpdateTransaction(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Transaction not found"})
 	}
 
-	if tx.ReconciliationStatus != "PENDING_CLOSED" && utils.IsMonthClosed(tx.Date.Year(), int(tx.Date.Month())) {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot update a transaction in a closed accounting period."})
+	if utils.IsDateInClosedPeriod(tx.Date) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Cannot update a transaction in a closed accounting period.",
+		})
 	}
 
 	type updateInput struct {
-		Description string  `json:"description"`
-		Amount      float64 `json:"amount"`
+		Date              *string  `json:"date"`
+		Description       *string  `json:"description"`
+		Amount            *models.Money   `json:"amount"`
+		ChartAccountID    *uint    `json:"chartAccountId"`
+		CategoryAccountID *uint    `json:"categoryAccountId"`
+		Notes             *string  `json:"notes"`
 	}
 
 	var input updateInput
 	if err := c.Bind().JSON(&input); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid input"})
 	}
+	var raw map[string]interface{}
+	_ = json.Unmarshal(c.Body(), &raw)
 
-	db.DB.Model(&tx).Updates(map[string]interface{}{
-		"description": input.Description,
-		"amount":      input.Amount,
-	})
+	updates := map[string]interface{}{}
+	if input.Description != nil {
+		updates["description"] = *input.Description
+	}
+	if input.Notes != nil {
+		updates["notes"] = *input.Notes
+	}
 
-	utils.UpdateReconciliationStatuses()
+	// For imported transactions, prevent tampering with statement data (amount, date, source account)
+	if !tx.IsManual {
+		if input.Amount != nil && (*input.Amount).Dollars() != tx.Amount.Dollars() {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "Cannot modify amount of an imported bank statement transaction",
+			})
+		}
+		if input.ChartAccountID != nil && (tx.ChartAccountID == nil || *input.ChartAccountID != *tx.ChartAccountID) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "Cannot modify source bank account of an imported bank statement transaction",
+			})
+		}
+	} else {
+		if input.Amount != nil {
+			updates["amount"] = *input.Amount
+		}
+	}
+
+	// Validate bank/source account if provided (must be active ASSET or LIABILITY)
+	if tx.IsManual && input.ChartAccountID != nil {
+		var bankAccount models.ChartAccount
+		if err := db.DB.First(&bankAccount, *input.ChartAccountID).Error; err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Bank account not found"})
+		}
+		if err := ValidateBankAccount(&bankAccount); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+		updates["chart_account_id"] = input.ChartAccountID
+	}
+
+	// Validate category account or support clearing category to Uncategorized via explicit null or 0.
+	_, hasCategoryKey := raw["categoryAccountId"]
+	if input.CategoryAccountID != nil && *input.CategoryAccountID > 0 {
+		var catAccount models.ChartAccount
+		if err := db.DB.First(&catAccount, *input.CategoryAccountID).Error; err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Category account not found"})
+		}
+		if err := ValidateTransactionCategory(&catAccount); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+		updates["category_account_id"] = input.CategoryAccountID
+
+		// Sync category to linked expenses ONLY if it's a 1:1 link (not a split) and the category is an EXPENSE account
+		if catAccount.Type == "EXPENSE" {
+			var linkedExpCount int64
+			db.DB.Model(&models.ExpenseBankTransaction{}).Where("bank_transaction_id = ? AND status = 'confirmed'", tx.ID).Count(&linkedExpCount)
+			if linkedExpCount == 1 {
+				db.DB.Exec("UPDATE expenses SET chart_account_id = ? WHERE id IN (SELECT expense_id FROM expense_bank_transactions WHERE bank_transaction_id = ? AND status = 'confirmed')", input.CategoryAccountID, tx.ID)
+			}
+		}
+	} else if hasCategoryKey && (input.CategoryAccountID == nil || *input.CategoryAccountID == 0) {
+		// Explicit null or 0 means un-categorize
+		updates["category_account_id"] = nil
+		var linkedExpCount int64
+		db.DB.Model(&models.ExpenseBankTransaction{}).Where("bank_transaction_id = ? AND status = 'confirmed'", tx.ID).Count(&linkedExpCount)
+		if linkedExpCount == 1 {
+			db.DB.Exec("UPDATE expenses SET chart_account_id = NULL WHERE id IN (SELECT expense_id FROM expense_bank_transactions WHERE bank_transaction_id = ? AND status = 'confirmed')", tx.ID)
+		}
+	}
+
+	if input.Date != nil && *input.Date != "" {
+		var newDate time.Time
+		if t, err := time.Parse(time.RFC3339, *input.Date); err == nil {
+			newDate = t
+		} else if t, err := time.Parse("2006-01-02", *input.Date); err == nil {
+			newDate = t
+		}
+
+		if !newDate.IsZero() {
+			if !tx.IsManual && !newDate.Equal(tx.Date) {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"error": "Cannot modify date of an imported bank statement transaction",
+				})
+			}
+			if utils.IsDateInClosedPeriod(newDate) {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+					"error": "Cannot change transaction date into a closed accounting period.",
+				})
+			}
+			updates["date"] = newDate
+		}
+	}
+
+	db.DB.Model(&tx).Updates(updates)
+
+	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success", "transaction": tx})
 }
 
-// DeleteTransaction deletes a transaction and nullifies the BankTransactionID on its linked expenses
+// DeleteTransaction soft-deletes a transaction, unlinks it, and moves it to Deleted Items.
 func DeleteTransaction(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	id := c.Params("id")
 	var tx models.BankTransaction
 
@@ -166,19 +479,32 @@ func DeleteTransaction(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Transaction not found"})
 	}
 
-	if tx.ReconciliationStatus != "PENDING_CLOSED" && utils.IsMonthClosed(tx.Date.Year(), int(tx.Date.Month())) {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot delete a transaction in a closed accounting period."})
+	if utils.IsDateInClosedPeriod(tx.Date) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Cannot delete a transaction in a closed accounting period.",
+		})
 	}
 
-	// Delete all join table rows for this transaction before deleting the transaction itself.
-	// This covers both confirmed and suggested links so nothing is left dangling.
+	// Delete all join table rows for this transaction so it's unlinked from active books
 	db.DB.Where("bank_transaction_id = ?", id).Delete(&models.ExpenseBankTransaction{})
 
-	if err := db.DB.Delete(&tx).Error; err != nil {
+	now := time.Now()
+	if err := db.DB.Model(&tx).Updates(map[string]interface{}{
+		"review_status": "DELETED",
+		"deleted_at":    now,
+	}).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete transaction"})
 	}
 
-	utils.UpdateReconciliationStatuses()
+	db.DB.Create(&models.ItemAuditLog{
+		ItemType: "transaction",
+		ItemID:   tx.ID,
+		Action:   "DELETED",
+		GroupID:  fmt.Sprintf("G%d", time.Now().UnixNano()),
+	})
+
+	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success"})
 }

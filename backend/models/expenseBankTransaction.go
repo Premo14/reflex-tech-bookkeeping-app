@@ -16,7 +16,8 @@ type ExpenseBankTransaction struct {
 	BankTransactionID uint `gorm:"primaryKey" json:"bankTransactionID"`
 
 	// "suggested" = scoring system's best guess, awaiting user confirmation.
-	// "confirmed" = user accepted the link, or auto-matched with high confidence.
+	// "confirmed" = user accepted the link, or auto-linked with high confidence.
+	// "unlinked"  = user manually unlinked this pair; reconciler will never auto-link or auto-suggest this pair again.
 	Status string `gorm:"not null" json:"status"`
 
 	CreatedAt time.Time `json:"createdAt"`

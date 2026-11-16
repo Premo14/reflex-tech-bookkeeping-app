@@ -10,6 +10,9 @@ import (
 // ConvertHeicToPng decodes iphone HEIC images and saves them as PNGs
 // so they can be viewed in a standard browser.
 func ConvertHeicToPng(inputPath, outputPath string) error {
+	// Enable SafeEncoding so libde265 copies YCbCr planes into Go-managed memory
+	// before defer dec.Free() runs inside goheif.Decode (prevents SIGSEGV use-after-free).
+	goheif.SafeEncoding = true
 
 	// Open the original HEIC file
 	file, err := os.Open(inputPath)

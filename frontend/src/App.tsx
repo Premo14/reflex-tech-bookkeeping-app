@@ -1,17 +1,16 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-
-import Dashboard from "./pages/Dashboard";
-import MonthLedger from "./pages/MonthLedger";
-import DetailsView from "./pages/DetailsView";
+import LedgerPage from "./pages/LedgerPage";
+import { ConfirmationProvider } from "./components/ui/ConfirmDialog";
+import { TooltipProvider } from "./components/ui/Tooltip";
+import { NavigationStackProvider } from "./context/NavigationStackProvider";
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/ledger/:year/:month" element={<MonthLedger />} />
-        <Route path="/details/:type/:id" element={<DetailsView />} />
-      </Routes>
-    </BrowserRouter>
+    <TooltipProvider>
+      <ConfirmationProvider>
+        <NavigationStackProvider>
+          <LedgerPage />
+        </NavigationStackProvider>
+      </ConfirmationProvider>
+    </TooltipProvider>
   );
 }

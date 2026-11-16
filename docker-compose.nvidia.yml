@@ -1,0 +1,11 @@
+# NVIDIA GPU override - merged with docker-compose.yml by the start script.
+# Do not run this file directly. Use ./start.sh or start.bat instead.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

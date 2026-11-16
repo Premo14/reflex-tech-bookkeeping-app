@@ -1,158 +1,238 @@
-# Reflex Tech Bookkeeping App
+# Reflex Tech Bookkeeping Platform
 
-A single-entry bookkeeping system designed to eliminate manual data entry. The application accepts raw receipt images and bank statement exports, extracts structured data using a fully local AI pipeline, automatically reconciles the two datasets, and presents everything through a clean web interface — with no data ever leaving your network.
+**Company**: Reflex Technologies LLC (Utica, NY)  
+**Product**: Local-first automated bookkeeping and financial intelligence web application, architected with a seamless evolution path to double-entry multi-client accounting.
+
+---
+
+## Executive Summary & Core Tenets
+
+Reflex Bookkeeping is built from the ground up for solopreneurs, non-financial small business owners, and CPAs. It eliminates manual bookkeeping toil through local multimodal AI vision extraction, direct LAN scanner drops, and intelligent statement reconciliation — with zero data leaving your network, zero cloud subscription fees, and complete cryptographic auditability.
+
+### Key Tenets
+1. **100% Private & Fully Offline-Capable**: Powered by local private LLM & Vision models (`qwen2.5vl:3b` & `llama3.1:8b` via Ollama). No financial statements, receipt images, vendor details, or banking credentials are ever transmitted to third-party cloud servers.
+2. **Effortless Out-of-the-Box Operation**: Starts in a single command (`./start.sh` or `start.bat`). Environment files, database migrations, Chart of Accounts, and directories initialize automatically.
+3. **Exact Financial Precision**: All monetary values are calculated using exact integer cents (`models.Money`), eliminating IEEE-754 floating-point rounding errors.
+4. **LAN Network Scanner Drops (SMB Share)**: Physical office scanners can deposit paper receipts straight to `\\<server-ip>\inbox` over Samba SMB without manual web uploads.
+5. **Cryptographic Auditability & Closed-Period Lockout**: SHA-256 deduplication hashing for receipts, strict period locking preventing retroactive tampering, and 1-Click CPA Tax Packs (.zip).
+6. **GAAP-Conforming Hierarchy & Double-Entry Verification**: Single-entry ledger workflow today paired with a mathematical GAAP Trial Balance proof confirming $\sum \text{Debits} \equiv \sum \text{Credits}$.
 
 ---
 
 ## Table of Contents
 
-1. [How It Works — End to End](#how-it-works--end-to-end)
-2. [Architecture Overview](#architecture-overview)
-3. [Tech Stack](#tech-stack)
-4. [Data Models](#data-models)
-5. [API Reference](#api-reference)
-6. [Running the Application](#running-the-application)
-7. [Environment Variables](#environment-variables)
-8. [Directory Structure](#directory-structure)
+1. [Quick Start (2-Step Launch)](#1-quick-start-2-step-launch)
+2. [Architecture Overview](#2-architecture-overview)
+3. [End-to-End Workflow & Capabilities](#3-end-to-end-workflow--capabilities)
+   - [Document Intake & Ingestion](#a-four-document-intake-pipelines)
+   - [AI Receipt Vision & PDF OCR Pipeline](#b-local-ai-receipt-vision--pdf-ocr-pipeline)
+   - [Bank Statement Import & FITID Deduplication](#c-bank-statement-import--fitid-deduplication)
+   - [Intelligent Reconciliation Engine](#d-intelligent-reconciliation-engine)
+   - [Unified Ledger & Detail Drawer with Hotkeys](#e-unified-ledger--detail-drawer-with-hotkeys)
+   - [Client Invoicing & Accounts Receivable (A/R)](#f-client-invoicing--accounts-receivable-ar)
+   - [Automated Bank Rules Engine](#g-automated-bank-rules-engine)
+   - [Closed Period Lockout & Preflight Audits](#h-closed-period-lockout--preflight-audits)
+   - [Financial & CPA Tax Reports (6 Core Reports)](#i-financial--cpa-tax-reports-6-core-reports)
+   - [Data Sovereignty: Full JSON Backup & Restore](#j-data-sovereignty-full-json-backup--restore)
+4. [Hardware Auto-Detection & GPU Acceleration](#4-hardware-auto-detection--gpu-acceleration)
+5. [Tech Stack & Versions](#5-tech-stack--versions)
+6. [Data Models Reference](#6-data-models-reference)
+7. [API Reference](#7-api-reference)
+8. [Configuration & Environment Variables](#8-configuration--environment-variables)
+9. [Project Directory Structure](#9-project-directory-structure)
+10. [Troubleshooting & Maintenance](#10-troubleshooting--maintenance)
 
 ---
 
-## How It Works — End to End
+## 1. Quick Start (2-Step Launch)
 
-### Step 1 — Getting Files Into the App
+The platform is designed to run with zero manual configuration. The only host requirement is **Docker Desktop** (or Docker Engine with Docker Compose).
 
-Files enter the system through **four ingestion paths**:
-
-**A. Web UI Upload**
-Users upload receipt images or bank statement files directly through the browser. The frontend sends the file to the backend API (`POST /upload`), which saves it into the `document-data/inbox/` folder.
-
-**B. Network Scanner (SMB Share)**
-A Samba container exposes the same `document-data/inbox/` folder as a network share named `inbox` (accessible via `\\<server-ip>\inbox`). A physical document scanner, smartphone scanning app, or any networked device can drop files directly into this share. Credentials: `scanner / password123`.
-
-**C. Direct File System Drop**
-Because the backend continuously monitors the folder, users or automated scripts running on the host machine can simply move or copy files directly into the `document-data/inbox/` directory.
-
-**D. Syncthing & Synctrain (Mobile Sync)**
-Users can use Syncthing and Synctrain to automatically sync receipt photos taken on their mobile devices directly to the `document-data/inbox/` folder on the server.
-
----
-
-### Step 2 — File Watcher & Ingestion
-
-The backend runs a **background file watcher** (`fsnotify`) that monitors `document-data/inbox/` continuously. When a new file appears:
-
-1. **Debounce** — A short delay absorbs rapid OS-level write events caused by large file copies, ensuring the file is fully written before processing begins.
-2. **Extension validation** — Only known file types are accepted:
-   - Receipt images: `.jpg`, `.jpeg`, `.png`, `.heic`
-   - PDF receipts: `.pdf`
-   - Bank statements: `.ofx`, `.qfx`
-3. **SHA-256 deduplication** — The file is hashed. If a matching hash already exists in the database, the file is silently rejected to prevent duplicate imports.
-4. **HEIC conversion** — iPhone `.heic` photos are decoded by `goheif` and re-encoded as `.png` in memory before further processing.
-5. **Move to processed** — The file is moved from `inbox/` to `processed/`, and a `Receipt` or `BankStatement` database record is created with its path, extension, and hash.
-
----
-
-### Step 3 — AI Extraction Pipeline (Receipt & PDF Files)
-
-Once a receipt file is saved to the database, it is forwarded to the **File Processor** service running on port `8081`. Two separate paths exist depending on file type:
-
-#### Image Path (`.jpg`, `.jpeg`, `.png`)
-
-1. The image is POSTed as `multipart/form-data` to the file processor.
-2. **PIL / Pillow** resizes the image: very large photos (e.g. 4000px+ from a camera) are first down-stepped to 2000px using box filtering to avoid Moiré aliasing artifacts, then down to a maximum of 1200px using LANCZOS interpolation. EXIF orientation metadata is applied so the image is never sideways or upside-down.
-3. The resized image is base64-encoded and sent to **Ollama** running the `qwen2.5vl:3b` vision model.
-4. The vision model reads the receipt image directly and returns a structured JSON object.
-
-#### PDF Path (`.pdf`)
-
-1. The PDF is saved to disk and each page is rasterised to a PNG at 150 DPI using **`pdftoppm`** (from Poppler Utils).
-2. **Tesseract OCR** runs on each page image and extracts raw text.
-3. The concatenated OCR text from all pages is sent as a text prompt to **Ollama** running `llama3.1:8b` (a text-only LLM).
-4. The model structures the raw OCR output into a typed JSON expense object.
-
-#### Extracted JSON Schema (both paths)
-
-```json
-{
-  "timestamp": "2023-08-16T18:51:49Z",
-  "vendor": "Walmart",
-  "description": "Groceries",
-  "amount": 181.13,
-  "tender": "VISA"
-}
+### Step 1: Clone the Repository
+```bash
+git clone https://github.com/reflextechnologies/reflex-tech-bookkeeping-app.git
+cd reflex-tech-bookkeeping-app
 ```
 
-The backend saves this as an `Expense` record in PostgreSQL and links it to its parent `Receipt`.
+### Step 2: Run the Launch Script
+
+**On macOS or Linux:**
+```bash
+./start.sh
+```
+
+**On Windows (Command Prompt or double-click):**
+```cmd
+start.bat
+```
+
+That's it! The launch script automatically:
+1. Verifies Docker daemon status.
+2. Initializes your `.env` configuration file if one does not exist.
+3. Pre-creates the `document-data/inbox` and `document-data/processed` folders with write permissions.
+4. Auto-detects your host hardware (macOS CPU, Linux NVIDIA CUDA, Linux AMD ROCm, Windows CUDA/CPU).
+5. Orchestrates and starts all containers in detached mode.
+6. Pulls local AI models in the background while making the web UI ready immediately.
+
+### Stopping the Application
+To stop all services safely while preserving all database records and downloaded AI models:
+```bash
+# macOS / Linux
+./stop.sh
+
+# Windows
+stop.bat
+```
+
+### Service URLs
+| Service | URL / Path | Details |
+|---|---|---|
+| **Web Application** | `http://localhost:5173` | Unified client ledger, drawers, reports, and settings |
+| **Backend REST API** | `http://localhost:8080` (or `http://localhost:5173/api`) | Fiber v3 Go API |
+| **System Health API** | `http://localhost:5173/api/health` | Real-time status of DB, Ollama, File-Processor & storage |
+| **File Processor** | `http://localhost:8081` | Microservice handling resizing, Tesseract OCR & Ollama |
+| **Network Scanner SMB** | `\\<server-ip>\inbox` | SMB Share (user: `scanner`, pass: `password123`) |
+| **PostgreSQL Database** | `localhost:5432` | DB: `reflex-tech-bookkeeping-app-postgres-db` |
 
 ---
 
-### Step 4 — Bank Statement Parsing (`.ofx` / `.qfx` Files)
+## 2. Architecture Overview
 
-OFX/QFX files (exported from most major Canadian and US banks) are parsed using the **`ofxgo`** library. Each transaction element in the file becomes a `BankTransaction` record containing:
-
-- Transaction date
-- Description (merchant name from the bank)
-- Amount
-- Transaction type (`DEBIT`, `DEP`, `PAYMENT`, etc.)
-- `FITID` — the bank's own unique identifier, used as a unique key to prevent duplicate imports across overlapping statement exports
-
----
-
-### Step 5 — Automatic Reconciliation Engine
-
-After every new import (and after any manual link/unlink action), a multi-pass reconciliation algorithm runs across all unmatched records:
-
-**Pass 1 — Scored Direct Matching**
-
-Each unlinked `Expense` is scored against each `UNMATCHED` `BankTransaction`:
-
-| Signal | Points |
-|--------|--------|
-| Exact amount match | +50 |
-| Same-day date match | +30 |
-| 1-day date proximity | +20 |
-| 2-day date proximity | +10 |
-| Vendor name similarity (fuzzy) | +20 |
-
-- **Score ≥ 80** → auto-linked with status `confirmed`
-- **Score > 0** → saved as a `suggested` link for human review in the UI
-
-**Pass 2 — Split-Transaction Detection**
-
-A recursive subset-sum algorithm identifies groups of expenses from the same day whose amounts add up exactly to an unmatched transaction total. This handles cases like one bank debit covering multiple individual receipts.
-
-**Pass 3 — Status Propagation**
-
-Every `BankTransaction` and `Expense` is re-evaluated:
-- `MATCHED` — the sum of all linked confirmed expenses equals the transaction amount
-- `PARTIAL` — linked but amounts don't sum to the transaction total
-- `UNMATCHED` — no confirmed links exist
+```
+                      ┌──────────────────────────────────────────┐
+                      │          Local Network Scanner           │
+                      │     (SMB Drop: \\<ip>\inbox)             │
+                      └────────────────────┬─────────────────────┘
+                                           │
+ ┌─────────────────────────┐               │ SMB (ports 139, 445)
+ │   User Web Browser      │               ▼
+ │ React 19 Client (5173)  │     ┌───────────────────┐
+ └───────────┬─────────────┘     │  Samba SMB Share  │
+             │ HTTP              └─────────┬─────────┘
+             ▼                             │
+ ┌─────────────────────────┐               │ Mounts /mnt/inbox
+ │   Nginx Reverse Proxy   │               ▼
+ │   Port 5173             │    ┌─────────────────────────┐
+ └─────┬──────────────┬────┘    │  Watched Storage Root   │
+       │ /            │ /api    │  ./document-data/inbox  │
+       ▼              ▼         └──────────┬──────────────┘
+┌────────────┐  ┌───────────────────────┐  │
+│  Frontend  │  │   Backend API (Go)    │◄─┘ fsnotify watcher
+│  React 19  │  │   Fiber v3 (port 8080)│
+└────────────┘  └──────┬────────────┬───┘
+                       │            │
+      multipart /process│            │ SQL
+                       ▼            ▼
+         ┌───────────────────┐  ┌───────────────────┐
+         │  File Processor   │  │   PostgreSQL 18   │
+         │  fasthttp (8081)  │  │   (port 5432)     │
+         └─────────┬─────────┘  └───────────────────┘
+                   │ /api/generate
+                   ▼
+         ┌───────────────────┐
+         │  Ollama AI Engine │
+         │  qwen2.5vl:3b     │  (Vision: Images)
+         │  llama3.1:8b      │  (Text: PDFs / Reasoning)
+         └───────────────────┘
+```
 
 ---
 
-### Step 6 — Web Interface
+## 3. End-to-End Workflow & Capabilities
 
-The React frontend provides three primary views:
+### A. Four Document Intake Pipelines
+1. **Web Drag-and-Drop**: Upload receipt images (`.jpg`, `.png`, `.heic`), PDF receipts, or bank statements (`.ofx`, `.qfx`, `.qbo`) via the "Upload Files" button in the header. (Note: CSV bank uploads are disallowed as CSV schemas vary wildly across financial institutions; standardized OFX/QFX/QBO formats ensure deterministic transaction parsing).
+2. **Network Scanner (SMB Share)**: Any multi-function printer or document scanner on the office LAN can scan directly to `\\<server-ip>\inbox` using user `scanner` and password `password123`.
+3. **Local Directory Drop**: Host scripts or automated tools can drop files into `./document-data/inbox/`.
+4. **Mobile Camera Sync**: Syncthing or mobile photo sync apps can continuously deposit receipt camera photos directly into `./document-data/inbox/`.
 
-**Dashboard** — A summary of the current reconciliation state: how many transactions are matched, unmatched, or have AI-generated suggestions pending review.
+### B. Local AI Receipt Vision & PDF OCR Pipeline
+- **Background File Watcher**: Backend uses `fsnotify` with debounce to absorb partial writes from network scanners.
+- **SHA-256 Deduplication**: Every incoming file is cryptographically hashed; duplicate receipts are automatically detected and rejected to avoid double-counting.
+- **HEIC Decoding**: Apple iPhone `.heic` photos are decoded in-memory via `goheif` and converted to standard PNG.
+- **Two Specialized AI Extraction Paths**:
+  - **Images (`.jpg`, `.png`, `.heic`)**: Resized using box filtering and Lanczos interpolation to prevent Moiré artifacts while respecting EXIF orientation, base64-encoded, and read by the multimodal `qwen2.5vl:3b` vision model.
+  - **PDF Documents (`.pdf`)**: Converted to 300 DPI images via `pdftoppm`, processed through `tesseract` OCR, and parsed by `llama3.1:8b` text LLM.
+- **Extracted Fields**: Vendor, Purchase Date (RFC3339), Description, Total Amount (integer cents), Sales Tax Amount, Tender Type (`card`, `cash`, `check`), and Chart of Accounts category suggestion.
+- **Cash Tender Auto-Balancing**: Receipts with cash tender (`cash`, `cash / paper`) are automatically initialized as `BALANCED` since they do not appear on bank statements.
 
-**Month Ledger** — A paginated, filterable table of all bank transactions and expenses for a selected accounting period. Users can filter by status (`MATCHED`, `UNMATCHED`, `PARTIAL`), approve AI-suggested links in one click, manually link/unlink records, and mark expenses as cash (removing them from the reconciliation queue).
+### C. Bank Statement Import & FITID Deduplication
+- Supports standardized financial institution exports in `.ofx`, `.qfx`, and `.qbo` formats.
+- **FITID Unique Key**: Every transaction's bank reference ID (`FITID`) is indexed to guarantee overlapping statement exports never create duplicate ledger entries.
+- **Bank Deposits**: Deposits ($\ge 0$) automatically balance client invoices or revenue categories.
 
-**Detail View** — A two-column side-by-side view of a single `BankTransaction` and its linked `Expense(s)`. Supports a carousel when multiple expenses link to one transaction. Users can edit fields, view the physical receipt image or PDF in a modal, link or unlink records manually, and create a new matching record on the fly.
+### D. Intelligent Reconciliation Engine
+Runs automatically in the background on every import and manual edit:
+- **Pass 1 — Scored Direct Matching**: Scores unlinked expenses against unlinked bank debits based on exact amount match (+50 pts), same-day date match (+30 pts), date proximity (+10 to +20 pts), and vendor fuzzy text similarity (+20 pts). Scores $\ge 80$ are confirmed automatically; positive scores are surfaced as suggested links.
+- **Pass 2 — Split-Transaction Detection**: Subset-sum algorithm matches multiple receipts from the same day that sum exactly to a single composite bank debit.
+- **Pass 3 — Status Propagation**: Real-time evaluation into `BALANCED`, `PARTIALLY_ALLOCATED`, `OVER_ALLOCATED`, or `UNLINKED`.
+
+### E. Unified Ledger & Detail Drawer with Hotkeys
+- **High-Density Dual View**: Segments receipts and client invoices into clean pills (`[ Receipts & Slips (N) ]` and `[ Client Invoices (N) ]`).
+- **Inspection Canvas**: Slide-over drawer with interactive canvas for physical receipts featuring:
+  - Stepped Zoom In / Zoom Out (`+` / `-`)
+  - 90° Clockwise Rotation (`R`)
+  - Zoom Reset (`0`)
+  - Multi-page receipt navigation (`←` / `→`)
+- **Split Expense Modal**: Split a single receipt across multiple expense categories with exact integer-cent remainder allocation.
+- **Live Search**: Multi-field full-text search across `vendor`, `description`, `notes`, and bank reference `FITID`.
+
+### F. Client Invoicing & Accounts Receivable (A/R)
+- **Invoice Lifecycle**: Full tracking of `DRAFT`, `SENT`, `PARTIALLY_PAID`, `PAID`, `OVERDUE`, and `VOID` client invoices.
+- **Line Items & Tax**: Itemized tables with unit prices, quantities, and automatic sales tax computation.
+- **Printable Invoices**: Built-in clean printable layout for 1-click browser printing or PDF saving (`window.print()`).
+- **1-Click Bank Deposit Matching**: Rank candidate bank deposits by exact total, client name, and date proximity with 1-click settlement.
+
+### G. Automated Bank Rules Engine
+- Automated transaction categorization rules executed on statement import or batch-applied across historical records.
+- Condition operators: `contains`, `equals`, `starts_with`, `ends_with`, and `regex` with optional case-sensitivity.
+- **Live Rule Dry-Run Preview**: Test rule match counts against your current database before saving.
+- **Priority Reordering**: Drag-and-drop or rank rules by priority order.
+
+### H. Closed Period Lockout & Preflight Audits
+- **Books Closed Date**: Once books are closed through a specified date, all transactions, expenses, receipts, splits, and reconciliations on or before that date become strictly immutable (`HTTP 403 Forbidden`).
+- **Preflight Verification**: Blocks closing if any unlinked bank transactions or orphaned expenses exist in the target period.
+- **Audit Logging**: Every date change and item status alteration is recorded in `period_audit_logs` and `item_audit_logs`.
+
+### I. Financial & CPA Tax Reports (6 Core Reports)
+All reports support custom date ranges, active account filtering, and instant exports:
+1. **Profit & Loss (P&L)**: Revenue vs Operating Expenses, gross margin, and net operating income grouped by Chart of Accounts.
+2. **Cash Flow Statement**: Net cash flow tracking Cash & Cash Equivalents without credit card double-counting.
+3. **Vendor Spend & 1099-NEC Monitoring**: Aggregated payee spend with automated \$600 IRS reporting threshold badges and contractor count tracking.
+4. **Accounts Receivable (A/R) Aging**: Balances bucketed into Current, 1–30, 31–60, 61–90, and 90+ days overdue.
+5. **Form 1040 Schedule C Tax Summary**:
+   - Lines 1–31 IRS tax line mapping.
+   - Form 1040-ES Quarterly Estimated Tax projections and Schedule SE self-employment tax calculations.
+   - IRC § 162 Business Mileage Optimizer (compares 2024–2026 IRS standard mileage rates against actual vehicle expenses).
+   - IRC § 280A Simplified Home Office Deduction calculator with estimated tax savings.
+6. **GAAP Trial Balance & Double-Entry Proof**:
+   - Denormalizes single-entry banking and cash flows into debits and credits.
+   - Live banner mathematically confirming $\sum \text{Debits} \equiv \sum \text{Credits}$ with \$0.00 variance.
+   - 4 Health Cards: Total Debits, Total Credits, Net Variance, Active Accounts.
+   - 1-Click CPA Trial Balance CSV Export.
+7. **1-Click CPA Tax Pack (.zip)**: Bundles CSV registers, Schedule C summary, and SHA-256 verified receipt images into a single zip archive for your accountant.
+
+### J. Data Sovereignty: Full JSON Backup & Restore
+- **1-Click Backup**: Download a complete, self-contained JSON snapshot containing company profile, Chart of Accounts, bank statements, transactions, receipts, invoices, bank rules, and audit logs (`GET /api/system/backup/export`).
+- **1-Click Restore**: Safely upload and restore a JSON snapshot (`POST /api/system/backup/restore`) with transactional integrity and automatic reconciliation recalculation.
 
 ---
 
-### Step 7 — Accounting Period Close
+## 4. Hardware Auto-Detection & GPU Acceleration
 
-When a month is complete, a user can **close** the accounting period. The system enforces that:
-- No `UNMATCHED` transactions remain
-- No orphaned (unlinked, non-cash) expenses remain
+The `start.sh` and `start.bat` scripts inspect your machine and apply the optimal configuration automatically:
 
-Once closed, all records for that period become **read-only** — edits, links, and unlinks are rejected with a `403 Forbidden` response.
+| Detected Hardware | Launch Mode | Configuration Applied |
+|---|---|---|
+| **macOS (Apple Silicon M1-M4 or Intel)** | CPU Fallback | `docker-compose.yml` (Docker Desktop for Mac does not pass host GPUs into Linux containers) |
+| **Linux with NVIDIA GPU** (`nvidia-smi`) | NVIDIA CUDA | `docker-compose.yml` + `docker-compose.nvidia.yml` |
+| **Linux with AMD GPU** (`/dev/kfd`, `rocm-smi`) | AMD ROCm | `docker-compose.yml` + `docker-compose.amd.yml` |
+| **Windows with NVIDIA GPU** | NVIDIA CUDA | `docker-compose.yml` + `docker-compose.nvidia.yml` |
+| **Windows with AMD GPU** | CPU (WSL2 recommended) | `docker-compose.yml` (Native Windows does not pass ROCm into Docker; run inside WSL2 for GPU) |
 
 ---
 
-## Architecture Overview
+## 5. Tech Stack & Versions
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
@@ -199,189 +279,114 @@ Once closed, all records for that period become **read-only** — edits, links, 
 
 ---
 
-## Tech Stack
+## 6. Data Models Reference
 
-### Languages
-
-| Language | Used For |
-|----------|----------|
-| Go | Backend API and File Processor |
-| TypeScript | Frontend |
-| Python | Image resizing helper (inline script called by the file processor via `exec`) |
-| SQL | PostgreSQL queries (via GORM) |
-
-### Backend (`backend/`)
-
-| Library | Version | Purpose |
-|---------|---------|---------|
-| [Fiber v3](https://github.com/gofiber/fiber) | v3.4.0 | HTTP web framework — routing, middleware, request binding |
-| [GORM](https://gorm.io/) | v1.31.2 | ORM — schema migration, queries, associations |
-| [pgx v5](https://github.com/jackc/pgx) | v5.10.0 | PostgreSQL driver (used internally by GORM) |
-| [goheif](https://github.com/adrium/goheif) | latest | Decodes iPhone `.heic` images to standard JPEG/PNG |
-| [ofxgo](https://github.com/aclindsa/ofxgo) | v0.1.3 | Parses `.ofx` and `.qfx` bank statement files |
-| [fsnotify](https://github.com/fsnotify/fsnotify) | v1.10.1 | Cross-platform filesystem event watcher for the inbox folder |
-
-### File Processor (`file-processor/`)
-
-| Library / Tool | Purpose |
-|----------------|---------|
-| [fasthttp](https://github.com/valyala/fasthttp) v1.73.0 | High-performance HTTP server (serves `/process`) and HTTP client (calls Ollama) |
-| [Pillow (PIL)](https://python-pillow.org/) | Image resizing with EXIF correction — called as an inline `python3 -c` subprocess |
-| [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) | CPU-based OCR engine — extracts raw text from rasterised PDF pages |
-| [Poppler / pdftoppm](https://poppler.freedesktop.org/) | Rasterises PDF pages to PNG images at 150 DPI |
-| [Ollama](https://ollama.com/) | Local LLM runtime — serves both models via `/api/generate` |
-| [qwen2.5vl:3b](https://ollama.com/library/qwen2.5vl) | Multimodal vision-language model — reads receipt images directly |
-| [llama3.1:8b](https://ollama.com/library/llama3.1) | Text language model — structures raw OCR output into JSON |
-
-### Frontend (`frontend/`)
-
-| Library | Version | Purpose |
-|---------|---------|---------|
-| [React](https://react.dev/) | v19 | UI component framework |
-| [React Router DOM](https://reactrouter.com/) | v7 | Client-side routing |
-| [Tailwind CSS](https://tailwindcss.com/) | v4 | Utility-first CSS — all styling |
-| [Vite](https://vitejs.dev/) | v8 | Dev server with HMR and production bundler |
-| [pdfjs-dist](https://mozilla.github.io/pdf.js/) | v6 | Renders PDF receipt previews in the browser |
-| [heic2any](https://github.com/alexcorvi/heic2any) | v0.0.4 | Client-side HEIC → JPEG conversion for browser preview before upload |
-| TypeScript | ~6.0 | Static typing across all frontend code |
-
-### Infrastructure
-
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| Containerization | Docker + Docker Compose | Orchestrates frontend, backend, database, and Samba |
-| Database | PostgreSQL 18.4 (Alpine) | Primary data store |
-| Network File Share | Samba (`dperson/samba`) | Exposes inbox to scanners and networked devices over SMB |
-| File Storage | Local bind mount (`document-data/`) | Persists uploaded documents across container restarts |
-
----
-
-## Data Models
-
-### `Receipt`
-Represents a physical file on disk. Created immediately when a file is ingested.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | uint | Primary key |
-| `expenseId` | *uint | FK to `Expense` (nullable — set after AI extraction completes) |
-| `documentUri` | string | Absolute path to the file in `processed/` |
-| `fileExt` | string | Original file extension (e.g. `.jpg`, `.pdf`) |
-| `fileHash` | string | SHA-256 hash — unique, prevents duplicate file ingestion |
-
-### `Expense`
-AI-extracted structured data representing one purchase.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | uint | Primary key |
-| `timestamp` | time | Date/time of the purchase as read from the receipt |
-| `vendor` | string | Store or business name |
-| `description` | string | Short description of the purchase |
-| `amount` | float64 | Total amount paid (not subtotal, inclusive of tax) |
-| `tender` | string | Payment method (`VISA`, `CASH`, `DEBIT`, etc.) |
-| `reconciliationStatus` | string | `MATCHED`, `PARTIAL`, or `UNMATCHED` |
-| `hasSuggestions` | bool | True if the reconciler found a suggested bank match |
-| `receipts` | []Receipt | All physical files belonging to this expense |
+### `ChartAccount`
+Defines the five GAAP account types: `ASSET`, `LIABILITY`, `EQUITY`, `REVENUE`, `EXPENSE`.
+- `Code`: Unique account code (e.g. `1010` Checking, `4010` Sales, `5010` Rent).
+- `Name`: Account display name.
+- `Type`: Account classification.
+- `ParentID`: Sub-account relationship.
+- `ScheduleCLine`: IRS tax line mapping (e.g. `Line 8 - Advertising`, `Line 18 - Office expense`).
+- `Active`: Soft-disable toggle.
+- `IsDefault`: Protected standard account flag.
 
 ### `BankTransaction`
-One line item from an imported bank statement.
+Bank statement transaction records.
+- `Date`: Transaction posting date.
+- `Description`: Merchant name or statement line item.
+- `Amount`: `models.Money` integer cents (negative for debits, positive for deposits).
+- `FITID`: Financial Institution Transaction ID (prevents duplicates).
+- `AllocationStatus`: `BALANCED`, `PARTIALLY_ALLOCATED`, `OVER_ALLOCATED`, `UNLINKED`.
+- `ReviewStatus`: `PENDING`, `APPROVED`, `IGNORED`, `WARNINGS_IGNORED`, `DELETED`.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | uint | Primary key |
-| `bankStatementId` | *uint | FK to parent `BankStatement` (nullable for manually created transactions) |
-| `date` | time | Transaction date |
-| `description` | string | Merchant name as reported by the bank |
-| `amount` | float64 | Transaction amount |
-| `transactionType` | string | `DEBIT`, `DEP`, `PAYMENT`, or `OTHER` |
-| `fitId` | string | Bank-issued unique ID — unique constraint prevents duplicate imports |
-| `reconciliationStatus` | string | `MATCHED`, `PARTIAL`, or `UNMATCHED` |
-| `hasSuggestions` | bool | True if the reconciler has a suggested expense match |
+### `Expense`
+Structured purchase record extracted from receipts.
+- `Timestamp`: Receipt date/time.
+- `Vendor`: Store or merchant name.
+- `Amount`: `models.Money` integer cents.
+- `TaxAmount`: `models.Money` integer cents.
+- `Tender`: `card`, `cash`, `check`, `transfer`, etc.
+- `ChartAccountID`: Category classification.
+- `AllocationStatus`: `BALANCED`, `UNLINKED`, etc.
 
-### `BankStatement`
-Metadata about an imported OFX/QFX file.
+### `Invoice`
+Accounts receivable client invoices.
+- `InvoiceNumber`: Unique code (e.g. `INV-1001`).
+- `ClientName`, `ClientEmail`, `ClientAddress`: Customer details.
+- `IssueDate`, `DueDate`: Date windowing (enforces `dueDate >= issueDate`).
+- `Items`: JSON array of line items with quantities, rates, and amounts.
+- `TotalAmount`, `AmountPaid`, `BalanceDue`: Exact integer-cent balances.
+- `Status`: `DRAFT`, `SENT`, `PARTIALLY_PAID`, `PAID`, `OVERDUE`, `VOID`.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | uint | Primary key |
-| `documentUri` | string | Path to the raw statement file in `processed/` |
-| `fileExt` | string | `.ofx` or `.qfx` |
-| `accountId` | string | Bank account number from the OFX header |
-| `bankId` | string | Bank routing/institution ID from the OFX header |
-| `startDate` | time | Statement period start |
-| `endDate` | time | Statement period end |
-
-### `AccountingPeriod`
-Tracks the open/closed state of each calendar month.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `year` | int | Calendar year |
-| `month` | int | Calendar month (1–12) |
-| `status` | string | `OPEN` or `CLOSED` |
-
-### `ExpenseBankTransaction` (join table)
-Many-to-many link between expenses and bank transactions.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `expenseId` | uint | FK to `Expense` |
-| `bankTransactionId` | uint | FK to `BankTransaction` |
-| `status` | string | `confirmed` (user-approved or auto-linked) or `suggested` (AI candidate) |
+### `BankRule`
+Automated categorization rule.
+- `Name`: Friendly label.
+- `Priority`: Ascending execution order.
+- `Conditions`: JSON array of conditions (`field`, `operator`, `value`, `caseSensitive`).
+- `TargetCategoryID`: Target `ChartAccount` foreign key.
+- `RenameVendor`: Standardized merchant name override.
 
 ---
 
-## API Reference
+## 7. API Reference
 
-All endpoints are served from `http://localhost:8080`.
+All API routes are served under `/api` via Nginx (port 5173) or directly on port 8080:
 
-### Upload
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/upload` | Upload a receipt or bank statement. Accepts `multipart/form-data` with field `document`. |
+### System & Health
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/health` | Comprehensive health report (DB, Ollama models, File Processor, storage) |
+| `GET` | `/health` | Docker container liveness probe |
+| `GET` | `/api/events` | Server-Sent Events (SSE) live sync stream |
+| `GET` | `/api/system/backup/export` | Download full JSON system snapshot |
+| `POST` | `/api/system/backup/restore` | Restore full JSON system snapshot |
 
-### Transactions
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/transactions` | List all bank transactions. Supports `?year=&month=&status=` filters. |
-| `GET` | `/transactions/:id` | Get a single transaction with its linked expenses and reconciliation detail. |
-| `POST` | `/transactions` | Manually create a bank transaction. |
-| `PUT` | `/transactions/:id` | Update a transaction's description or amount. |
-| `DELETE` | `/transactions/:id` | Delete a transaction. Blocked if the accounting period is closed. |
+### Ledger & Ingestion
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/upload` | Multipart file upload for receipts and bank statements |
+| `GET` | `/api/images/*` | Securely serves processed receipt images/PDFs |
+| `GET` | `/api/transactions` | Query bank transactions (`?startDate=&endDate=&status=&accountId=`) |
+| `POST` | `/api/transactions` | Create manual bank transaction |
+| `PATCH` | `/api/transactions/:id` | Update transaction category, note, or description |
+| `DELETE` | `/api/transactions/:id` | Soft-delete transaction (blocked in closed period) |
+| `GET` | `/api/transactions/export` | Export bank transactions to sanitized CSV |
+| `GET` | `/api/expenses` | Query expense receipts |
+| `POST` | `/api/expenses` | Create manual expense |
+| `PATCH` | `/api/expenses/:id` | Update expense details |
+| `DELETE` | `/api/expenses/:id` | Soft-delete expense (blocked in closed period) |
+| `POST` | `/api/expenses/:id/split` | Split expense across multiple accounts |
+| `PATCH` | `/api/expenses/:id/cash` | Mark expense as cash (bypasses reconciliation) |
+| `GET` | `/api/expenses/export` | Export expenses to sanitized CSV |
 
-### Expenses
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/expenses` | List all expenses. Supports `?year=&month=&status=` filters. |
-| `GET` | `/expenses/:id` | Get a single expense with its receipts and linked transactions. |
-| `POST` | `/expenses` | Manually create an expense. |
-| `PUT` | `/expenses/:id` | Update vendor, description, amount, or tender. |
-| `DELETE` | `/expenses/:id` | Delete an expense and its associated receipts. |
+### Invoices & Receivables
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/invoices` | List invoices with A/R metric cards |
+| `POST` | `/api/invoices` | Create invoice |
+| `GET` | `/api/invoices/:id` | Get single invoice details |
+| `PATCH` | `/api/invoices/:id` | Update invoice status or details |
+| `DELETE` | `/api/invoices/:id` | Void or delete invoice |
+| `POST` | `/api/invoices/:id/match-payment` | Match incoming bank deposit to invoice |
+| `POST` | `/api/invoices/:id/unmatch-payment` | Unlink matched bank deposit |
+| `GET` | `/api/invoices/:id/candidates` | Candidate bank deposits ranked for invoice settlement |
 
-### Reconciliation
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/flagged` | Return all unmatched transactions and orphaned expenses. Supports `?year=&month=` filters. |
-| `GET` | `/unlinked` | Return all unmatched transactions and unlinked expenses (used by the manual link picker). |
-| `POST` | `/link` | Manually link an expense to a bank transaction. Body: `{ expenseId, transactionId }`. |
-| `POST` | `/unlink` | Remove a confirmed link. Body: `{ expenseId, transactionId }`. |
-| `POST` | `/expenses/:id/mark-cash` | Mark an expense as cash, removing it from the reconciliation queue. |
-
-### Accounting Periods
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/accounting-periods` | List all accounting periods and their statuses. |
-| `POST` | `/accounting-periods` | Create or update a period. Closing validates all items are resolved first. |
-
-### Static Files
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/images/:filename` | Serve a receipt image or PDF from the `processed/` directory. |
+### Reports & Compliance
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/reports/pl` | Profit & Loss statement |
+| `GET` | `/api/reports/cash-flow` | Cash Flow statement |
+| `GET` | `/api/reports/vendor-spend` | Vendor spend summary with 1099-NEC \$600 threshold tracking |
+| `GET` | `/api/reports/ar-aging` | A/R aging buckets (Current, 1-30, 31-60, 61-90, 90+) |
+| `GET` | `/api/reports/schedule-c` | Form 1040 Schedule C summary, 1040-ES & Schedule SE |
+| `GET` | `/api/reports/trial-balance` | GAAP Trial Balance double-entry verification ($\sum D \equiv \sum C$) |
+| `GET` | `/api/reports/trial-balance/export` | Export GAAP Trial Balance to CSV |
+| `GET` | `/api/reports/tax-pack` | Download CPA Tax Pack .zip bundle |
 
 ---
 
-## Running the Application
+## 8. Configuration & Environment Variables
 
 This is a production-grade development environment. The entire stack (including the AI models, OCR, Database, and Web servers) runs inside a unified Docker Compose network. There are absolutely no host-level dependencies other than Docker itself.
 
@@ -442,40 +447,4 @@ Only Nginx and the SMB share are exposed to your host machine. Everything else c
 
 ---
 
-## Directory Structure
-
-```
-reflex-tech-bookkeeping-app/
-├── docker-compose.yml          # Service orchestration
-├── .env                        # Local environment variables
-├── document-data/
-│   ├── inbox/                  # Drop zone — watched by backend file watcher
-│   │                           # Also exposed as \\<host>\inbox via Samba
-│   └── processed/              # Files moved here after successful ingestion
-├── backend/                    # Go API server
-│   ├── main.go                 # Entry point — starts Fiber and the file watcher
-│   ├── controllers/
-│   │   ├── uploadController.go
-│   │   ├── transactionController.go
-│   │   ├── expenseController.go
-│   │   ├── reconciliationController.go
-│   │   └── accountingController.go
-│   ├── models/
-│   │   ├── receipt.go          # Expense + Receipt structs
-│   │   ├── bank.go             # BankStatement + BankTransaction structs
-│   │   ├── expenseBankTransaction.go
-│   │   └── accountingPeriod.go
-│   ├── db/                     # Database connection and auto-migration
-│   ├── routes/                 # Route registration
-│   ├── utils/                  # Reconciliation engine and helpers
-│   └── app/                    # File watcher and ingestion logic
-└── frontend/                   # React TypeScript app
-    ├── src/
-    │   ├── pages/
-    │   │   ├── Dashboard.tsx   # Summary stats and quick actions
-    │   │   ├── MonthLedger.tsx # Per-month transaction/expense table
-    │   │   └── DetailsView.tsx # Side-by-side detail view + receipt image modal
-    │   ├── services/api.ts     # Typed fetch wrappers for all API endpoints
-    │   ├── types/models.ts     # TypeScript interfaces mirroring backend models
-    │   └── components/         # Shared UI components
-    └── package.json
+**Built with pride by Reflex Technologies LLC — Utica, NY.**

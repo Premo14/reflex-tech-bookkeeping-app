@@ -2,11 +2,20 @@ FROM node:26-alpine
 
 WORKDIR /app
 
-COPY package.json package-lock.json /app/
+# 1. Grant the node user ownership of the /app directory
+RUN chown -R node:node /app
 
-RUN npm install
+# 2. Switch to the non-root user BEFORE installing dependencies
+USER node
 
-COPY ./ /app/
+# 3. Copy package files, ensuring they are owned by the node user
+COPY --chown=node:node package.json package-lock.json ./
+
+# 4. Install dependencies
+RUN npm ci
+
+# 5. Copy the rest of the source code
+COPY --chown=node:node ./ ./
 
 EXPOSE 5173
 

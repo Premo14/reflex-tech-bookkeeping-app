@@ -5,116 +5,287 @@ import (
 	"os"
 	"path/filepath"
 	"reflex-tech-bookkeeping-app-api/constants"
+	"reflex-tech-bookkeeping-app-api/events"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
 var (
-	timers = make(map[string]*time.Timer)
-	mu     sync.Mutex // Mutex ensures the map is safe for concurrent access
+	timers          = make(map[string]*time.Timer)
+	mu              sync.Mutex // Mutex ensures the timer map is safe for concurrent access
+	activeWatcher   *fsnotify.Watcher
+	watcherLock     sync.Mutex
+	stopWatcherChan chan struct{}
+
+	// inFlight tracks files currently being processed to prevent concurrent processing
+	inFlight   = make(map[string]bool)
+	inFlightMu sync.Mutex
+
+	// fileStabilityInterval pauses briefly between consecutive Stat calls to detect ongoing writes.
+	fileStabilityInterval = 75 * time.Millisecond
+
+	// ocrWorkerSem bounds concurrent background OCR/PDF extractions spawned by watcher debounces.
+	ocrWorkerSem = make(chan struct{}, 2)
 )
 
-// isIgnoredFile returns true if the file is a Syncthing temporary file or metadata file.
+// isIgnoredFile returns true if the file is a Syncthing temporary, metadata, or OS junk file.
 func isIgnoredFile(filename string) bool {
 	base := filepath.Base(filename)
+	ext := strings.ToLower(filepath.Ext(base))
+
+	// Syncthing temp/metadata files
 	if strings.HasPrefix(base, ".syncthing.") {
 		return true
 	}
 	if strings.HasPrefix(base, ".st") {
 		return true
 	}
+	// macOS dotfiles
+	if strings.HasPrefix(base, ".") {
+		return true
+	}
+	// Partial transfer / download extensions
+	switch ext {
+	case ".tmp", ".part", ".crdownload", ".partial", ".download":
+		return true
+	}
+	// OS junk files
+	switch base {
+	case "Thumbs.db", "desktop.ini", "DS_Store":
+		return true
+	}
 	return false
 }
 
-// debounceEvent delays processing until a file is fully written to disk.
-// it resets the timer on every write event.
-func debouceEvent(filePath string, delay time.Duration) {
+// isFileStable checks that a file is non-zero, has a consistent size across two spaced checks,
+// and can be opened without error — indicating the writer has finished.
+func isFileStable(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() == 0 {
+		return false
+	}
+	size := fi.Size()
+	if fileStabilityInterval > 0 {
+		time.Sleep(fileStabilityInterval)
+	}
+	// Second check — size must still match after pause
+	fi2, err2 := os.Stat(path)
+	if err2 != nil || fi2.Size() != size {
+		return false
+	}
+	// Third check — try to open the file cleanly
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	return true
+}
+
+// acquireInFlight returns true if the file is NOT already being processed.
+func acquireInFlight(filePath string) bool {
+	inFlightMu.Lock()
+	defer inFlightMu.Unlock()
+	if inFlight[filePath] {
+		return false
+	}
+	inFlight[filePath] = true
+	return true
+}
+
+// releaseInFlight removes a file from the in-flight set.
+func releaseInFlight(filePath string) {
+	inFlightMu.Lock()
+	defer inFlightMu.Unlock()
+	delete(inFlight, filePath)
+}
+
+// clearPendingTimers cancels and clears all pending debounce timers cleanly.
+func clearPendingTimers() {
 	mu.Lock()
 	defer mu.Unlock()
+	for path, t := range timers {
+		t.Stop()
+		delete(timers, path)
+	}
+}
 
-	// If there is already a timer running for this file, stop it
+// debounceEvent delays processing until a file is fully written to disk.
+// it resets the timer on every write event, uses spaced stability checks,
+// and dispatches OCR work to a bounded semaphore without blocking timer callbacks.
+func debounceEvent(filePath string, delay time.Duration) {
+	mu.Lock()
+	defer mu.Unlock()
 	if t, exists := timers[filePath]; exists {
 		t.Stop()
 	}
 
-	// Create a new timer that will fire after the delay
-	timers[filePath] = time.AfterFunc(delay, func() {
-		// run after file has stopped changing
-		log.Println("File finished writing, ready to convert:", filePath)
+	var timer *time.Timer
+	timer = time.AfterFunc(delay, func() {
+		mu.Lock()
+		if timers[filePath] == timer {
+			delete(timers, filePath)
+		}
+		mu.Unlock()
 
-		if err := processFile(filePath); err != nil {
-			log.Println("Error processing file:", err)
+		// Verify file is stable before dispatching OCR work
+		if !isFileStable(filePath) {
+			log.Printf("⚠️ File '%s' is not stable (may still be writing), skipping.\n", filePath)
+			return
 		}
 
-		mu.Lock()
-		delete(timers, filePath)
-		mu.Unlock()
+		// Acquire in-flight lock to prevent concurrent processing
+		if !acquireInFlight(filePath) {
+			log.Printf("⚠️ File '%s' already in-flight, skipping duplicate.\n", filePath)
+			return
+		}
+
+		go func() {
+			ocrWorkerSem <- struct{}{}
+			defer func() {
+				<-ocrWorkerSem
+				releaseInFlight(filePath)
+			}()
+
+			if err := processFile(filePath); err != nil {
+				log.Println("Error processing file:", err)
+			} else {
+				events.Broadcast("TRANSACTIONS_UPDATED", nil)
+				events.Broadcast("EXPENSES_UPDATED", nil)
+				events.Broadcast("QUEUE_UPDATED", nil)
+				events.Broadcast("ACCOUNTS_UPDATED", nil)
+			}
+		}()
 	})
+	timers[filePath] = timer
 }
 
-// Watcher listens for new files in documents/inbox/ and passes them to debounceEvent.
-func Watcher() error {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return err
-	}
+// runWatcherChannels listens on fsnotify event/error channels until stopCh closes or a channel closes.
+// It also runs a periodic fallback sweep (every 30s) to handle missed inotify events.
+func runWatcherChannels(eventsCh <-chan fsnotify.Event, errsCh <-chan error, stopCh <-chan struct{}) {
+	// Start periodic fallback sweep for Docker bind-mount reliability
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 
-	// Start a new goroutine (background thread) so the watcher runs indefinitely
-	// without blocking the rest of the application.
-	go func() {
-		// An infinite loop to continuously listen for events.
-		for {
-			// It waits here and blocks the loop until it receives a message from one of the channels.
-			select {
+	for {
+		select {
+		case <-stopCh:
+			log.Println("Stopping watcher loop for previous directory.")
+			return
 
-			// 1. If we receive a message on the watcher.Events channel:
-			case event, ok := <-watcher.Events:
-				// If `ok` is false, it means the channel was closed. We should exit the thread.
-				if !ok {
-					return
+		case event, ok := <-eventsCh:
+			if !ok {
+				return
+			}
+			log.Println("file watcher event:", event)
+
+			// Handle Create, Write, AND Rename events
+			// Rename is used by Syncthing/Synctrain/macOS Finder when atomically renaming .tmp -> final file
+			if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) || event.Has(fsnotify.Rename) {
+				if !isIgnoredFile(event.Name) {
+					debounceEvent(event.Name, 2*time.Second)
 				}
+			}
 
-				log.Println("event:", event)
+		case err, ok := <-errsCh:
+			if !ok {
+				return
+			}
+			log.Println("watcher error:", err)
 
-				// We only care if a file was newly created or written to.
-				// (We ignore things like fsnotify.Remove or fsnotify.Chmod)
-				if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
-					if !isIgnoredFile(event.Name) {
-						debouceEvent(event.Name, 2*time.Second)
-					}
-				}
-
-			// 2. If we receive a message on the watcher.Errors channel:
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				log.Println("error:", err)
+		case <-ticker.C:
+			// Periodic fallback sweep for missed inotify events (Docker/macOS/Syncthing)
+			inboxPath := constants.GetInboxPath()
+			if err := processExistingFilesSweep(inboxPath); err != nil {
+				log.Println("Periodic sweep error:", err)
 			}
 		}
-	}()
+	}
+}
 
-	// Tell the watcher which specific directory to monitor
-	err = watcher.Add(constants.InboxPath)
+// runWatcherLoop wraps runWatcherChannels for an active *fsnotify.Watcher.
+func runWatcherLoop(w *fsnotify.Watcher, stopCh chan struct{}) {
+	runWatcherChannels(w.Events, w.Errors, stopCh)
+}
+
+// RestartWatcher dynamically stops any active watcher and binds to the current constants.GetInboxPath().
+func RestartWatcher() error {
+	watcherLock.Lock()
+	defer watcherLock.Unlock()
+
+	clearPendingTimers()
+
+	// Stop existing watcher if one is running
+	if activeWatcher != nil {
+		if stopWatcherChan != nil {
+			close(stopWatcherChan)
+			stopWatcherChan = nil
+		}
+		activeWatcher.Close()
+		activeWatcher = nil
+	}
+
+	if err := CreateDirsIfNotExists(); err != nil {
+		return err
+	}
+
+	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
 	}
+
+	activeWatcher = w
+	stopWatcherChan = make(chan struct{})
+
+	inboxPath := constants.GetInboxPath()
+	err = activeWatcher.Add(inboxPath)
+	if err != nil {
+		activeWatcher.Close()
+		activeWatcher = nil
+		return err
+	}
+
+	stopCh := stopWatcherChan
+	go runWatcherChannels(w.Events, w.Errors, stopCh)
+
+	log.Printf("File watcher active on inbox: %s (Host: %s)\n", inboxPath, constants.GetCurrentHostPath())
+
+	// Process any files already waiting in the new inbox
+	go func() {
+		if err := ProcessExistingFiles(inboxPath); err != nil {
+			log.Println("Error processing files in new inbox:", err)
+		}
+	}()
 
 	return nil
 }
 
-// Create documents/inbox/ and documents/processed/ folders if they do not already exist.
-func CreateDirsIfNotExists() error {
+// Watcher starts the background file watcher on the active inbox directory.
+func Watcher() error {
+	return RestartWatcher()
+}
 
-	if err := os.MkdirAll(constants.InboxPath, 0755); err != nil {
+// CreateDirsIfNotExists creates inbox and processed folders with wide-open 0777 permissions.
+func CreateDirsIfNotExists() error {
+	syscall.Umask(0)
+
+	inbox := constants.GetInboxPath()
+	processed := constants.GetProcessedPath()
+
+	if err := os.MkdirAll(inbox, 0777); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(constants.ProcessedPath, 0755); err != nil {
+	_ = os.Chmod(inbox, 0777)
+
+	if err := os.MkdirAll(processed, 0777); err != nil {
 		return err
 	}
+	_ = os.Chmod(processed, 0777)
+
 	return nil
 }
 
@@ -132,6 +303,57 @@ func ProcessExistingFiles(inboxPath string) error {
 		if err := processFile(filepath.Join(inboxPath, content.Name())); err != nil {
 			log.Println("Error processing existing file:", err)
 		}
+	}
+
+	return nil
+}
+
+// processExistingFilesSweep is a non-blocking periodic sweep that processes only
+// files that were not already handled by fsnotify events. It broadcasts SSE updates.
+func processExistingFilesSweep(inboxPath string) error {
+	contents, err := os.ReadDir(inboxPath)
+	if err != nil {
+		return err
+	}
+
+	anyProcessed := false
+	for _, content := range contents {
+		if content.IsDir() || isIgnoredFile(content.Name()) {
+			continue
+		}
+		filePath := filepath.Join(inboxPath, content.Name())
+
+		// Skip files already in-flight (being handled by a debounced fsnotify event)
+		inFlightMu.Lock()
+		if inFlight[filePath] {
+			inFlightMu.Unlock()
+			continue
+		}
+		inFlightMu.Unlock()
+
+		// Skip files that are not stable yet
+		if !isFileStable(filePath) {
+			continue
+		}
+
+		// Try to acquire in-flight lock
+		if !acquireInFlight(filePath) {
+			continue
+		}
+
+		if err := processFile(filePath); err != nil {
+			log.Printf("⚠️ Periodic sweep failed on %s: %v\n", filePath, err)
+		} else {
+			anyProcessed = true
+		}
+		releaseInFlight(filePath)
+	}
+
+	if anyProcessed {
+		events.Broadcast("TRANSACTIONS_UPDATED", nil)
+		events.Broadcast("EXPENSES_UPDATED", nil)
+		events.Broadcast("QUEUE_UPDATED", nil)
+		events.Broadcast("ACCOUNTS_UPDATED", nil)
 	}
 
 	return nil

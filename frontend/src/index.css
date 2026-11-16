@@ -1,26 +1,180 @@
 @import "tailwindcss";
 
+:root {
+  color-scheme: dark;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 body {
-  background-color: #18181b;
+  background-color: #050505;
   color: #f4f4f5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
+/* ── Reflex Glow System & Glass Surfaces (STYLE_GUIDE.md) ───────────────── */
+.glow-emerald { box-shadow: 0 0 16px -2px rgba(16, 185, 129, 0.28); }
+.glow-cyan    { box-shadow: 0 0 16px -2px rgba(6, 182, 212, 0.28); }
+.glow-purple  { box-shadow: 0 0 16px -2px rgba(168, 85, 247, 0.28); }
+.glow-amber   { box-shadow: 0 0 16px -2px rgba(245, 158, 11, 0.28); }
+.glow-rose    { box-shadow: 0 0 16px -2px rgba(244, 63, 94, 0.28); }
+.glow-blue    { box-shadow: 0 0 16px -2px rgba(59, 130, 246, 0.28); }
+
+.glow-border-emerald { box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.28), 0 0 12px rgba(16, 185, 129, 0.14); }
+.glow-border-purple  { box-shadow: 0 0 0 1px rgba(168, 85, 247, 0.28), 0 0 12px rgba(168, 85, 247, 0.14); }
+.glow-border-cyan    { box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.28), 0 0 12px rgba(6, 182, 212, 0.14); }
+.glow-border-amber   { box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.28), 0 0 12px rgba(245, 158, 11, 0.14); }
+.glow-border-rose    { box-shadow: 0 0 0 1px rgba(244, 63, 94, 0.28), 0 0 12px rgba(244, 63, 94, 0.14); }
+.glow-border-blue    { box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.28), 0 0 12px rgba(59, 130, 246, 0.14); }
+
+.surface-glass {
+  background: rgba(13, 17, 23, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.surface-glass:has([aria-expanded="true"]) {
+  position: relative;
+  z-index: 50;
+}
+
+/* Interactive touchpoint hover + :active tap halos */
+.touch-glow-emerald { transition: box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease, border-color 150ms ease, transform 150ms cubic-bezier(0.16, 1, 0.3, 1); }
+.touch-glow-emerald:hover { box-shadow: 0 0 18px -2px rgba(16, 185, 129, 0.32); }
+.touch-glow-emerald:active { box-shadow: 0 0 24px 0 rgba(16, 185, 129, 0.45); }
+
+.touch-glow-cyan { transition: box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease, border-color 150ms ease, transform 150ms cubic-bezier(0.16, 1, 0.3, 1); }
+.touch-glow-cyan:hover { box-shadow: 0 0 18px -2px rgba(6, 182, 212, 0.32); }
+.touch-glow-cyan:active { box-shadow: 0 0 24px 0 rgba(6, 182, 212, 0.45); }
+
+.touch-glow-purple { transition: box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease, border-color 150ms ease, transform 150ms cubic-bezier(0.16, 1, 0.3, 1); }
+.touch-glow-purple:hover { box-shadow: 0 0 18px -2px rgba(168, 85, 247, 0.32); }
+.touch-glow-purple:active { box-shadow: 0 0 24px 0 rgba(168, 85, 247, 0.45); }
+
+.touch-glow-amber { transition: box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease, border-color 150ms ease, transform 150ms cubic-bezier(0.16, 1, 0.3, 1); }
+.touch-glow-amber:hover { box-shadow: 0 0 18px -2px rgba(245, 158, 11, 0.32); }
+.touch-glow-amber:active { box-shadow: 0 0 24px 0 rgba(245, 158, 11, 0.45); }
+
+.touch-glow-rose { transition: box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease, border-color 150ms ease, transform 150ms cubic-bezier(0.16, 1, 0.3, 1); }
+.touch-glow-rose:hover { box-shadow: 0 0 18px -2px rgba(244, 63, 94, 0.32); }
+.touch-glow-rose:active { box-shadow: 0 0 24px 0 rgba(244, 63, 94, 0.45); }
+
+.touch-glow-blue { transition: box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease, border-color 150ms ease, transform 150ms cubic-bezier(0.16, 1, 0.3, 1); }
+.touch-glow-blue:hover { box-shadow: 0 0 18px -2px rgba(59, 130, 246, 0.32); }
+.touch-glow-blue:active { box-shadow: 0 0 24px 0 rgba(59, 130, 246, 0.45); }
+
 ::-webkit-scrollbar-track {
-  background: #18181b;
+  background: #0a0a0a;
 }
 
 ::-webkit-scrollbar-thumb {
-  background-color: #3f3f46; 
+  background-color: #27272a; 
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #52525b; 
+  background-color: #3f3f46; 
 }
+
+input[type="date"] {
+  color-scheme: dark;
+}
+input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0.8;
+  cursor: pointer;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes zoomIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.animate-in.fade-in {
+  animation: fadeIn 0.18s ease-out forwards;
+}
+
+@keyframes tooltipIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .animate-in.zoom-in-95 {
+    animation: zoomIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .animate-slide-in-right {
+    animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .animate-card-cascade {
+    animation: cardCascade 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .animate-tooltip-in {
+    animation: tooltipIn 0.14s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-in.zoom-in-95,
+  .animate-slide-in-right,
+  .animate-card-cascade,
+  .animate-tooltip-in {
+    animation: fadeIn 0.15s ease-out forwards;
+  }
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+@keyframes cardCascade {
+  from { opacity: 0; transform: translateY(20px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media print {
+  @page {
+    size: auto;
+    margin: 12mm;
+  }
+  body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  body:has([role="dialog"]) #root {
+    display: none !important;
+  }
+}
+

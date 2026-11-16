@@ -1,45 +1,78 @@
 services:
   frontend:
-    container_name: reflex-tech-bookkeping-app-frontend
-    build: 
+    container_name: reflex-tech-bookkeeping-app-frontend
+    build:
       context: ./frontend
       dockerfile: Dockerfile.dev
-    environment:
-      - POSTGRES_HOST=postgres
-    ports:
-      - "${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
     volumes:
       - ./frontend:/app
+      - /app/node_modules
     restart: unless-stopped
-    
+    # Resource cap to prevent OOM when node leaks
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5173 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   backend:
     container_name: backend
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
-    ports:
-      - "${BACKEND_PORT:-8080}:${BACKEND_PORT:-8080}"
+    env_file: .env
     environment:
-      - DOCUMENTS_PATH=${DOCUMENTS_PATH:-/app/documents}
       - CGO_ENABLED=1
     volumes:
       - ./backend:/app
-      - ./document-data:/app/documents
-    user: "1000:1000"
+      - ${DOCUMENT_DATA_PATH:-./document-data}:/app/documents
+      - /:/host_fs:rw
+      # NOTE: /host_fs mount enables cross-host DOCUMENT_DATA_PATH resolution
+      # via constants.ResolveHostToContainer(). Path sanitization in Go prevents traversal.
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      file-processor:
+        condition: service_started
+    # Resource cap — Go is memory-efficient but GC bursts can spike
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   postgres:
     container_name: postgres
     image: postgres:18.4-alpine3.24
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pass}
-      POSTGRES_DB: ${POSTGRES_DB:-reflex-tech-bookkeeping-app-postgres-db}
-    ports:
-      - "${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
+    env_file: .env
     volumes:
       - postgres-data:/var/lib/postgresql
     restart: unless-stopped
+    # Cap at 4 GB to leave room for Go app + Ollama
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   scanner-smb:
     container_name: scanner-smb
@@ -48,15 +81,93 @@ services:
       - USERID=999 # Free up 1000 for the scanner user
       - GROUPID=999
     ports:
+      # SMB must be exposed so the physical scanner on the LAN can connect
       - "139:139"
       - "445:445"
     volumes:
-      # We map the exact same inbox folder that the backend is watching
-      - ./document-data/inbox:/mnt/inbox
+      # Shares the same bind mount the backend watches
+      - ${DOCUMENT_DATA_PATH:-./document-data}/inbox:/mnt/inbox
     # Creates user 'scanner' with password 'password123' and UID/GID 1000
     # Creates a share named 'inbox' pointing to /mnt/inbox
     command: '-u "scanner;password123;1000;scanner;1000" -s "inbox;/mnt/inbox;yes;no;no;scanner"'
     restart: unless-stopped
+    # Samba is lightweight; minimal resource footprint
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
+  file-processor:
+    container_name: file-processor
+    build:
+      context: ./file-processor
+      dockerfile: Dockerfile.dev
+    env_file: .env
+    volumes:
+      - ./file-processor:/app
+    restart: unless-stopped
+    depends_on:
+      - ollama
+    # Image decode is memory-bound; cap to prevent OOM on large HEIC/PDF
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  ollama:
+    container_name: ollama
+    build: ./ollama
+    volumes:
+      - ollama-data:/root/.ollama   # /root/.ollama is where Ollama stores models
+    restart: unless-stopped
+    # Cap GPU memory so Ollama doesn't starve other services on 64 GB machines
+    deploy:
+      resources:
+        limits:
+          cpus: "8.0"
+          memory: 16G
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -q 'llama3.1' && ollama list | grep -q 'qwen2.5vl'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # 1800s start_period is intentional: first-run model download can take 20-30 min on slow links.
+      # Subsequent starts use cached models and pass in < 30s.
+      start_period: 1800s
+
+  nginx:
+    container_name: nginx
+    image: nginx:alpine
+    ports:
+      - "5173:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    # Nginx is essentially stateless; minimal resource use
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/nginx-health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 networks:
   default:
@@ -65,3 +176,5 @@ networks:
 volumes:
   postgres-data:
     name: postgres-data
+  ollama-data:
+    name: ollama-data

@@ -1,0 +1,11 @@
+# AMD ROCm override - merged with docker-compose.yml by the start script.
+# Do not run this file directly. Use ./start.sh or start.bat instead.
+# NOTE: ROCm GPU passthrough is only supported on Linux hosts.
+services:
+  ollama:
+    build:
+      context: ./ollama
+      dockerfile: Dockerfile.amd
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri

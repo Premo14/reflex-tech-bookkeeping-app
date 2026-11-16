@@ -2,59 +2,130 @@ package routes
 
 import (
 	"reflex-tech-bookkeeping-app-api/controllers"
-	"time"
 
 	"github.com/gofiber/fiber/v3"
 )
 
 func SetupRoutes(app *fiber.App) {
+	// Container & Reverse-Proxy Health Checks
+	app.Get("/health", controllers.GetSystemHealth)
+
 	api := app.Group("/api")
 
 	// Health Check
-	api.Get("/", func(c fiber.Ctx) error {
-		return c.Status(fiber.StatusOK).JSON(fiber.Map{
-			"status":    "success",
-			"message":   "Service is up and running",
-			"timestamp": time.Now().Format(time.RFC3339),
-		})
-	})
+	api.Get("/health", controllers.GetSystemHealth)
 
 	// Frontend File Upload
 	api.Post("/upload", controllers.UploadFile)
 
-	// The Reconciliation Inbox ("Action Required")
-	api.Get("/reconciliation/flagged", controllers.GetFlaggedItems)
+	// Chart of Accounts
+	api.Get("/accounts", controllers.GetChartAccounts)
+	api.Post("/accounts", controllers.CreateChartAccount)
+	api.Patch("/accounts/:id", controllers.UpdateChartAccount)
+	api.Delete("/accounts/:id", controllers.DeleteChartAccount)
 
-	// Manually Link Expenses to Transactions
-	api.Post("/reconciliation/link", controllers.LinkExpenseToTransaction)
+	// Automated Bank Rules
+	api.Get("/rules", controllers.GetRules)
+	api.Get("/rules/suggestions", controllers.GetRuleSuggestions)
+	api.Post("/rules", controllers.CreateRule)
+	api.Get("/rules/:id", controllers.GetRule)
+	api.Patch("/rules/:id", controllers.UpdateRule)
+	api.Delete("/rules/:id", controllers.DeleteRule)
+	api.Post("/rules/reorder", controllers.ReorderRules)
+	api.Post("/rules/apply-all", controllers.ApplyAllRules)
+	api.Post("/rules/preview", controllers.TestRulePreview)
 
-	// Month Close
-	api.Get("/accounting-periods", controllers.GetAccountingPeriods)
-	api.Post("/accounting-periods", controllers.CreateAccountingPeriod)
-	api.Post("/accounting-periods/close", controllers.CloseAccountingPeriod)
-	api.Post("/accounting-periods/reopen", controllers.ReopenAccountingPeriod)
-	
-	api.Get("/pending-closed-items", controllers.GetPendingClosedItems)
+	// Invoicing & Receivable Matching
+	api.Get("/invoices", controllers.GetInvoices)
+	api.Post("/invoices", controllers.CreateInvoice)
+	api.Get("/invoices/:id", controllers.GetInvoice)
+	api.Patch("/invoices/:id", controllers.UpdateInvoice)
+	api.Delete("/invoices/:id", controllers.DeleteInvoice)
+	api.Post("/invoices/:id/match-payment", controllers.MatchInvoicePayment)
+	api.Post("/invoices/:id/pay-cash", controllers.MarkInvoicePaidCash)
+	api.Post("/invoices/:id/unmatch-payment", controllers.UnmatchInvoicePayment)
+	api.Get("/invoices/:id/candidates", controllers.GetMatchingDeposits)
 
-	// General Browsing
+	// Global Settings (Books Closed Date)
+	api.Get("/settings", controllers.GetSettings)
+	api.Post("/settings", controllers.UpdateSettings)
+	api.Get("/settings/audit-logs", controllers.GetAuditLogs)
+	api.Get("/settings/close-preflight", controllers.GetClosePreflight)
+	api.Get("/settings/directories", controllers.BrowseDirectories)
+	// Review Queue
+	api.Get("/review-queue", controllers.GetReviewQueue)
+	api.Get("/review-queue/counts", controllers.GetReviewQueueCounts)
+	api.Post("/review-queue/resolve", controllers.ResolveQueueItems)
+	api.Post("/review-queue/batch-categorize", controllers.BatchCategorizeItems)
+
+	// Real-Time Events (Server-Sent Events)
+	api.Get("/events", controllers.HandleSSEStream)
+
+	// Excluding items from the books (cascades through link groups)
+	api.Post("/items/exclude-preview", controllers.ExcludePreview)
+	api.Post("/items/exclude-bulk-preview", controllers.ExcludeBulkPreview)
+	api.Post("/items/exclude", controllers.ExcludeItem)
+	api.Post("/items/exclude-bulk", controllers.ExcludeBulk)
+	api.Post("/items/restore", controllers.RestoreItem)
+	api.Post("/items/restore-bulk", controllers.RestoreBulk)
+	api.Post("/items/delete-bulk", controllers.DeleteBulk)
+	api.Post("/items/restore-deleted", controllers.RestoreDeletedBulk)
+	api.Post("/items/move-to-excluded", controllers.MoveDeletedToExcludedBulk)
+	api.Post("/items/delete-permanent", controllers.DeletePermanentBulk)
+
+	// Bank Transactions
+	api.Get("/transactions/export", controllers.ExportTransactionsCSV)
 	api.Get("/transactions", controllers.GetTransactions)
 	api.Post("/transactions", controllers.CreateTransaction) // manual entry
 	api.Get("/transactions/:id", controllers.GetTransaction)
 	api.Patch("/transactions/:id", controllers.UpdateTransaction)
 	api.Delete("/transactions/:id", controllers.DeleteTransaction)
 
-	api.Get("/expenses", controllers.GetExpenses) // fetch all expenses for ledger
+	// Expenses & Receipts
+	api.Get("/expenses/export", controllers.ExportExpensesCSV)
+	api.Get("/expenses", controllers.GetExpenses)
 	api.Post("/expenses", controllers.CreateExpense) // manual entry
 	api.Get("/expenses/:id", controllers.GetExpense)
 	api.Patch("/expenses/:id", controllers.UpdateExpense)
 	api.Delete("/expenses/:id", controllers.DeleteExpense)
+	api.Post("/expenses/:id/split", controllers.SplitExpense)
+	api.Post("/expenses/:id/receipt", controllers.UploadReceiptToExpense) // manual receipt upload
+	api.Delete("/receipts/:id", controllers.DeleteReceipt)
 
-	// Mark Expense as Cash
+	// Mark Expense as Cash (bypasses reconciliation requirement)
 	api.Patch("/expenses/:id/cash", controllers.MarkExpenseAsCash)
-	
-	// Unlinked items for manual linking
-	api.Get("/reconciliation/unlinked", controllers.GetUnlinkedItems)
-	
-	// Unlink Expense
+	api.Patch("/reconciliation/cash/:id", controllers.MarkExpenseAsCash)
+
+	// Reconciliation
+	api.Get("/reconciliation/flagged", controllers.GetFlaggedItems)
+	api.Post("/reconciliation/run", controllers.TriggerReconciliation)
+	api.Post("/reconciliation/link", controllers.LinkExpenseToTransaction)
+	api.Post("/reconciliation/link-expense-invoice", controllers.LinkExpenseToInvoice)
+	api.Post("/reconciliation/unlink-expense-invoice", controllers.UnlinkExpenseFromInvoice)
+	api.Post("/reconciliation/create-and-link", controllers.CreateAndLink)
 	api.Post("/reconciliation/unlink", controllers.UnlinkExpense)
+	api.Get("/reconciliation/unlinked", controllers.GetUnlinkedItems)
+
+	// Period Summary (totals bar)
+	api.Get("/summary", controllers.GetSummary)
+
+	// Reports
+	api.Get("/reports/pl", controllers.GetProfitLoss)
+	api.Get("/reports/schedule-c", controllers.GetScheduleCReport)
+	api.Get("/reports/tax-pack", controllers.ExportTaxPackZip)
+	api.Get("/reports/cash-flow", controllers.GetCashFlowSummary)
+	api.Get("/reports/vendor-spend", controllers.GetVendorSpendReport)
+	api.Get("/reports/ar-aging", controllers.GetARAgingReport)
+	api.Get("/reports/trial-balance", controllers.GetTrialBalance)
+	api.Get("/reports/trial-balance/export", controllers.ExportTrialBalanceCSV)
+
+	// System Snapshot & Full JSON Backup
+	api.Get("/system/backup/export", controllers.ExportSystemBackupJSON)
+	api.Post("/system/backup/restore", controllers.RestoreSystemBackupJSON)
+
+	// Client Demo Sandbox Controls
+	api.Get("/demo/status", controllers.GetDemoStatus)
+	api.Post("/demo/seed", controllers.SeedDemoData)
+	api.Post("/demo/reset", controllers.ResetDemoData)
+	api.Post("/demo/remove", controllers.RemoveDemoData)
 }

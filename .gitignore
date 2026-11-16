@@ -24,6 +24,8 @@ profile.cov
 go.work
 go.work.sum
 
+setup-guide.md
+
 # env file
 .env
 
@@ -36,3 +38,16 @@ docs/
  .vscode
 
 document-data/**
+
+# Linux compiled binaries
+backend/api
+backend/reflex-api
+backend/reflex-tech-bookkeeping-app-api
+file-processor/app
+file-processor/file-processor
+
+AGENTS.md
+.audit_logs/
+frontend/coverage/
+STYLE_GUIDE.md
+ACCOUNTING_SPEC.md
