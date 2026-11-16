@@ -1,1 +1,0 @@
-docker compose exec backend go run scripts/seed_demo_data.go
