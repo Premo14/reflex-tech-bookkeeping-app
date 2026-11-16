@@ -414,6 +414,7 @@ export function TooltipProvider({
     window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
     window.addEventListener("resize", handleResize);
     window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("beforeprint", hide);
 
     return () => {
       document.removeEventListener("pointermove", handlePointerMove);
@@ -424,6 +425,7 @@ export function TooltipProvider({
       window.removeEventListener("scroll", handleScroll, { capture: true });
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("beforeprint", hide);
       clearTimer();
     };
   }, [defaultDelay, show, hide, clearTimer, restoreNativeTitle]);
@@ -458,7 +460,7 @@ export function TooltipProvider({
                   : "left center",
               transition: "none",
             }}
-            className="z-[99999] pointer-events-none max-w-xs break-words whitespace-pre-line rounded-md bg-zinc-900/95 px-2.5 py-1 text-[11px] font-medium text-zinc-200 shadow-xl border border-white/10 backdrop-blur-md leading-snug animate-tooltip-in transition-none"
+            className="z-[99999] pointer-events-none max-w-xs break-words whitespace-pre-line rounded-md bg-zinc-900/95 px-2.5 py-1 text-[11px] font-medium text-zinc-200 shadow-xl border border-white/10 backdrop-blur-md leading-snug animate-tooltip-in transition-none print:hidden"
           >
             {activeTooltip.text}
           </div>,

@@ -209,9 +209,12 @@ func TestBroadcast_UnsubscribedClientDoesntReceive(t *testing.T) {
 
 func TestHandleSSEStream_TickerPing(t *testing.T) {
 	app := fiber.New()
-	oldDuration := SSETickerDuration
-	SSETickerDuration = 50 * time.Millisecond
-	defer func() { SSETickerDuration = oldDuration }()
+	oldDuration := SetSSETickerDuration(50 * time.Millisecond)
+	defer func() {
+		Hub.CloseAll()
+		WaitSSEStreams()
+		SetSSETickerDuration(oldDuration)
+	}()
 
 	app.Get("/sse", HandleSSEStream)
 
@@ -238,9 +241,12 @@ func TestHandleSSEStream_TickerPing(t *testing.T) {
 
 func TestHandleSSEStream_MessageAndPing(t *testing.T) {
 	app := fiber.New()
-	oldDuration := SSETickerDuration
-	SSETickerDuration = 30 * time.Millisecond
-	defer func() { SSETickerDuration = oldDuration }()
+	oldDuration := SetSSETickerDuration(30 * time.Millisecond)
+	defer func() {
+		Hub.CloseAll()
+		WaitSSEStreams()
+		SetSSETickerDuration(oldDuration)
+	}()
 
 	app.Get("/sse", HandleSSEStream)
 
@@ -288,9 +294,12 @@ func TestHandleSSEStream_ChannelClosePath(t *testing.T) {
 // ---- HandleSSEStream: Fiber request with full headers ----
 
 func TestHandleSSEStream_RequestHeaders(t *testing.T) {
-	oldDuration := SSETickerDuration
-	SSETickerDuration = 50 * time.Millisecond
-	defer func() { SSETickerDuration = oldDuration }()
+	oldDuration := SetSSETickerDuration(50 * time.Millisecond)
+	defer func() {
+		Hub.CloseAll()
+		WaitSSEStreams()
+		SetSSETickerDuration(oldDuration)
+	}()
 
 	app := fiber.New()
 	app.Get("/sse", HandleSSEStream)
@@ -334,12 +343,13 @@ func TestHandleSSEStream_RequestHeaders(t *testing.T) {
 
 func TestHandleSSEStream_PanicRecovery(t *testing.T) {
 	app := fiber.New()
-	oldHook := SSEPanicTrigger
-	SSEPanicTrigger = func() {
+	oldHook := SetSSEPanicTrigger(func() {
 		panic("test sse panic")
-	}
+	})
 	defer func() {
-		SSEPanicTrigger = oldHook
+		Hub.CloseAll()
+		WaitSSEStreams()
+		SetSSEPanicTrigger(oldHook)
 	}()
 
 	app.Get("/sse", HandleSSEStream)

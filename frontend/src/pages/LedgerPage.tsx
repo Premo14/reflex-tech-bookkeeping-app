@@ -15,8 +15,10 @@ import AppSettingsModal from "../components/AppSettingsModal";
 import InvoicingModal from "../components/InvoicingModal";
 import { useLiveEvent } from "../utils/useLiveSync";
 import { addDaysToISODate } from "../utils/dateUtils";
+import { useNavigationStack } from "../context/navigationStackContext";
 
 export default function LedgerPage() {
+  const nav = useNavigationStack();
   const [accounts, setAccounts] = useState<ChartAccount[]>([]);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [startDate, setStartDate] = useState<string>("");
@@ -177,11 +179,13 @@ export default function LedgerPage() {
           setReviewStatusType(type);
           setReviewModalOpen(true);
           setIsSidebarOpen(false);
+          nav.push("review", { statusType: type });
         }}
         onOpenSettings={() => {
           setSettingsTab("storage");
           setAppSettingsModalOpen(true);
           setIsSidebarOpen(false);
+          nav.push("settings", { tab: "storage" });
         }}
         isQueueLoading={isQueueLoading}
         isSettingsLoading={isSettingsLoading}
@@ -202,6 +206,7 @@ export default function LedgerPage() {
             setArDeepLinkInvoiceId(null);
             setArDeepLinkMode("inspect");
             setInvoicingModalOpen(true);
+            nav.push("invoicing");
           }}
           isAccountsLoading={isAccountsLoading}
           startDate={startDate}
@@ -210,6 +215,7 @@ export default function LedgerPage() {
             setArDeepLinkInvoiceId(id);
             setArDeepLinkMode("inspect");
             setInvoicingModalOpen(true);
+            nav.push("invoicing", { invoiceId: id, mode: "inspect" });
           }}
         />
         <LedgerGrid
@@ -220,50 +226,64 @@ export default function LedgerPage() {
           viewUnlinkedTrigger={viewUnlinkedTrigger}
           viewUncategorizedTrigger={viewUncategorizedTrigger}
           onItemsChanged={fetchData}
-          onCreateRule={(data) => handleOpenRules(data)}
+          onCreateRule={(data) => {
+            handleOpenRules(data);
+            nav.push("settings", { tab: "rules", ruleData: data });
+          }}
           onOpenInvoices={() => {
             setArDeepLinkInvoiceId(null);
             setArDeepLinkMode("inspect");
             setInvoicingModalOpen(true);
+            nav.push("invoicing");
           }}
           onEditInvoice={(inv) => {
             setArDeepLinkInvoiceId(inv.id);
             setArDeepLinkMode("edit");
             setInvoicingModalOpen(true);
+            nav.push("invoicing", { invoiceId: inv.id, mode: "edit" });
           }}
           onPrintInvoice={(inv) => {
             setArDeepLinkInvoiceId(inv.id);
             setArDeepLinkMode("print");
             setInvoicingModalOpen(true);
+            nav.push("invoicing", { invoiceId: inv.id, mode: "print" });
           }}
         />
       </main>
       <ReviewModal
-        isOpen={reviewModalOpen}
-        onClose={() => setReviewModalOpen(false)}
-        statusType={reviewStatusType}
+        isOpen={reviewModalOpen || nav.isOpen("review")}
+        suspended={nav.isSuspended("review")}
+        onClose={() => {
+          setReviewModalOpen(false);
+          if (nav.isOpen("review")) nav.pop();
+        }}
+        statusType={nav.getParams<{ statusType: ReviewStatusType }>("review")?.statusType || reviewStatusType}
         refreshData={fetchData}
       />
       <AppSettingsModal
-        isOpen={appSettingsModalOpen}
+        isOpen={appSettingsModalOpen || nav.isOpen("settings")}
+        suspended={nav.isSuspended("settings")}
         onClose={() => {
           setAppSettingsModalOpen(false);
           setInitialRuleData(null);
+          if (nav.isOpen("settings")) nav.pop();
         }}
         settings={settings}
         refreshSettings={fetchData}
-        initialTab={settingsTab}
-        initialRuleData={initialRuleData}
+        initialTab={nav.getParams<{ tab: "storage" | "rules" }>("settings")?.tab || settingsTab}
+        initialRuleData={nav.getParams<{ ruleData: { name?: string; descriptionKeyword?: string; categoryAccountId?: number | null } | null }>("settings")?.ruleData ?? initialRuleData}
         onRulesApplied={fetchData}
       />
       <InvoicingModal
-        isOpen={invoicingModalOpen}
+        isOpen={invoicingModalOpen || nav.isOpen("invoicing")}
+        suspended={nav.isSuspended("invoicing")}
         onClose={() => {
           setInvoicingModalOpen(false);
           setArDeepLinkInvoiceId(null);
+          if (nav.isOpen("invoicing")) nav.pop();
         }}
-        initialInvoiceId={arDeepLinkInvoiceId ?? undefined}
-        initialMode={arDeepLinkMode}
+        initialInvoiceId={nav.getParams<{ invoiceId?: number }>("invoicing")?.invoiceId ?? arDeepLinkInvoiceId ?? undefined}
+        initialMode={nav.getParams<{ mode?: "inspect" | "edit" | "print" }>("invoicing")?.mode ?? arDeepLinkMode}
         companyName={settings["CompanyName"] || "Unnamed Company"}
         onInvoicesUpdated={fetchData}
       />

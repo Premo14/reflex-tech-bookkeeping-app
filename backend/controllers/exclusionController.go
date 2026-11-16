@@ -21,7 +21,7 @@ var validExclusionReasons = map[string]bool{
 
 // GroupItem is a compact description of one member of a link group.
 type GroupItem struct {
-	Type         string       `json:"type"` // "transaction" or "expense"
+	Type         string       `json:"type"` // "transaction", "expense", or "invoice"
 	ID           uint         `json:"id"`
 	Label        string       `json:"label"`
 	Date         time.Time    `json:"date"`
@@ -30,41 +30,63 @@ type GroupItem struct {
 }
 
 // collectLinkGroup returns the connected component (through confirmed expense<->transaction
-// links) that contains the given starting item. Covers one-to-many splits in either direction.
-func collectLinkGroup(tx *gorm.DB, itemType string, id uint) (txIDs []uint, expIDs []uint) {
+// links and invoice<->bank_transaction payment links) that contains the given starting item.
+func collectLinkGroup(tx *gorm.DB, itemType string, id uint) (txIDs []uint, expIDs []uint, invIDs []uint) {
 	seenTx := map[uint]bool{}
 	seenExp := map[uint]bool{}
+	seenInv := map[uint]bool{}
 
 	type node struct {
-		isTx bool
+		kind string // "transaction", "expense", "invoice"
 		id   uint
 	}
-	queue := []node{{itemType == "transaction", id}}
-	if itemType == "transaction" {
+	queue := []node{{itemType, id}}
+	switch itemType {
+	case "transaction":
 		seenTx[id] = true
-	} else {
+	case "expense":
 		seenExp[id] = true
+	case "invoice":
+		seenInv[id] = true
 	}
 
 	for len(queue) > 0 {
 		n := queue[0]
 		queue = queue[1:]
 
-		var links []models.ExpenseBankTransaction
-		if n.isTx {
+		switch n.kind {
+		case "transaction":
+			var links []models.ExpenseBankTransaction
 			tx.Where("bank_transaction_id = ? AND status = ?", n.id, "confirmed").Find(&links)
 			for _, l := range links {
 				if !seenExp[l.ExpenseID] {
 					seenExp[l.ExpenseID] = true
-					queue = append(queue, node{false, l.ExpenseID})
+					queue = append(queue, node{"expense", l.ExpenseID})
 				}
 			}
-		} else {
+			var invs []models.Invoice
+			tx.Where("bank_transaction_id = ?", n.id).Find(&invs)
+			for _, iv := range invs {
+				if !seenInv[iv.ID] {
+					seenInv[iv.ID] = true
+					queue = append(queue, node{"invoice", iv.ID})
+				}
+			}
+		case "expense":
+			var links []models.ExpenseBankTransaction
 			tx.Where("expense_id = ? AND status = ?", n.id, "confirmed").Find(&links)
 			for _, l := range links {
 				if !seenTx[l.BankTransactionID] {
 					seenTx[l.BankTransactionID] = true
-					queue = append(queue, node{true, l.BankTransactionID})
+					queue = append(queue, node{"transaction", l.BankTransactionID})
+				}
+			}
+		case "invoice":
+			var iv models.Invoice
+			if err := tx.First(&iv, n.id).Error; err == nil && iv.BankTransactionID != nil {
+				if !seenTx[*iv.BankTransactionID] {
+					seenTx[*iv.BankTransactionID] = true
+					queue = append(queue, node{"transaction", *iv.BankTransactionID})
 				}
 			}
 		}
@@ -76,48 +98,76 @@ func collectLinkGroup(tx *gorm.DB, itemType string, id uint) (txIDs []uint, expI
 	for id := range seenExp {
 		expIDs = append(expIDs, id)
 	}
+	for id := range seenInv {
+		invIDs = append(invIDs, id)
+	}
 	return
 }
 
 // expandToLinkGroups returns the union of the link groups of every supplied item.
-func expandToLinkGroups(tx *gorm.DB, txIDs, expIDs []uint) ([]uint, []uint) {
+func expandToLinkGroups(tx *gorm.DB, txIDs, expIDs, invIDs []uint) ([]uint, []uint, []uint) {
 	allTx := map[uint]bool{}
 	allExp := map[uint]bool{}
+	allInv := map[uint]bool{}
 	for _, id := range txIDs {
 		if allTx[id] {
 			continue
 		}
-		t, e := collectLinkGroup(tx, "transaction", id)
+		t, e, iv := collectLinkGroup(tx, "transaction", id)
 		for _, x := range t {
 			allTx[x] = true
 		}
 		for _, x := range e {
 			allExp[x] = true
+		}
+		for _, x := range iv {
+			allInv[x] = true
 		}
 	}
 	for _, id := range expIDs {
 		if allExp[id] {
 			continue
 		}
-		t, e := collectLinkGroup(tx, "expense", id)
+		t, e, iv := collectLinkGroup(tx, "expense", id)
 		for _, x := range t {
 			allTx[x] = true
 		}
 		for _, x := range e {
 			allExp[x] = true
 		}
+		for _, x := range iv {
+			allInv[x] = true
+		}
 	}
-	var outTx, outExp []uint
+	for _, id := range invIDs {
+		if allInv[id] {
+			continue
+		}
+		t, e, iv := collectLinkGroup(tx, "invoice", id)
+		for _, x := range t {
+			allTx[x] = true
+		}
+		for _, x := range e {
+			allExp[x] = true
+		}
+		for _, x := range iv {
+			allInv[x] = true
+		}
+	}
+	var outTx, outExp, outInv []uint
 	for id := range allTx {
 		outTx = append(outTx, id)
 	}
 	for id := range allExp {
 		outExp = append(outExp, id)
 	}
-	return outTx, outExp
+	for id := range allInv {
+		outInv = append(outInv, id)
+	}
+	return outTx, outExp, outInv
 }
 
-func loadGroupItems(tx *gorm.DB, txIDs, expIDs []uint) []GroupItem {
+func loadGroupItems(tx *gorm.DB, txIDs, expIDs, invIDs []uint) []GroupItem {
 	items := []GroupItem{}
 	if len(txIDs) > 0 {
 		var txs []models.BankTransaction
@@ -131,6 +181,13 @@ func loadGroupItems(tx *gorm.DB, txIDs, expIDs []uint) []GroupItem {
 		tx.Where("id IN ?", expIDs).Order("timestamp ASC").Find(&exps)
 		for _, e := range exps {
 			items = append(items, GroupItem{"expense", e.ID, strings.TrimSpace(e.Vendor + " " + e.Description), e.Timestamp, e.Amount, e.ReviewStatus})
+		}
+	}
+	if len(invIDs) > 0 {
+		var invs []models.Invoice
+		tx.Where("id IN ?", invIDs).Order("issue_date ASC").Find(&invs)
+		for _, iv := range invs {
+			items = append(items, GroupItem{"invoice", iv.ID, strings.TrimSpace(iv.InvoiceNumber + " " + iv.ClientName), iv.IssueDate, iv.TotalAmount, iv.ReviewStatus})
 		}
 	}
 	return items
@@ -151,7 +208,7 @@ func groupLockedItem(items []GroupItem) *GroupItem {
 }
 
 type exclusionInput struct {
-	Type       string `json:"type"` // "transaction" or "expense"
+	Type       string `json:"type"` // "transaction", "expense", or "invoice"
 	ID         uint   `json:"id"`
 	Reason     string `json:"reason"`
 	Note       string `json:"note"`
@@ -163,8 +220,8 @@ func parseExclusionInput(c fiber.Ctx) (exclusionInput, error) {
 	if err := c.Bind().JSON(&in); err != nil {
 		return in, fmt.Errorf("invalid input")
 	}
-	if in.Type != "transaction" && in.Type != "expense" {
-		return in, fmt.Errorf("type must be 'transaction' or 'expense'")
+	if in.Type != "transaction" && in.Type != "expense" && in.Type != "invoice" {
+		return in, fmt.Errorf("type must be 'transaction', 'expense', or 'invoice'")
 	}
 	if in.ID == 0 {
 		return in, fmt.Errorf("id is required")
@@ -183,8 +240,8 @@ func ExcludePreview(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	txIDs, expIDs := collectLinkGroup(db.DB, in.Type, in.ID)
-	items := loadGroupItems(db.DB, txIDs, expIDs)
+	txIDs, expIDs, invIDs := collectLinkGroup(db.DB, in.Type, in.ID)
+	items := loadGroupItems(db.DB, txIDs, expIDs, invIDs)
 
 	resp := fiber.Map{"items": items, "blocked": false, "blockedReason": ""}
 	if locked := groupLockedItem(items); locked != nil {
@@ -218,17 +275,20 @@ func ExcludeItem(c fiber.Ctx) error {
 
 	tx := db.DB.Begin()
 
-	var txIDs, expIDs []uint
+	var txIDs, expIDs, invIDs []uint
 	if in.UnlinkOnly {
-		if in.Type == "transaction" {
+		switch in.Type {
+		case "transaction":
 			txIDs = []uint{in.ID}
-		} else {
+		case "expense":
 			expIDs = []uint{in.ID}
+		case "invoice":
+			invIDs = []uint{in.ID}
 		}
 	} else {
-		txIDs, expIDs = collectLinkGroup(tx, in.Type, in.ID)
+		txIDs, expIDs, invIDs = collectLinkGroup(tx, in.Type, in.ID)
 	}
-	items := loadGroupItems(tx, txIDs, expIDs)
+	items := loadGroupItems(tx, txIDs, expIDs, invIDs)
 	if len(items) == 0 {
 		tx.Rollback()
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Item not found."})
@@ -248,8 +308,10 @@ func ExcludeItem(c fiber.Ctx) error {
 	if in.UnlinkOnly {
 		if in.Type == "transaction" {
 			tx.Where("bank_transaction_id = ?", in.ID).Delete(&models.ExpenseBankTransaction{})
-		} else {
+		} else if in.Type == "expense" {
 			tx.Where("expense_id = ?", in.ID).Delete(&models.ExpenseBankTransaction{})
+		} else if in.Type == "invoice" {
+			tx.Model(&models.Invoice{}).Where("id = ?", in.ID).Updates(map[string]interface{}{"bank_transaction_id": nil})
 		}
 	}
 
@@ -261,6 +323,9 @@ func ExcludeItem(c fiber.Ctx) error {
 	if len(expIDs) > 0 {
 		tx.Model(&models.Expense{}).Where("id IN ?", expIDs).Updates(fields)
 		tx.Where("expense_id IN ? AND status = ?", expIDs, "suggested").Delete(&models.ExpenseBankTransaction{})
+	}
+	if len(invIDs) > 0 {
+		tx.Model(&models.Invoice{}).Where("id IN ?", invIDs).Updates(fields)
 	}
 
 	groupID := fmt.Sprintf("G%d", time.Now().UnixNano())
@@ -290,8 +355,8 @@ func RestoreItem(c fiber.Ctx) error {
 
 	tx := db.DB.Begin()
 
-	txIDs, expIDs := collectLinkGroup(tx, in.Type, in.ID)
-	items := loadGroupItems(tx, txIDs, expIDs)
+	txIDs, expIDs, invIDs := collectLinkGroup(tx, in.Type, in.ID)
+	items := loadGroupItems(tx, txIDs, expIDs, invIDs)
 	if len(items) == 0 {
 		tx.Rollback()
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Item not found."})
@@ -314,6 +379,9 @@ func RestoreItem(c fiber.Ctx) error {
 	}
 	if len(expIDs) > 0 {
 		tx.Model(&models.Expense{}).Where("id IN ?", expIDs).Updates(fields)
+	}
+	if len(invIDs) > 0 {
+		tx.Model(&models.Invoice{}).Where("id IN ?", invIDs).Updates(fields)
 	}
 
 	groupID := fmt.Sprintf("G%d", time.Now().UnixNano())
@@ -342,15 +410,15 @@ func RestoreBulk(c fiber.Ctx) error {
 	if err := c.Bind().JSON(&in); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body."})
 	}
-	txIDs, expIDs, err := parseBulkItems(in.Items)
+	txIDs, expIDs, invIDs, err := parseBulkItems(in.Items)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	tx := db.DB.Begin()
 
-	allTxIDs, allExpIDs := expandToLinkGroups(tx, txIDs, expIDs)
-	items := loadGroupItems(tx, allTxIDs, allExpIDs)
+	allTxIDs, allExpIDs, allInvIDs := expandToLinkGroups(tx, txIDs, expIDs, invIDs)
+	items := loadGroupItems(tx, allTxIDs, allExpIDs, allInvIDs)
 	if len(items) == 0 {
 		tx.Rollback()
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Selected items not found."})
@@ -374,6 +442,9 @@ func RestoreBulk(c fiber.Ctx) error {
 	if len(allExpIDs) > 0 {
 		tx.Model(&models.Expense{}).Where("id IN ?", allExpIDs).Updates(fields)
 	}
+	if len(allInvIDs) > 0 {
+		tx.Model(&models.Invoice{}).Where("id IN ?", allInvIDs).Updates(fields)
+	}
 
 	groupID := fmt.Sprintf("G%d", time.Now().UnixNano())
 	for _, it := range items {
@@ -391,7 +462,7 @@ func RestoreBulk(c fiber.Ctx) error {
 }
 
 type bulkItemRef struct {
-	Type string `json:"type"` // "transaction" or "expense"
+	Type string `json:"type"` // "transaction", "expense", or "invoice"
 	ID   uint   `json:"id"`
 }
 
@@ -402,24 +473,27 @@ type bulkExclusionInput struct {
 	UnlinkOnly bool          `json:"unlinkOnly"`
 }
 
-func parseBulkItems(items []bulkItemRef) (txIDs []uint, expIDs []uint, err error) {
+func parseBulkItems(items []bulkItemRef) (txIDs []uint, expIDs []uint, invIDs []uint, err error) {
 	if len(items) == 0 {
-		return nil, nil, fmt.Errorf("no items provided")
+		return nil, nil, nil, fmt.Errorf("no items provided")
 	}
 	for _, it := range items {
-		if it.Type != "transaction" && it.Type != "expense" {
-			return nil, nil, fmt.Errorf("item type must be 'transaction' or 'expense'")
+		if it.Type != "transaction" && it.Type != "expense" && it.Type != "invoice" {
+			return nil, nil, nil, fmt.Errorf("item type must be 'transaction', 'expense', or 'invoice'")
 		}
 		if it.ID == 0 {
-			return nil, nil, fmt.Errorf("item id is required")
+			return nil, nil, nil, fmt.Errorf("item id is required")
 		}
-		if it.Type == "transaction" {
+		switch it.Type {
+		case "transaction":
 			txIDs = append(txIDs, it.ID)
-		} else {
+		case "expense":
 			expIDs = append(expIDs, it.ID)
+		case "invoice":
+			invIDs = append(invIDs, it.ID)
 		}
 	}
-	return txIDs, expIDs, nil
+	return txIDs, expIDs, invIDs, nil
 }
 
 // ExcludeBulkPreview describes everything that would be affected by excluding multiple items
@@ -434,15 +508,15 @@ func ExcludeBulkPreview(c fiber.Ctx) error {
 	if err := c.Bind().JSON(&in); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid input"})
 	}
-	txIDs, expIDs, err := parseBulkItems(in.Items)
+	txIDs, expIDs, invIDs, err := parseBulkItems(in.Items)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	selectedItems := loadGroupItems(db.DB, txIDs, expIDs)
+	selectedItems := loadGroupItems(db.DB, txIDs, expIDs, invIDs)
 
-	expandedTxIDs, expandedExpIDs := expandToLinkGroups(db.DB, txIDs, expIDs)
-	items := loadGroupItems(db.DB, expandedTxIDs, expandedExpIDs)
+	expandedTxIDs, expandedExpIDs, expandedInvIDs := expandToLinkGroups(db.DB, txIDs, expIDs, invIDs)
+	items := loadGroupItems(db.DB, expandedTxIDs, expandedExpIDs, expandedInvIDs)
 
 	resp := fiber.Map{
 		"items":         items,
@@ -474,21 +548,22 @@ func ExcludeBulk(c fiber.Ctx) error {
 	if in.Reason == "OTHER" && in.Note == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "A note is required when the reason is 'Other'."})
 	}
-	txIDs, expIDs, err := parseBulkItems(in.Items)
+	txIDs, expIDs, invIDs, err := parseBulkItems(in.Items)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	tx := db.DB.Begin()
 
-	var allTxIDs, allExpIDs []uint
+	var allTxIDs, allExpIDs, allInvIDs []uint
 	if in.UnlinkOnly {
 		allTxIDs = txIDs
 		allExpIDs = expIDs
+		allInvIDs = invIDs
 	} else {
-		allTxIDs, allExpIDs = expandToLinkGroups(tx, txIDs, expIDs)
+		allTxIDs, allExpIDs, allInvIDs = expandToLinkGroups(tx, txIDs, expIDs, invIDs)
 	}
-	items := loadGroupItems(tx, allTxIDs, allExpIDs)
+	items := loadGroupItems(tx, allTxIDs, allExpIDs, allInvIDs)
 	if len(items) == 0 {
 		tx.Rollback()
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Selected items not found."})
@@ -512,6 +587,9 @@ func ExcludeBulk(c fiber.Ctx) error {
 		if len(allExpIDs) > 0 {
 			tx.Where("expense_id IN ?", allExpIDs).Delete(&models.ExpenseBankTransaction{})
 		}
+		if len(allInvIDs) > 0 {
+			tx.Model(&models.Invoice{}).Where("id IN ?", allInvIDs).Updates(map[string]interface{}{"bank_transaction_id": nil})
+		}
 	}
 
 	fields := map[string]interface{}{"review_status": "IGNORED", "exclusion_reason": in.Reason, "exclusion_note": in.Note}
@@ -522,6 +600,9 @@ func ExcludeBulk(c fiber.Ctx) error {
 	if len(allExpIDs) > 0 {
 		tx.Model(&models.Expense{}).Where("id IN ?", allExpIDs).Updates(fields)
 		tx.Where("expense_id IN ? AND status = ?", allExpIDs, "suggested").Delete(&models.ExpenseBankTransaction{})
+	}
+	if len(allInvIDs) > 0 {
+		tx.Model(&models.Invoice{}).Where("id IN ?", allInvIDs).Updates(fields)
 	}
 
 	groupID := fmt.Sprintf("G%d", time.Now().UnixNano())
@@ -550,13 +631,13 @@ func DeleteBulk(c fiber.Ctx) error {
 	if err := c.Bind().JSON(&in); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body."})
 	}
-	txIDs, expIDs, err := parseBulkItems(in.Items)
+	txIDs, expIDs, invIDs, err := parseBulkItems(in.Items)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	tx := db.DB.Begin()
-	items := loadGroupItems(tx, txIDs, expIDs)
+	items := loadGroupItems(tx, txIDs, expIDs, invIDs)
 	if len(items) == 0 {
 		tx.Rollback()
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Selected items not found."})
@@ -575,6 +656,9 @@ func DeleteBulk(c fiber.Ctx) error {
 	if len(expIDs) > 0 {
 		tx.Where("expense_id IN ?", expIDs).Delete(&models.ExpenseBankTransaction{})
 	}
+	if len(invIDs) > 0 {
+		tx.Model(&models.Invoice{}).Where("id IN ?", invIDs).Updates(map[string]interface{}{"bank_transaction_id": nil})
+	}
 
 	now := time.Now()
 	fields := map[string]interface{}{"review_status": "DELETED", "deleted_at": now}
@@ -583,6 +667,9 @@ func DeleteBulk(c fiber.Ctx) error {
 	}
 	if len(expIDs) > 0 {
 		tx.Model(&models.Expense{}).Where("id IN ?", expIDs).Updates(fields)
+	}
+	if len(invIDs) > 0 {
+		tx.Model(&models.Invoice{}).Where("id IN ?", invIDs).Updates(fields)
 	}
 
 	groupID := fmt.Sprintf("G%d", time.Now().UnixNano())
@@ -610,13 +697,13 @@ func RestoreDeletedBulk(c fiber.Ctx) error {
 	if err := c.Bind().JSON(&in); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body."})
 	}
-	txIDs, expIDs, err := parseBulkItems(in.Items)
+	txIDs, expIDs, invIDs, err := parseBulkItems(in.Items)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	tx := db.DB.Begin()
-	items := loadGroupItems(tx, txIDs, expIDs)
+	items := loadGroupItems(tx, txIDs, expIDs, invIDs)
 	if len(items) == 0 {
 		tx.Rollback()
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Selected items not found."})
@@ -640,6 +727,9 @@ func RestoreDeletedBulk(c fiber.Ctx) error {
 	}
 	if len(expIDs) > 0 {
 		tx.Model(&models.Expense{}).Where("id IN ?", expIDs).Updates(fields)
+	}
+	if len(invIDs) > 0 {
+		tx.Model(&models.Invoice{}).Where("id IN ?", invIDs).Updates(fields)
 	}
 
 	groupID := fmt.Sprintf("G%d", time.Now().UnixNano())
@@ -677,13 +767,13 @@ func MoveDeletedToExcludedBulk(c fiber.Ctx) error {
 	if !validExclusionReasons[in.Reason] {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "A valid exclusion reason is required."})
 	}
-	txIDs, expIDs, err := parseBulkItems(in.Items)
+	txIDs, expIDs, invIDs, err := parseBulkItems(in.Items)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	tx := db.DB.Begin()
-	items := loadGroupItems(tx, txIDs, expIDs)
+	items := loadGroupItems(tx, txIDs, expIDs, invIDs)
 	if len(items) == 0 {
 		tx.Rollback()
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Selected items not found."})
@@ -713,6 +803,9 @@ func MoveDeletedToExcludedBulk(c fiber.Ctx) error {
 	if len(expIDs) > 0 {
 		tx.Model(&models.Expense{}).Where("id IN ?", expIDs).Updates(fields)
 	}
+	if len(invIDs) > 0 {
+		tx.Model(&models.Invoice{}).Where("id IN ?", invIDs).Updates(fields)
+	}
 
 	groupID := fmt.Sprintf("G%d", time.Now().UnixNano())
 	for _, it := range items {
@@ -739,13 +832,13 @@ func DeletePermanentBulk(c fiber.Ctx) error {
 	if err := c.Bind().JSON(&in); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body."})
 	}
-	txIDs, expIDs, err := parseBulkItems(in.Items)
+	txIDs, expIDs, invIDs, err := parseBulkItems(in.Items)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	tx := db.DB.Begin()
-	items := loadGroupItems(tx, txIDs, expIDs)
+	items := loadGroupItems(tx, txIDs, expIDs, invIDs)
 	if len(items) == 0 {
 		tx.Rollback()
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Selected items not found."})
@@ -780,6 +873,13 @@ func DeletePermanentBulk(c fiber.Ctx) error {
 		if err := tx.Where("id IN ?", expIDs).Delete(&models.Expense{}).Error; err != nil {
 			tx.Rollback()
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to permanently delete expenses"})
+		}
+	}
+
+	if len(invIDs) > 0 {
+		if err := tx.Where("id IN ?", invIDs).Delete(&models.Invoice{}).Error; err != nil {
+			tx.Rollback()
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to permanently delete invoices"})
 		}
 	}
 

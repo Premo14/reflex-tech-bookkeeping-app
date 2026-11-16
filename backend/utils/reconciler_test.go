@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
 )
 
@@ -256,7 +257,7 @@ func TestEvaluateInvoiceDepositMatchComprehensive(t *testing.T) {
 		}
 	})
 
-	t.Run("Merchant fee with no name/number match, but within 7 days", func(t *testing.T) {
+	t.Run("Merchant fee with no name/number/processor and multiple invoices rejected; processor or sole invoice matches", func(t *testing.T) {
 		inv := &models.Invoice{
 			ID:           11,
 			ClientName:   "",
@@ -266,14 +267,25 @@ func TestEvaluateInvoiceDepositMatchComprehensive(t *testing.T) {
 			Status:       "SENT",
 		}
 		// Net of $50 = $48.25
-		tx := &models.BankTransaction{
+		blankTx := &models.BankTransaction{
 			ID:       15,
 			Date:     issue.AddDate(0, 0, 5), // within 7 days
 			Amount:   models.NewMoney(48.25),
 		}
-		m, f, _ := EvaluateInvoiceDepositMatch(inv, tx, 5)
-		if !m || !f {
-			t.Fatal("expected merchant fee match with date proximity")
+		if m, _, _ := EvaluateInvoiceDepositMatch(inv, blankTx, 5); m {
+			t.Fatal("expected zero-signal multi-invoice deposit NOT to auto-match")
+		}
+		if m, f, _ := EvaluateInvoiceDepositMatch(inv, blankTx, 1); !m || !f {
+			t.Fatal("expected merchant fee match when sole open invoice within 7 days")
+		}
+		stripeTx := &models.BankTransaction{
+			ID:          16,
+			Date:        issue.AddDate(0, 0, 5),
+			Description: "STRIPE PAYOUT",
+			Amount:      models.NewMoney(48.25),
+		}
+		if m, f, _ := EvaluateInvoiceDepositMatch(inv, stripeTx, 5); !m || !f {
+			t.Fatal("expected merchant fee match when payment processor token is present")
 		}
 	})
 
@@ -521,5 +533,288 @@ func TestUpdateAllocationStatusesIntegerCents(t *testing.T) {
 	sum3 := calculateExpenseSum([]models.Expense{exp1, exp2, exp2})
 	if sum3 != 3500 {
 		t.Errorf("expected over sum = 3500, got %d", sum3)
+	}
+}
+
+func TestEvaluateInvoiceDepositMatch_NoStopWordFalsePositive(t *testing.T) {
+	txDate := time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC)
+
+	inv := &models.Invoice{
+		InvoiceNumber: "INV-2026-009",
+		ClientName:    "The Client Co",
+		IssueDate:     txDate.AddDate(0, 0, -5),
+		TotalAmount:   models.NewMoney(500.00),
+		BalanceDue:    models.NewMoney(500.00),
+		Status:        "SENT",
+	}
+	tx := &models.BankTransaction{
+		Date:        txDate,
+		Description: "THE HOME DEPOT #1234",
+		Amount:      models.NewMoney(500.00),
+	}
+
+	// With openInvoiceCount == 2, stop-word "The" must not trigger hasNameMatch.
+	matched, _, _ := EvaluateInvoiceDepositMatch(inv, tx, 2)
+	if matched {
+		t.Fatal("expected stop-word 'The' not to match unrelated deposit")
+	}
+
+	// Pass 2 merchant-fee net deposit ($485.20 = $500 - 2.9% - $0.30) with single open invoice
+	// after the 7-day grace window must not match when description lacks processor/client/invoice signals.
+	invOlder := *inv
+	invOlder.IssueDate = txDate.AddDate(0, 0, -15)
+	txUnrelatedFee := &models.BankTransaction{
+		Date:        txDate,
+		Description: "GENERIC ACH CREDIT 99123",
+		Amount:      models.NewMoney(485.20),
+	}
+	matched2, _, _ := EvaluateInvoiceDepositMatch(&invOlder, txUnrelatedFee, 1)
+	if matched2 {
+		t.Fatal("expected signal-less single open invoice (>7d) not to auto-match Pass 2 fee deposit")
+	}
+}
+
+func TestDaysDifference_DSTAndUTC(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	// Span spring-forward DST transition in America/New_York (2026-03-08):
+	// 2026-03-08 06:00 NY (10:00? 11:00 UTC) to 2026-03-09 06:00 NY (10:00 UTC) is 23h elapsed,
+	// yet UTC calendar dates are 2026-03-08 and 2026-03-09 -> 1 calendar day.
+	d1 := time.Date(2026, 3, 8, 6, 0, 0, 0, ny)
+	d2 := time.Date(2026, 3, 9, 6, 0, 0, 0, ny)
+	if diff := daysDifference(d1, d2); diff != 1 {
+		t.Fatalf("expected 1 calendar day across 23h spring-forward DST boundary, got %d", diff)
+	}
+}
+
+func TestRunReconciliation_StrictExactAndClosedPeriod(t *testing.T) {
+	gdb := setupUtilsTestDB(t)
+	_ = gdb
+	if err := db.DB.Create(&models.AppSetting{Key: "BooksClosedDate", Value: "2026-02-28"}).Error; err != nil {
+		t.Fatalf("seed BooksClosedDate: %v", err)
+	}
+
+	var bankAcc, expAcc models.ChartAccount
+	if err := db.DB.Where("code = ?", "1010").First(&bankAcc).Error; err != nil {
+		t.Fatalf("find 1010: %v", err)
+	}
+	if err := db.DB.Where("code = ?", "5010").First(&expAcc).Error; err != nil {
+		t.Fatalf("find 5010: %v", err)
+	}
+
+	closedDate := time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC)
+	openDate := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+
+	// 1. Closed-period exact pair must NOT be linked or suggested.
+	closedTx := models.BankTransaction{
+		ChartAccountID:    &bankAcc.ID,
+		CategoryAccountID: &expAcc.ID,
+		Date:              closedDate,
+		Description:       "CLOSED ACME HARDWARE",
+		Amount:            models.NewMoney(-75.00),
+		FITID:             "FIT-CLOSED-1",
+		AllocationStatus:  "UNLINKED",
+		ReviewStatus:      "APPROVED",
+	}
+	closedExp := models.Expense{
+		ChartAccountID:   &expAcc.ID,
+		Timestamp:        closedDate,
+		Vendor:           "Closed Acme Hardware",
+		Amount:           models.NewMoney(75.00),
+		Tender:           "card",
+		AllocationStatus: "UNLINKED",
+		ReviewStatus:     "APPROVED",
+	}
+
+	// 2. Open-period non-exact 8% variance pair must NOT auto-confirm in Pass 1.
+	varTx := models.BankTransaction{
+		ChartAccountID:    &bankAcc.ID,
+		CategoryAccountID: &expAcc.ID,
+		Date:              openDate,
+		Description:       "OLIVE GARDEN #442",
+		Amount:            models.NewMoney(-100.00),
+		FITID:             "FIT-VAR-1",
+		AllocationStatus:  "UNLINKED",
+		ReviewStatus:      "APPROVED",
+	}
+	varExp := models.Expense{
+		ChartAccountID:   &expAcc.ID,
+		Timestamp:        openDate,
+		Vendor:           "Olive Garden",
+		Amount:           models.NewMoney(108.00),
+		Tender:           "card",
+		AllocationStatus: "UNLINKED",
+		ReviewStatus:     "APPROVED",
+	}
+
+	// 3. Open-period exact 1:1 pair MUST auto-confirm in Pass 1.
+	exactTx := models.BankTransaction{
+		ChartAccountID:    &bankAcc.ID,
+		CategoryAccountID: &expAcc.ID,
+		Date:              openDate,
+		Description:       "STAPLES OFFICE STORE",
+		Amount:            models.NewMoney(-50.00),
+		FITID:             "FIT-EXACT-1",
+		AllocationStatus:  "UNLINKED",
+		ReviewStatus:      "APPROVED",
+	}
+	exactExp := models.Expense{
+		ChartAccountID:   &expAcc.ID,
+		Timestamp:        openDate,
+		Vendor:           "Staples",
+		Amount:           models.NewMoney(50.00),
+		Tender:           "card",
+		AllocationStatus: "UNLINKED",
+		ReviewStatus:     "APPROVED",
+	}
+
+	for _, tx := range []*models.BankTransaction{&closedTx, &varTx, &exactTx} {
+		if err := db.DB.Create(tx).Error; err != nil {
+			t.Fatalf("create tx: %v", err)
+		}
+	}
+	for _, exp := range []*models.Expense{&closedExp, &varExp, &exactExp} {
+		if err := db.DB.Create(exp).Error; err != nil {
+			t.Fatalf("create exp: %v", err)
+		}
+	}
+
+	RunReconciliation()
+
+	var closedLinks int64
+	db.DB.Model(&models.ExpenseBankTransaction{}).
+		Where("expense_id = ? AND bank_transaction_id = ?", closedExp.ID, closedTx.ID).
+		Count(&closedLinks)
+	if closedLinks != 0 {
+		t.Fatalf("expected 0 links for closed-period pair, got %d", closedLinks)
+	}
+
+	var confirmedVar int64
+	db.DB.Model(&models.ExpenseBankTransaction{}).
+		Where("expense_id = ? AND bank_transaction_id = ? AND status = 'confirmed'", varExp.ID, varTx.ID).
+		Count(&confirmedVar)
+	if confirmedVar != 0 {
+		t.Fatalf("expected 8%% variance pair NOT to auto-confirm, got %d confirmed links", confirmedVar)
+	}
+
+	var confirmedExact int64
+	db.DB.Model(&models.ExpenseBankTransaction{}).
+		Where("expense_id = ? AND bank_transaction_id = ? AND status = 'confirmed'", exactExp.ID, exactTx.ID).
+		Count(&confirmedExact)
+	if confirmedExact != 1 {
+		t.Fatalf("expected exact 1:1 open-period pair to auto-confirm, got %d", confirmedExact)
+	}
+}
+
+func TestUpdateAllocationStatuses_ClearsStaleHasSuggestions(t *testing.T) {
+	setupUtilsTestDB(t)
+	var bankAcc, expAcc models.ChartAccount
+	db.DB.Where("code = ?", "1010").First(&bankAcc)
+	db.DB.Where("code = ?", "5010").First(&expAcc)
+	openDate := time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
+
+	cashExp := models.Expense{
+		ChartAccountID:   &expAcc.ID,
+		Timestamp:        openDate,
+		Vendor:           "Local Deli",
+		Amount:           models.NewMoney(18.50),
+		Tender:           "cash",
+		AllocationStatus: "UNLINKED",
+		ReviewStatus:     "APPROVED",
+		HasSuggestions:   true,
+	}
+	depTx := models.BankTransaction{
+		ChartAccountID:   &bankAcc.ID,
+		Date:             openDate,
+		Description:      "CLIENT WIRE DEPOSIT",
+		Amount:           models.NewMoney(300.00),
+		FITID:            "FIT-DEP-STALE",
+		AllocationStatus: "BALANCED",
+		ReviewStatus:     "APPROVED",
+		HasSuggestions:   true,
+	}
+	db.DB.Create(&cashExp)
+	db.DB.Create(&depTx)
+
+	UpdateAllocationStatuses()
+
+	db.DB.First(&cashExp, cashExp.ID)
+	db.DB.First(&depTx, depTx.ID)
+	if cashExp.AllocationStatus != "BALANCED" || cashExp.HasSuggestions {
+		t.Fatalf("expected cash exp BALANCED with HasSuggestions=false, got status=%q hasSug=%v", cashExp.AllocationStatus, cashExp.HasSuggestions)
+	}
+	if depTx.HasSuggestions {
+		t.Fatalf("expected balanced tx HasSuggestions=false, got true")
+	}
+}
+
+func TestRunInvoiceReconciliation_SkipsDeletedAndPreservesReviewStatus(t *testing.T) {
+	setupUtilsTestDB(t)
+	var bankAcc models.ChartAccount
+	db.DB.Where("code = ?", "1010").First(&bankAcc)
+
+	now := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+	delTime := now
+	deletedInv := models.Invoice{
+		InvoiceNumber: "INV-DEL-01",
+		ClientName:    "Acme Corp",
+		IssueDate:     now.AddDate(0, 0, -5),
+		DueDate:       now.AddDate(0, 0, 25),
+		TotalAmount:   models.NewMoney(250.00),
+		BalanceDue:    models.NewMoney(250.00),
+		Status:        "SENT",
+		ReviewStatus:  "DELETED",
+		DeletedAt:     &delTime,
+	}
+	liveInv := models.Invoice{
+		InvoiceNumber: "INV-LIVE-01",
+		ClientName:    "Acme Corp",
+		IssueDate:     now.AddDate(0, 0, -5),
+		DueDate:       now.AddDate(0, 0, 25),
+		TotalAmount:   models.NewMoney(250.00),
+		BalanceDue:    models.NewMoney(250.00),
+		Status:        "SENT",
+		ReviewStatus:  "WARNINGS_IGNORED",
+	}
+	depTx := models.BankTransaction{
+		ChartAccountID:   &bankAcc.ID,
+		Date:             now,
+		Description:      "ACH DEPOSIT ACME CORP",
+		Amount:           models.NewMoney(250.00),
+		FITID:            "FIT-INV-250",
+		AllocationStatus: "BALANCED",
+		ReviewStatus:     "APPROVED",
+	}
+	db.DB.Create(&deletedInv)
+	db.DB.Create(&liveInv)
+	db.DB.Create(&depTx)
+
+	RunInvoiceReconciliation()
+
+	db.DB.First(&deletedInv, deletedInv.ID)
+	db.DB.First(&liveInv, liveInv.ID)
+	if deletedInv.BankTransactionID != nil || deletedInv.Status != "SENT" {
+		t.Fatalf("expected deleted invoice untouched, got status=%q txID=%v", deletedInv.Status, deletedInv.BankTransactionID)
+	}
+	if liveInv.Status != "PAID" || liveInv.BankTransactionID == nil || *liveInv.BankTransactionID != depTx.ID {
+		t.Fatalf("expected live invoice matched as PAID to tx %d, got status=%q txID=%v", depTx.ID, liveInv.Status, liveInv.BankTransactionID)
+	}
+	if liveInv.ReviewStatus != "WARNINGS_IGNORED" {
+		t.Fatalf("expected live invoice ReviewStatus preserved as WARNINGS_IGNORED, got %q", liveInv.ReviewStatus)
+	}
+}
+
+func TestGenerateSyntheticFitID_Determinism(t *testing.T) {
+	d := time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC)
+	a := GenerateSyntheticFitID("OFX-SYNTH", d, "  Amazon Web Services ", -12500, 1, "ACCT-101")
+	b := GenerateSyntheticFitID("OFX-SYNTH", d, "amazon web services", -12500, 1, "ACCT-101")
+	c := GenerateSyntheticFitID("OFX-SYNTH", d, "amazon web services", -12500, 2, "ACCT-101")
+	if a == "" || a != b {
+		t.Fatalf("expected normalized deterministic OFX-SYNTH FITID, got a=%q b=%q", a, b)
+	}
+	if a == c {
+		t.Fatalf("expected distinct occurrenceIndex to produce distinct FITID, got same %q", a)
 	}
 }

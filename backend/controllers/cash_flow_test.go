@@ -114,7 +114,36 @@ func TestBuildCashFlowData_Empty(t *testing.T) {
 	if report.SavingsRatePercent != 0.0 {
 		t.Errorf("Expected SavingsRatePercent 0.0, got %f", report.SavingsRatePercent)
 	}
+	if report.Periods == nil {
+		t.Errorf("Expected non-nil empty Periods slice, got nil")
+	}
 	if len(report.Periods) != 0 {
 		t.Errorf("Expected 0 periods, got %d", len(report.Periods))
+	}
+}
+
+func TestBuildCashFlowData_SkipsZeroAmountMemos(t *testing.T) {
+	tJan := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	tFeb := time.Date(2026, 2, 10, 10, 0, 0, 0, time.UTC)
+
+	txs := []CashFlowRawTx{
+		{Date: tJan, Amount: models.Money{Cents: 100000}},
+		{Date: tJan, Amount: models.Money{Cents: -40000}},
+		// Feb only has a $0.00 bank memo — must NOT create a ghost month or dilute monthly averages
+		{Date: tFeb, Amount: models.Money{Cents: 0}},
+	}
+
+	report := BuildCashFlowData(CashFlowBuilderInput{
+		StartDate:    "2026-01-01",
+		EndDate:      "2026-02-28",
+		Transactions: txs,
+	})
+
+	if len(report.Periods) != 1 {
+		t.Fatalf("Expected 1 active period (Feb $0 memo skipped), got %d", len(report.Periods))
+	}
+	if report.AvgMonthlyInflow.Cents != 100000 || report.AvgMonthlyOutflow.Cents != 40000 {
+		t.Errorf("Expected averages not diluted by $0 memo month, got avgIn=%d avgOut=%d",
+			report.AvgMonthlyInflow.Cents, report.AvgMonthlyOutflow.Cents)
 	}
 }

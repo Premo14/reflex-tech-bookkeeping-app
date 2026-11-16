@@ -328,3 +328,66 @@ func TestExclusionAndBulkLifecycle(t *testing.T) {
 	_, err := os.Stat(safeFile)
 	require.True(t, os.IsNotExist(err))
 }
+
+func TestReviewQueue_OpenPeriodPendingMissingData(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	require.NoError(t, db.DB.Create(&models.AppSetting{Key: "BooksClosedDate", Value: "2026-01-31"}).Error)
+	expAcct := models.ChartAccount{Code: "5010", Name: "Supplies", Type: "EXPENSE", Active: true}
+	require.NoError(t, db.DB.Create(&expAcct).Error)
+
+	expOpenPending1 := models.Expense{
+		Timestamp:        time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC),
+		Vendor:           "[MISSING VENDOR]",
+		Description:      "[MISSING AMOUNT] Low-res scan",
+		Amount:           models.NewMoney(0),
+		ChartAccountID:   &expAcct.ID,
+		AllocationStatus: "UNLINKED",
+		ReviewStatus:     "PENDING",
+	}
+	expOpenPending2 := models.Expense{
+		Timestamp:        time.Date(2026, 6, 16, 0, 0, 0, 0, time.UTC),
+		Vendor:           "[MISSING VENDOR]",
+		Description:      "[MISSING AMOUNT] Needs edit",
+		Amount:           models.NewMoney(0),
+		ChartAccountID:   &expAcct.ID,
+		AllocationStatus: "UNLINKED",
+		ReviewStatus:     "PENDING",
+	}
+	require.NoError(t, db.DB.Create(&expOpenPending1).Error)
+	require.NoError(t, db.DB.Create(&expOpenPending2).Error)
+
+	app := buildReviewExclusionApp()
+	app.Patch("/expenses/:id", UpdateExpense)
+
+	// 1. Counts & Queue both surface open-period PENDING missing-data receipts even when BooksClosedDate is set
+	cntResp := doJSONReq(t, app, http.MethodGet, "/review/counts", "")
+	require.Equal(t, http.StatusOK, cntResp.StatusCode)
+	var counts map[string]int64
+	require.NoError(t, json.NewDecoder(cntResp.Body).Decode(&counts))
+	require.Equal(t, int64(2), counts["pending"])
+
+	qResp := doJSONReq(t, app, http.MethodGet, "/review?status=PENDING", "")
+	require.Equal(t, http.StatusOK, qResp.StatusCode)
+	var qBody struct {
+		Expenses []models.Expense `json:"expenses"`
+	}
+	require.NoError(t, json.NewDecoder(qResp.Body).Decode(&qBody))
+	require.Len(t, qBody.Expenses, 2)
+
+	// 2. ignore_warnings succeeds on open-period PENDING item
+	resResp := doJSONReq(t, app, http.MethodPost, "/review/resolve", `{"action":"ignore_warnings","expenseIds":[`+itoa(expOpenPending1.ID)+`]}`)
+	require.Equal(t, http.StatusOK, resResp.StatusCode)
+	var exp1After models.Expense
+	require.NoError(t, db.DB.First(&exp1After, expOpenPending1.ID).Error)
+	require.Equal(t, "WARNINGS_IGNORED", exp1After.ReviewStatus)
+
+	// 3. Editing open-period PENDING item to positive amount auto-approves it
+	editResp := doJSONReq(t, app, http.MethodPatch, "/expenses/"+itoa(expOpenPending2.ID), `{"amount":42.50,"vendor":"Target","description":"Paper towels"}`)
+	require.Equal(t, http.StatusOK, editResp.StatusCode)
+	var exp2After models.Expense
+	require.NoError(t, db.DB.First(&exp2After, expOpenPending2.ID).Error)
+	require.Equal(t, int64(4250), exp2After.Amount.Cents)
+	require.Equal(t, "APPROVED", exp2After.ReviewStatus)
+}

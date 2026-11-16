@@ -3,7 +3,6 @@ package utils
 import (
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"path/filepath"
 	"reflex-tech-bookkeeping-app-api/db"
@@ -20,14 +19,16 @@ import (
 // It uses the bank's FITID to safely ignore duplicates so users can upload overlapping date ranges.
 //
 // COA account matching & Smart Adoption:
-//   On import, we attempt to match the OFX AccountID to an existing ChartAccount.
-//   If an unassigned default account of the matching type exists (e.g. 1010 Checking, 2020 Credit Card),
-//   the system adopts it, binding the institution name and account ID without creating duplicate accounts.
-//   If all default accounts are already in use, a new sequential account is auto-created.
+//
+//	On import, we attempt to match the OFX AccountID to an existing ChartAccount.
+//	If an unassigned default account of the matching type exists (e.g. 1010 Checking, 2020 Credit Card),
+//	the system adopts it, binding the institution name and account ID without creating duplicate accounts.
+//	If all default accounts are already in use, a new sequential account is auto-created.
 //
 // Period assignment:
-//   Transactions are NOT auto-assigned to any accounting period. They are stored freely
-//   and appear in any user-created period whose date range covers their date.
+//
+//	Transactions are NOT auto-assigned to any accounting period. They are stored freely
+//	and appear in any user-created period whose date range covers their date.
 func ParseOfx(filePath string) {
 	if db.DB == nil {
 		return
@@ -140,9 +141,15 @@ func ParseOfx(filePath string) {
 
 	// Build and bulk-insert the transactions
 	var dbTransactions []models.BankTransaction
-	for i, tx := range transactions {
+	sameDayOccurrences := make(map[string]int)
+	acctRef := strings.TrimSpace(accountID)
+	if acctRef == "" {
+		acctRef = "OFX-DEFAULT"
+	}
+	for _, tx := range transactions {
 		// Convert tx.TrnAmt (which is an ofxgo.Amount) to a float64
 		val, _ := tx.TrnAmt.Float64()
+		money := models.NewMoney(val)
 		// Combine Name and Memo for a full description without duplicating identical fields
 		fullDesc := buildOfxDescription(string(tx.Name), string(tx.Memo))
 		statementID := bankStatement.ID
@@ -153,7 +160,9 @@ func ParseOfx(filePath string) {
 
 		fitID := strings.TrimSpace(string(tx.FiTID))
 		if fitID == "" {
-			fitID = fmt.Sprintf("OFX-SYNTH-%d-%s-%d-%d", statementID, date.Format("20060102"), int64(math.Round(val*100)), i)
+			dupKey := fmt.Sprintf("%s|%s|%d", date.Format("2006-01-02"), strings.ToUpper(strings.TrimSpace(fullDesc)), money.Cents)
+			sameDayOccurrences[dupKey]++
+			fitID = GenerateSyntheticFitID("OFX-SYNTH", date, fullDesc, money.Cents, sameDayOccurrences[dupKey], acctRef)
 		}
 
 		dbTx := models.BankTransaction{
@@ -161,7 +170,7 @@ func ParseOfx(filePath string) {
 			ChartAccountID:  chartAccountID, // denormalized from the statement
 			Date:            date,
 			Description:     fullDesc,
-			Amount:          models.NewMoney(val),
+			Amount:          money,
 			TransactionType: fmt.Sprintf("%v", tx.TrnType),
 			FITID:           fitID,
 		}
@@ -229,7 +238,7 @@ func buildOfxDescription(name, memo string) string {
 //     its Name (incorporating institution if available) and setting OfxAccountID to accountID.
 //  3. Fallback: If all default accounts of that category are already adopted (e.g. user uploads a
 //     second checking account or second credit card), find the next available code and auto-create.
-func resolveOrCreateChartAccount(accountID, bankID, accountType, institution, subType string) *uint {
+func resolveOrCreateChartAccount(accountID, _ /* bankID */, accountType, institution, subType string) *uint {
 	if accountID == "" {
 		return nil
 	}
@@ -283,13 +292,14 @@ func resolveOrCreateChartAccount(accountID, bankID, accountType, institution, su
 		}
 	case "LIABILITY":
 		codePrefix = "2"
-		if subType == "CREDITLINE" {
+		switch subType {
+		case "CREDITLINE":
 			accountLabel = "Line of Credit"
 			defaultCandidateCode = "2030"
-		} else if subType == "LOAN" {
+		case "LOAN":
 			accountLabel = "Bank Loan"
 			defaultCandidateCode = "2510"
-		} else {
+		default:
 			accountLabel = "Credit Card"
 			defaultCandidateCode = "2020"
 		}
@@ -332,11 +342,12 @@ func resolveOrCreateChartAccount(accountID, bankID, accountType, institution, su
 
 	// 3. Fallback: Create a new account with the next sequential code in standard range
 	var code string
-	if accountType == "ASSET" {
+	switch accountType {
+	case "ASSET":
 		code = nextAvailableCodeInRange(1010, 1099)
-	} else if accountType == "LIABILITY" {
+	case "LIABILITY":
 		code = nextAvailableCodeInRange(2020, 2099)
-	} else {
+	default:
 		code = nextAvailableCode(codePrefix)
 	}
 

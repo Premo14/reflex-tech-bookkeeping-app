@@ -1,5 +1,4 @@
 import { Badge, type BadgeVariant } from "../ui/Badge";
-import { Button } from "../ui/Button";
 import { LoadingSpinner } from "../ui/LoadingSpinner";
 import type { TrialBalanceReport } from "../../types/models";
 import { formatCents, formatCurrency } from "../../utils/formatCurrency";
@@ -9,7 +8,6 @@ interface TrialBalanceTabProps {
   isLoading: boolean;
   typeFilter: string;
   onTypeFilterChange: (type: string) => void;
-  onExportCSV: () => void;
 }
 
 const ACCOUNT_TYPES = ["ALL", "ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"] as const;
@@ -27,11 +25,13 @@ export function TrialBalanceTab({
   isLoading,
   typeFilter,
   onTypeFilterChange,
-  onExportCSV,
 }: TrialBalanceTabProps) {
-  const filteredAccounts = report
-    ? report.accounts.filter((acc) => typeFilter === "ALL" || acc.accountType.toUpperCase() === typeFilter)
-    : [];
+  const accounts = report?.accounts ?? [];
+  const filteredAccounts = accounts.filter(
+    (acc) => typeFilter === "ALL" || acc.accountType.toUpperCase() === typeFilter
+  );
+  const filteredDebitSubtotal = filteredAccounts.reduce((sum, acc) => sum + (acc.netDebit || 0), 0);
+  const filteredCreditSubtotal = filteredAccounts.reduce((sum, acc) => sum + (acc.netCredit || 0), 0);
 
   return (
     <div className="space-y-4">
@@ -62,7 +62,7 @@ export function TrialBalanceTab({
           <p className="text-sm">Calculating double-entry trial balance...</p>
         </div>
       ) : report ? (
-        <div className="space-y-4">
+        <div className={`space-y-4 transition-opacity ${isLoading ? "opacity-50 pointer-events-none" : ""}`}>
           <div
             className={`p-3 sm:p-3.5 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
               report.isBalanced
@@ -87,21 +87,15 @@ export function TrialBalanceTab({
                 </h4>
                 <p className="text-xs opacity-80 mt-0.5">
                   {report.isBalanced
-                    ? `Total Debits match Total Credits exactly across ${report.accounts.length} active ledger accounts.`
+                    ? `Total Debits match Total Credits exactly across ${accounts.length} active ledger accounts.`
                     : `Total debits and credits do not match. Variance: ${formatCents(report.varianceCents)}.`}
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <span className="text-[11px] font-mono tabular-nums px-2 py-0.5 rounded-md bg-black/40 border border-white/10">
-                Variance:{" "}
-                <span className={report.isBalanced ? "text-emerald-400 font-bold" : "text-rose-400 font-bold"}>
-                  {formatCents(report.varianceCents)}
-                </span>
-              </span>
-              <Button variant="secondary" size="sm" onClick={onExportCSV} className="text-xs">
-                Export CSV
-              </Button>
+              <Badge variant={report.isBalanced ? "success" : "danger"} size="sm" className="font-mono tabular-nums">
+                Variance: <span className="font-bold ml-1">{formatCents(report.varianceCents)}</span>
+              </Badge>
             </div>
           </div>
 
@@ -147,7 +141,7 @@ export function TrialBalanceTab({
                 Active Accounts
               </span>
               <span className="text-lg font-bold font-mono tabular-nums text-blue-400">
-                {report.accounts.length}
+                {accounts.length}
               </span>
               <span className="text-[10px] text-zinc-400 block mt-0.5">Chart of Accounts</span>
             </div>
@@ -160,8 +154,8 @@ export function TrialBalanceTab({
             {ACCOUNT_TYPES.map((type) => {
               const count =
                 type === "ALL"
-                  ? report.accounts.length
-                  : report.accounts.filter((a) => a.accountType.toUpperCase() === type).length;
+                  ? accounts.length
+                  : accounts.filter((a) => a.accountType.toUpperCase() === type).length;
               return (
                 <button
                   key={type}
@@ -204,7 +198,12 @@ export function TrialBalanceTab({
                       <tr key={acc.accountId || acc.accountCode} className="hover:bg-white/5 transition-colors">
                         <td className="py-1.5 px-3 sm:px-3.5 font-bold text-zinc-300">{acc.accountCode}</td>
                         <td className="py-1.5 px-3 sm:px-3.5 font-sans text-zinc-200 font-medium">
-                          {acc.accountName}
+                          <span>{acc.accountName}</span>
+                          {acc.grossDebit > 0 && acc.grossCredit > 0 && (
+                            <span className="block text-[10px] font-mono text-zinc-500">
+                              Gross Dr {formatCurrency(acc.grossDebit)} / Cr {formatCurrency(acc.grossCredit)}
+                            </span>
+                          )}
                         </td>
                         <td className="py-1.5 px-3 sm:px-3.5 font-sans">
                           <Badge variant={badgeVariant} size="sm">
@@ -245,6 +244,19 @@ export function TrialBalanceTab({
                   )}
                 </tbody>
                 <tfoot className="sticky bottom-0 bg-zinc-950 border-t-2 border-white/20 font-mono font-bold text-xs z-10">
+                  {typeFilter !== "ALL" && filteredAccounts.length > 0 && (
+                    <tr className="border-b border-white/10 text-zinc-300 font-semibold">
+                      <td colSpan={4} className="py-1.5 px-3 sm:px-3.5 font-sans uppercase tracking-wider text-blue-300 text-[10px]">
+                        Filtered Subtotal ({typeFilter})
+                      </td>
+                      <td className="py-1.5 px-3 sm:px-3.5 text-right tabular-nums text-blue-200">
+                        {formatCurrency(filteredDebitSubtotal)}
+                      </td>
+                      <td className="py-1.5 px-3 sm:px-3.5 text-right tabular-nums text-blue-200">
+                        {formatCurrency(filteredCreditSubtotal)}
+                      </td>
+                    </tr>
+                  )}
                   <tr>
                     <td colSpan={4} className="py-2 px-3 sm:px-3.5 font-sans uppercase tracking-wider text-zinc-300 text-[11px]">
                       Totals (All Accounts)

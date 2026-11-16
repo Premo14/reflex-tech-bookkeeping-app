@@ -145,6 +145,9 @@ func TestBuildVendorSpendData_EmptyAndZero(t *testing.T) {
 	if report.Top5Percent != 0.0 {
 		t.Errorf("Expected Top5Percent=0.0, got %f", report.Top5Percent)
 	}
+	if report.Vendors == nil {
+		t.Errorf("Expected non-nil empty Vendors slice, got nil")
+	}
 	if len(report.Vendors) != 0 {
 		t.Errorf("Expected empty Vendors list, got %d", len(report.Vendors))
 	}
@@ -153,5 +156,66 @@ func TestBuildVendorSpendData_EmptyAndZero(t *testing.T) {
 	}
 	if report.Total1099Spend.Cents != 0 {
 		t.Errorf("Expected Total1099Spend=0, got %d", report.Total1099Spend.Cents)
+	}
+}
+
+func TestBuildVendorSpendData_DeterministicTieBreakingAndZeroSkip(t *testing.T) {
+	now := time.Now()
+
+	items := []VendorSpendRawItem{
+		// Vendor Z and Vendor A tied at $450.00 each -> must sort A before Z deterministically
+		{
+			Vendor:       "Zeta Supplies",
+			Amount:       models.Money{Cents: 45000},
+			Timestamp:    now,
+			CategoryCode: "5050",
+			CategoryName: "Office Supplies",
+		},
+		// Vendor A has 2 categories tied at 1 txn each ($300 in 5050 Office Supplies vs $150 in 5090 Meals)
+		// -> must deterministically pick 5050 Office Supplies (higher spend)
+		{
+			Vendor:       "Alpha Services",
+			Amount:       models.Money{Cents: 15000},
+			Timestamp:    now,
+			CategoryCode: "5090",
+			CategoryName: "Meals & Entertainment",
+		},
+		{
+			Vendor:       "Alpha Services",
+			Amount:       models.Money{Cents: 30000},
+			Timestamp:    now,
+			CategoryCode: "5050",
+			CategoryName: "Office Supplies",
+		},
+		// $0.00 memo must be ignored
+		{
+			Vendor:       "Alpha Services",
+			Amount:       models.Money{Cents: 0},
+			Timestamp:    now,
+			CategoryCode: "5090",
+			CategoryName: "Meals & Entertainment",
+		},
+	}
+
+	for run := 0; run < 20; run++ {
+		report := BuildVendorSpendData(VendorSpendBuilderInput{
+			StartDate: "2026-01-01",
+			EndDate:   "2026-12-31",
+			Items:     items,
+		})
+		if len(report.Vendors) != 2 {
+			t.Fatalf("expected 2 vendors, got %d", len(report.Vendors))
+		}
+		if report.Vendors[0].VendorName != "Alpha Services" || report.Vendors[1].VendorName != "Zeta Supplies" {
+			t.Fatalf("expected deterministic alphabetical tie-break [Alpha Services, Zeta Supplies], got [%s, %s]",
+				report.Vendors[0].VendorName, report.Vendors[1].VendorName)
+		}
+		if report.Vendors[0].TransactionCount != 2 {
+			t.Fatalf("expected $0 item skipped (TransactionCount=2), got %d", report.Vendors[0].TransactionCount)
+		}
+		if report.Vendors[0].PrimaryCategoryCode != "5050" || report.Vendors[0].PrimaryCategoryName != "Office Supplies" {
+			t.Fatalf("expected deterministic primary category 5050 Office Supplies on count tie, got %s %s",
+				report.Vendors[0].PrimaryCategoryCode, report.Vendors[0].PrimaryCategoryName)
+		}
 	}
 }

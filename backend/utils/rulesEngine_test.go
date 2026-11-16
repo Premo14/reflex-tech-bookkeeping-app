@@ -3,7 +3,9 @@ package utils
 import (
 	"encoding/json"
 	"reflex-tech-bookkeeping-app-api/models"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestEvaluateCondition(t *testing.T) {
@@ -210,5 +212,110 @@ func TestTestRulePreview(t *testing.T) {
 	_, _, err := TestRulePreview(models.BankRule{}, nil)
 	if err == nil {
 		t.Error("expected error from TestRulePreview with nil DB")
+	}
+}
+
+func TestApplyAllRulesToExisting_SafetyAndNotes(t *testing.T) {
+	gdb := setupUtilsTestDB(t)
+	var bankAcc, expAcc models.ChartAccount
+	gdb.Where("code = ?", "1010").First(&bankAcc)
+	gdb.Where("code = ?", "5010").First(&expAcc)
+
+	condBytes, _ := json.Marshal([]models.RuleCondition{{Field: "description", Operator: "contains", Value: "AWS"}})
+	rule := models.BankRule{
+		Name:              "AWS Auto",
+		Active:            true,
+		Priority:          1,
+		MatchLogic:        "AND",
+		ConditionsJSON:    string(condBytes),
+		CategoryAccountID: &expAcc.ID,
+		RenamedVendor:     "Amazon Web Services",
+		AutoConfirm:       true,
+		Notes:             "Cloud hosting",
+	}
+	if err := gdb.Create(&rule).Error; err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+
+	openDate := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+	txNormal := models.BankTransaction{
+		ChartAccountID:   &bankAcc.ID,
+		Date:             openDate,
+		Description:      "AMZN AWS BILLING #1",
+		Amount:           models.NewMoney(-45.00),
+		FITID:            "FIT-RULE-1",
+		AllocationStatus: "UNLINKED",
+		ReviewStatus:     "PENDING",
+		Notes:            "Prior note",
+	}
+	txWarnIgnored := models.BankTransaction{
+		ChartAccountID:   &bankAcc.ID,
+		Date:             openDate,
+		Description:      "AMZN AWS BILLING #2",
+		Amount:           models.NewMoney(-20.00),
+		FITID:            "FIT-RULE-2",
+		AllocationStatus: "UNLINKED",
+		ReviewStatus:     "WARNINGS_IGNORED",
+	}
+	gdb.Create(&txNormal)
+	gdb.Create(&txWarnIgnored)
+
+	expSync := models.Expense{
+		Timestamp:        openDate,
+		Vendor:           "Old AWS Label",
+		Description:      "Cloud invoice",
+		Amount:           models.NewMoney(-0),
+		AllocationStatus: "BALANCED",
+		ReviewStatus:     "APPROVED",
+	}
+	expSync.Amount = models.NewMoney(45.00)
+	expZeroMissing := models.Expense{
+		Timestamp:        openDate,
+		Vendor:           "AMZN AWS Missing Receipt",
+		Description:      "[MISSING AMOUNT] AWS receipt",
+		Amount:           models.NewMoney(0),
+		AllocationStatus: "UNLINKED",
+		ReviewStatus:     "PENDING",
+	}
+	gdb.Create(&expSync)
+	gdb.Create(&expZeroMissing)
+
+	// Make a 1:1 confirmed link between txNormal and expSync with nil category on txNormal initially,
+	// OR match expSync via rule condition on AWS to verify 1:1 category sync & Raw: note preservation.
+	expSync.Vendor = "AWS RAW VENDOR"
+	gdb.Save(&expSync)
+	gdb.Create(&models.ExpenseBankTransaction{
+		ExpenseID:         expSync.ID,
+		BankTransactionID: txNormal.ID,
+		Status:            "confirmed",
+	})
+
+	updated, err := ApplyAllRulesToExisting(gdb)
+	if err != nil {
+		t.Fatalf("ApplyAllRulesToExisting: %v", err)
+	}
+	if updated == 0 {
+		t.Fatal("expected updated count > 0")
+	}
+
+	gdb.First(&txNormal, txNormal.ID)
+	if txNormal.Description != "Amazon Web Services" {
+		t.Fatalf("expected renamed tx description, got %q", txNormal.Description)
+	}
+	if !strings.Contains(txNormal.Notes, "Prior note") || !strings.Contains(txNormal.Notes, "Raw: AMZN AWS BILLING #1") || !strings.Contains(txNormal.Notes, "Cloud hosting") {
+		t.Fatalf("expected existing memo + Raw: original + rule note preserved, got %q", txNormal.Notes)
+	}
+	if txNormal.ReviewStatus != "APPROVED" {
+		t.Fatalf("expected PENDING tx auto-confirmed to APPROVED, got %q", txNormal.ReviewStatus)
+	}
+
+	gdb.First(&txWarnIgnored, txWarnIgnored.ID)
+	if txWarnIgnored.ReviewStatus != "WARNINGS_IGNORED" {
+		t.Fatalf("expected WARNINGS_IGNORED tx status preserved, got %q", txWarnIgnored.ReviewStatus)
+	}
+
+	gdb.First(&expZeroMissing, expZeroMissing.ID)
+	if expZeroMissing.ReviewStatus != "PENDING" {
+		t.Fatalf("expected $0 [MISSING expense NOT auto-confirmed by rule, got %q", expZeroMissing.ReviewStatus)
 	}
 }

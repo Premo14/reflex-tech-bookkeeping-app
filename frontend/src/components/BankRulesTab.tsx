@@ -4,6 +4,7 @@ import { Badge } from "./ui/Badge";
 import { Input } from "./ui/Input";
 import { Select } from "./ui/Select";
 import { LoadingSpinner } from "./ui/LoadingSpinner";
+import Pagination from "./ui/Pagination";
 import { useConfirm } from "./ui/confirmContext";
 import {
   getBankRules,
@@ -12,6 +13,7 @@ import {
   createBankRule,
   updateBankRule,
   deleteBankRule,
+  reorderBankRules,
   applyAllBankRules,
   previewBankRule,
   getChartAccounts,
@@ -26,10 +28,10 @@ export interface BankRulesTabProps {
     categoryAccountId?: number | null;
   } | null;
   onRulesApplied?: () => void;
+  onEditingChange?: (isEditing: boolean) => void;
 }
 
 const FIELD_OPTIONS = [
-  { value: "description", label: "Description / Merchant" },
   { value: "amount", label: "Amount ($)" },
   { value: "transaction_type", label: "Transaction Type (DEBIT/DEP)" },
   { value: "chart_account_id", label: "Bank / Source Account" },
@@ -66,6 +68,7 @@ function parseRuleConditions(raw: string | RuleCondition[] | undefined): RuleCon
 export default function BankRulesTab({
   initialRuleData,
   onRulesApplied,
+  onEditingChange,
 }: BankRulesTabProps) {
   const { confirm, alert } = useConfirm();
   const [rules, setRules] = useState<BankRule[]>([]);
@@ -73,6 +76,7 @@ export default function BankRulesTab({
   const [isLoading, setIsLoading] = useState(true);
   const [isApplying, setIsApplying] = useState(false);
   const [applyResultMsg, setApplyResultMsg] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Edit / Create view state
   const [isEditing, setIsEditing] = useState(false);
@@ -98,6 +102,13 @@ export default function BankRulesTab({
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [suggestions, setSuggestions] = useState<RuleSuggestion[]>([]);
+  const [visibleSuggestionsCount, setVisibleSuggestionsCount] = useState(3);
+  const [visibleRulesCount, setVisibleRulesCount] = useState(20);
+
+  const handleSearchChange = (val: string) => {
+    setSearchQuery(val);
+    setVisibleRulesCount(20);
+  };
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -146,6 +157,34 @@ export default function BankRulesTab({
       active = false;
     };
   }, [loadData]);
+
+  useEffect(() => {
+    onEditingChange?.(isEditing);
+  }, [isEditing, onEditingChange]);
+
+  const handleMoveRule = async (index: number, direction: "up" | "down") => {
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= rules.length) return;
+
+    const newRules = [...rules];
+    const [moved] = newRules.splice(index, 1);
+    newRules.splice(targetIndex, 0, moved);
+
+    // Optimistically update rules state
+    setRules(newRules);
+
+    try {
+      const ruleIds = newRules.map((r) => r.id);
+      await reorderBankRules(ruleIds);
+    } catch (err: unknown) {
+      console.error("Failed to reorder rules:", err);
+      await alert({
+        title: "Reorder Failed",
+        message: err instanceof Error ? err.message : "Failed to update rule order.",
+      });
+      await loadData();
+    }
+  };
 
   // Handle prefill if opened from "Create Rule from Transaction"
   useEffect(() => {
@@ -406,6 +445,19 @@ export default function BankRulesTab({
 
   const activeRulesCount = rules.filter((r) => r.active).length;
 
+  const filteredRules = rules.filter((rule) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    if (rule.name.toLowerCase().includes(q)) return true;
+    if (rule.renamedVendor && rule.renamedVendor.toLowerCase().includes(q)) return true;
+    if (rule.notes && rule.notes.toLowerCase().includes(q)) return true;
+    const conds = parseRuleConditions(rule.conditions);
+    if (conds.some((c) => c.value && c.value.toLowerCase().includes(q))) return true;
+    const targetAccount = accounts.find((a) => a.id === rule.categoryAccountId);
+    if (targetAccount && (targetAccount.name.toLowerCase().includes(q) || targetAccount.code.includes(q))) return true;
+    return false;
+  });
+
   const groupedAccounts = getGroupedAccounts(
     accounts,
     ["EXPENSE", "REVENUE", "ASSET", "LIABILITY", "EQUITY"],
@@ -450,7 +502,7 @@ export default function BankRulesTab({
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  Run All Rules
+                  Apply All Rules
                 </>
               )}
             </Button>
@@ -498,7 +550,7 @@ export default function BankRulesTab({
             </span>
           </div>
           <div className="space-y-1.5">
-            {suggestions.map((s, idx) => (
+            {suggestions.slice(0, visibleSuggestionsCount).map((s, idx) => (
               <div
                 key={idx}
                 className="flex items-center justify-between gap-2 p-2 rounded-lg bg-zinc-950/60 border border-white/5 hover:border-indigo-500/30 transition-colors text-xs"
@@ -527,6 +579,55 @@ export default function BankRulesTab({
               </div>
             ))}
           </div>
+          <Pagination
+            variant="load-more"
+            hasMore={visibleSuggestionsCount < suggestions.length}
+            onLoadMore={() => setVisibleSuggestionsCount((prev) => prev + 3)}
+            loadedCount={Math.min(visibleSuggestionsCount, suggestions.length)}
+            totalItems={suggestions.length}
+            label="Load More Suggestions"
+          />
+        </div>
+      )}
+
+      {/* AUTOMATION & PRIORITY CLARIFICATION BANNER */}
+      {!isEditing && rules.length > 0 && (
+        <div className="flex items-center justify-between text-xs text-zinc-400 bg-zinc-950/50 border border-white/5 rounded-lg px-3 py-2 gap-2">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-emerald-400 font-semibold shrink-0">⚡ Always Automated:</span>
+            <span className="truncate">Active rules evaluate automatically on every bank feed, receipt upload, and manual entry.</span>
+          </div>
+          <div className="text-[11px] text-zinc-500 shrink-0 hidden sm:flex items-center gap-1">
+            <span>Evaluation: Priority #1 first (↑ / ↓ to adjust)</span>
+          </div>
+        </div>
+      )}
+
+      {/* RULES SEARCH BAR */}
+      {!isEditing && rules.length > 0 && (
+        <div className="relative">
+          <label htmlFor="rules-search" className="sr-only">Search rules by name, keyword, vendor, or category</label>
+          <input
+            id="rules-search"
+            type="text"
+            placeholder="Search rules by name, keyword, vendor, or category..."
+            value={searchQuery}
+            onChange={(e) => handleSearchChange(e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-8 pr-7 py-2 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
+          />
+          <svg className="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-2.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          {searchQuery && (
+            <button
+              type="button"
+              aria-label="Clear rule search"
+              onClick={() => handleSearchChange("")}
+              className="text-zinc-500 hover:text-white absolute right-2.5 top-2 text-xs p-0.5 cursor-pointer"
+            >
+              ✕
+            </button>
+          )}
         </div>
       )}
 
@@ -554,11 +655,25 @@ export default function BankRulesTab({
                 + Create First Rule
               </Button>
             </div>
+          ) : filteredRules.length === 0 ? (
+            <div className="p-8 text-center rounded-xl bg-zinc-900/50 border border-white/10 space-y-2">
+              <p className="text-sm font-semibold text-zinc-300">No rules match &ldquo;{searchQuery}&rdquo;</p>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => handleSearchChange("")}
+                className="mt-1 text-xs"
+              >
+                Clear Search
+              </Button>
+            </div>
           ) : (
-            <div className="space-y-2 max-h-[460px] overflow-y-auto custom-scrollbar pr-1">
-              {rules.map((rule) => {
+            <div className="space-y-2">
+              {filteredRules.slice(0, visibleRulesCount).map((rule) => {
                 const targetAccount = accounts.find((a) => a.id === rule.categoryAccountId);
                 const condList = parseRuleConditions(rule.conditions);
+                const ruleIndex = rules.findIndex((r) => r.id === rule.id);
 
                 return (
                   <div
@@ -650,7 +765,35 @@ export default function BankRulesTab({
                       </div>
 
                       {/* Right: Toggle Switch & Actions */}
-                      <div className="flex items-center gap-2 shrink-0 pt-0.5">
+                      <div className="flex items-center gap-1.5 shrink-0 pt-0.5">
+                        {/* Priority Reordering Buttons */}
+                        <div className="flex items-center gap-0.5 bg-zinc-900/80 border border-white/5 rounded-lg p-0.5">
+                          <button
+                            type="button"
+                            aria-label={`Move rule ${rule.name} up`}
+                            disabled={ruleIndex <= 0}
+                            onClick={() => handleMoveRule(ruleIndex, "up")}
+                            className="p-1 rounded text-zinc-400 hover:text-zinc-100 disabled:opacity-20 disabled:hover:text-zinc-400 hover:bg-white/10 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                            title="Move Up in Priority"
+                          >
+                            <svg aria-hidden="true" className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Move rule ${rule.name} down`}
+                            disabled={ruleIndex < 0 || ruleIndex >= rules.length - 1}
+                            onClick={() => handleMoveRule(ruleIndex, "down")}
+                            className="p-1 rounded text-zinc-400 hover:text-zinc-100 disabled:opacity-20 disabled:hover:text-zinc-400 hover:bg-white/10 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                            title="Move Down in Priority"
+                          >
+                            <svg aria-hidden="true" className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </button>
+                        </div>
+
                         <button
                           type="button"
                           role="switch"
@@ -705,6 +848,14 @@ export default function BankRulesTab({
                   </div>
                 );
               })}
+              <Pagination
+                variant="load-more"
+                hasMore={visibleRulesCount < filteredRules.length}
+                onLoadMore={() => setVisibleRulesCount((prev) => prev + 20)}
+                loadedCount={Math.min(visibleRulesCount, filteredRules.length)}
+                totalItems={filteredRules.length}
+                label="Load More Rules"
+              />
             </div>
           )}
         </div>

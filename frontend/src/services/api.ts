@@ -658,6 +658,7 @@ export const getReviewQueue = (
   status: string;
   transactions: BankTransaction[];
   expenses: Expense[];
+  invoices?: Invoice[];
   booksClosedDate?: string;
 }> => {
   return getJSON(
@@ -669,7 +670,8 @@ export const getReviewQueue = (
 export const resolveReviewItems = (
   action: "allow" | "pending" | "ignore_warnings" | "restore_warnings" | "delete",
   transactionIds: number[],
-  expenseIds: number[]
+  expenseIds: number[],
+  invoiceIds: number[] = []
 ): Promise<{
   status: string;
   rolledBack?: boolean;
@@ -679,7 +681,7 @@ export const resolveReviewItems = (
 }> => {
   return postJSON(
     "/review-queue/resolve",
-    { action, transactionIds, expenseIds },
+    { action, transactionIds, expenseIds, invoiceIds },
     "Failed to resolve items"
   );
 };
@@ -687,11 +689,12 @@ export const resolveReviewItems = (
 export const batchCategorizeItems = (
   transactionIds: number[],
   expenseIds: number[],
-  categoryId: number
+  categoryId: number,
+  invoiceIds: number[] = []
 ): Promise<{ status: string; message?: string; count: number }> => {
   return postJSON(
     "/review-queue/batch-categorize",
-    { transactionIds, expenseIds, categoryId },
+    { transactionIds, expenseIds, invoiceIds, categoryId },
     "Failed to batch categorize items"
   );
 };
@@ -709,14 +712,14 @@ export function getClosePreflight(date: string): Promise<ClosePreflight> {
 }
 
 export function previewExclusion(
-  type: "transaction" | "expense",
+  type: "transaction" | "expense" | "invoice",
   id: number
 ): Promise<ExcludePreview> {
   return postJSON("/items/exclude-preview", { type, id });
 }
 
 export function excludeItem(
-  type: "transaction" | "expense",
+  type: "transaction" | "expense" | "invoice",
   id: number,
   reason: ExclusionReason,
   note: string,
@@ -726,26 +729,26 @@ export function excludeItem(
 }
 
 export function restoreItem(
-  type: "transaction" | "expense",
+  type: "transaction" | "expense" | "invoice",
   id: number
 ): Promise<{ status: string; affected: GroupItem[] }> {
   return postJSON("/items/restore", { type, id });
 }
 
 export function restoreItems(
-  items: Array<{ type: "transaction" | "expense"; id: number }>
+  items: Array<{ type: "transaction" | "expense" | "invoice"; id: number }>
 ): Promise<{ status: string; affected: GroupItem[] }> {
   return postJSON("/items/restore-bulk", { items });
 }
 
 export function previewBulkExclusion(
-  items: Array<{ type: "transaction" | "expense"; id: number }>
+  items: Array<{ type: "transaction" | "expense" | "invoice"; id: number }>
 ): Promise<ExcludePreview> {
   return postJSON("/items/exclude-bulk-preview", { items });
 }
 
 export function excludeItems(
-  items: Array<{ type: "transaction" | "expense"; id: number }>,
+  items: Array<{ type: "transaction" | "expense" | "invoice"; id: number }>,
   reason: ExclusionReason,
   note: string,
   unlinkOnly?: boolean
@@ -754,19 +757,19 @@ export function excludeItems(
 }
 
 export function deleteItemsBulk(
-  items: Array<{ type: "transaction" | "expense"; id: number }>
+  items: Array<{ type: "transaction" | "expense" | "invoice"; id: number }>
 ): Promise<{ status: string; deletedCount: number; affected: GroupItem[] }> {
   return postJSON("/items/delete-bulk", { items });
 }
 
 export function restoreDeletedItems(
-  items: Array<{ type: "transaction" | "expense"; id: number }>
+  items: Array<{ type: "transaction" | "expense" | "invoice"; id: number }>
 ): Promise<{ status: string; restoredCount: number; affected: GroupItem[] }> {
   return postJSON("/items/restore-deleted", { items });
 }
 
 export function moveDeletedToExcluded(
-  items: Array<{ type: "transaction" | "expense"; id: number }>,
+  items: Array<{ type: "transaction" | "expense" | "invoice"; id: number }>,
   reason: ExclusionReason,
   note: string
 ): Promise<{ status: string; movedCount: number; affected: GroupItem[] }> {
@@ -774,7 +777,7 @@ export function moveDeletedToExcluded(
 }
 
 export function deleteItemsPermanent(
-  items: Array<{ type: "transaction" | "expense"; id: number }>
+  items: Array<{ type: "transaction" | "expense" | "invoice"; id: number }>
 ): Promise<{ status: string; deletedCount: number }> {
   return postJSON("/items/delete-permanent", { items });
 }

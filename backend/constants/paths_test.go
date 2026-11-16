@@ -20,6 +20,8 @@ func TestNormalizeDropboxHostPath(t *testing.T) {
 		{"whitespace trimmed", "  /home/user/Desktop  ", "/home/user/Desktop/document-data"},
 		{"traversal attack", "/home/user/../etc", "./document-data"},
 		{"traversal in middle", "/home/user/foo/../../bar", "./document-data"},
+		{"relative traversal", "../foo", "./document-data"},
+		{"windows traversal", "..\\foo\\bar", "./document-data"},
 		{"Users prefix", "Users/aj/Desktop", "/Users/aj/Desktop/document-data"},
 		{"home prefix", "home/user/Desktop", "/home/user/Desktop/document-data"},
 	}
@@ -85,5 +87,14 @@ func TestGetCurrentContainerDir(t *testing.T) {
 	// Should not be empty after init
 	if got == "" {
 		t.Error("GetCurrentContainerDir() returned empty string")
+	}
+}
+
+func TestRewriteStoredPathPrefix(t *testing.T) {
+	if got, ok := RewriteStoredPathPrefix("/app/documents/processed/42.png", "/app/documents", "/host_fs/Users/aj/document-data"); !ok || got != "/host_fs/Users/aj/document-data/processed/42.png" {
+		t.Fatalf("RewriteStoredPathPrefix() = (%q, %v), want rebased path", got, ok)
+	}
+	if got, ok := RewriteStoredPathPrefix("/other/dir/42.png", "/app/documents", "/new"); ok || got != "/other/dir/42.png" {
+		t.Fatalf("RewriteStoredPathPrefix() unrelated = (%q, %v), want unchanged false", got, ok)
 	}
 }

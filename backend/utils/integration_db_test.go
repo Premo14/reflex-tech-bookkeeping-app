@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
 
+	"github.com/fsnotify/fsnotify"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -555,7 +557,7 @@ func TestProcessFile_AIExtractionWarningsAndDuplicate(t *testing.T) {
 		calls++
 		if calls == 1 {
 			// Full cash receipt response
-			_, _ = w.Write([]byte(fmt.Sprintf("```json\n{\"vendor\":\"Local Bakery\",\"description\":\"Team snacks\",\"amount\":24.50,\"taxAmount\":1.80,\"timestamp\":\"2026-05-10\",\"tender\":\"cash\",\"chartAccountId\":%d}\n```", mealsID)))
+			_, _ = w.Write(fmt.Appendf(nil, "```json\n{\"vendor\":\"Local Bakery\",\"description\":\"Team snacks\",\"amount\":24.50,\"taxAmount\":1.80,\"timestamp\":\"2026-05-10\",\"tender\":\"cash\",\"chartAccountId\":%d}\n```", mealsID))
 			return
 		}
 		// Missing amount & missing date -> triggers warning flags + PENDING review
@@ -647,5 +649,88 @@ func TestDemoSeeder_SeedResetAndRemove(t *testing.T) {
 	gdb.Model(&models.Expense{}).Where("vendor = ?", "Real Vendor").Count(&keepExp)
 	if keepTx != 1 || keepExp != 1 {
 		t.Errorf("expected real user data preserved (tx=%d exp=%d)", keepTx, keepExp)
+	}
+}
+
+func TestWatcherLoopAndProcessFileFallbacks(t *testing.T) {
+	gdb := setupUtilsTestDB(t)
+	tmpDir := t.TempDir()
+	if _, err := constants.SetDropboxLocation(filepath.Join(tmpDir, "document-data")); err != nil {
+		t.Fatalf("SetDropboxLocation failed: %v", err)
+	}
+
+	// 1. Start and restart Watcher
+	if err := Watcher(); err != nil {
+		t.Fatalf("Watcher() failed: %v", err)
+	}
+	if err := RestartWatcher(); err != nil {
+		t.Fatalf("RestartWatcher() second call failed: %v", err)
+	}
+	// Stop activeWatcher cleanly after test
+	defer func() {
+		watcherLock.Lock()
+		if activeWatcher != nil {
+			if stopWatcherChan != nil {
+				close(stopWatcherChan)
+				stopWatcherChan = nil
+			}
+			_ = activeWatcher.Close()
+			activeWatcher = nil
+		}
+		watcherLock.Unlock()
+	}()
+
+	// 2. Exercise runWatcherChannels directly with synthetic event & error
+	evCh := make(chan fsnotify.Event, 1)
+	errCh := make(chan error, 1)
+	stopCh := make(chan struct{})
+	loopDone := make(chan struct{})
+	go func() {
+		runWatcherChannels(evCh, errCh, stopCh)
+		close(loopDone)
+	}()
+
+	evCh <- fsnotify.Event{Name: filepath.Join(constants.GetInboxPath(), ".ignored.tmp"), Op: fsnotify.Create}
+	errCh <- errors.New("synthetic fsnotify error")
+	time.Sleep(15 * time.Millisecond)
+	close(stopCh)
+	<-loopDone
+
+	// 3. processExistingFilesSweep with a file in inbox when AI server returns invalid JSON -> creates fallback expense without 6s retry delay
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not-valid-json"))
+	}))
+	defer failSrv.Close()
+	t.Setenv("FILE_PROCESSOR_URL", failSrv.URL)
+
+	// Set future BooksClosedDate so fallback expense takes the PENDING branch
+	gdb.Create(&models.AppSetting{Key: "BooksClosedDate", Value: "2099-12-31"})
+
+	sweepFile := filepath.Join(constants.GetInboxPath(), "fallback_receipt.png")
+	_ = os.WriteFile(sweepFile, []byte("\x89PNG\r\n\x1a\nfallback-bytes"), 0644)
+	if err := processExistingFilesSweep(constants.GetInboxPath()); err != nil {
+		t.Fatalf("processExistingFilesSweep failed: %v", err)
+	}
+
+	var fallbackExp models.Expense
+	if err := gdb.Where("description LIKE ?", "%AI extraction unavailable%").First(&fallbackExp).Error; err != nil {
+		t.Fatalf("expected fallback expense to be created when AI server fails: %v", err)
+	}
+	if fallbackExp.ReviewStatus != "PENDING" {
+		t.Errorf("expected fallback expense in closed period to be PENDING, got %q", fallbackExp.ReviewStatus)
+	}
+
+	// 4. processFile with invalid .heic file cleans up receipt DB row and returns error
+	badHeic := filepath.Join(constants.GetInboxPath(), "bad.heic")
+	_ = os.WriteFile(badHeic, []byte("not-a-valid-heic"), 0644)
+	if err := processFile(badHeic); err == nil {
+		t.Error("expected processFile on invalid .heic to return error")
+	}
+
+	// 5. processFile with .ofx bank statement routes through SafeMove + ParseOfx
+	ofxFile := filepath.Join(constants.GetInboxPath(), "stmt.ofx")
+	_ = os.WriteFile(ofxFile, []byte("invalid-ofx-content"), 0644)
+	if err := processFile(ofxFile); err != nil {
+		t.Errorf("expected processFile(.ofx) to return nil after moving & calling ParseOfx, got %v", err)
 	}
 }

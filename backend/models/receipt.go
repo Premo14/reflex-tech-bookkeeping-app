@@ -29,6 +29,10 @@ type Expense struct {
 	ChartAccountID *uint         `json:"chartAccountId"`
 	ChartAccount   *ChartAccount `gorm:"foreignKey:ChartAccountID" json:"chartAccount"`
 
+	// Optional relational link to a Client Invoice (e.g. billable expenses / client receipts)
+	InvoiceID *uint    `gorm:"index" json:"invoiceId"`
+	Invoice   *Invoice `gorm:"foreignKey:InvoiceID;constraint:OnDelete:SET NULL" json:"invoice,omitempty"`
+
 	// One expense can have multiple receipts (e.g. a photo and a PDF of the same purchase)
 	Receipts []Receipt `json:"receipts"`
 

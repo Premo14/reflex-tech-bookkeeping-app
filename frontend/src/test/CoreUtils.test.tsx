@@ -218,6 +218,8 @@ describe('accountHierarchy', () => {
   it('resolves subclasses by explicit id or numeric range and calculates account hierarchy depth', () => {
     expect(Object.keys(ACCOUNT_SUBCLASSES)).toEqual(['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE'])
     expect(getSubClassForAccount('EXPENSE', '5010', 'SOFTWARE_TECH')?.id).toBe('SOFTWARE_TECH')
+    expect(getSubClassForAccount('EXPENSE', '5810')?.id).toBe('MERCHANT_FEES')
+    expect(getSubClassForAccount('EXPENSE', '5710')?.name).toBe('Interest & Depreciation')
     expect(getSubClassForAccount('ASSET', '1010')?.id).toBe('CASH')
     expect(getSubClassForAccount('EXPENSE', 'non-numeric')).toBeUndefined()
 

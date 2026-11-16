@@ -16,6 +16,8 @@ var (
 	pathMu              sync.RWMutex
 	currentHostPath     string
 	currentContainerDir string
+	hostFSRoot          = "/host_fs"
+	renameFn            = os.Rename
 )
 
 func init() {
@@ -38,7 +40,7 @@ func setPaths(envPath string) {
 // to find the primary host user home directory.
 func DetectHostHomeDir() string {
 	for _, root := range []string{"/Users", "/home"} {
-		entries, err := os.ReadDir(filepath.Join("/host_fs", root))
+		entries, err := os.ReadDir(filepath.Join(hostFSRoot, root))
 		if err == nil {
 			for _, e := range entries {
 				name := e.Name()
@@ -55,14 +57,21 @@ func DetectHostHomeDir() string {
 // If the user supplies a parent path like "/home/user/Desktop", it appends "document-data".
 func NormalizeDropboxHostPath(hostPath string) string {
 	trimmed := strings.TrimSpace(hostPath)
-	cleaned := filepath.Clean(trimmed)
-	if cleaned == "" || cleaned == "." || cleaned == "./document-data" || cleaned == "document-data" {
+	if trimmed == "" {
 		return "./document-data"
 	}
 
-	// Security guard: reject any path traversal attempt (.. after clean means original had ..)
-	if filepath.Base(trimmed) == ".." || strings.Contains(trimmed, "/..") {
-		log.Printf("NormalizeDropboxHostPath: rejecting path with traversal: %s", hostPath)
+	// Security guard: reject any path containing a ".." traversal segment (e.g. "../foo", "a/../b").
+	normalizedSlashes := strings.ReplaceAll(trimmed, "\\", "/")
+	for _, seg := range strings.Split(normalizedSlashes, "/") {
+		if seg == ".." {
+			log.Printf("NormalizeDropboxHostPath: rejecting path with traversal: %s", hostPath)
+			return "./document-data"
+		}
+	}
+
+	cleaned := filepath.Clean(trimmed)
+	if cleaned == "" || cleaned == "." || cleaned == "./document-data" || cleaned == "document-data" {
 		return "./document-data"
 	}
 
@@ -83,6 +92,26 @@ func NormalizeDropboxHostPath(hostPath string) string {
 	return cleaned
 }
 
+// RewriteStoredPathPrefix rewrites uri from oldBase to newBase when uri resides under oldBase.
+func RewriteStoredPathPrefix(uri, oldBase, newBase string) (string, bool) {
+	trimmed := strings.TrimSpace(uri)
+	if trimmed == "" || oldBase == "" || newBase == "" || oldBase == newBase {
+		return uri, false
+	}
+	cleanURI := filepath.Clean(trimmed)
+	cleanOld := filepath.Clean(oldBase)
+	cleanNew := filepath.Clean(newBase)
+	if cleanURI == cleanOld {
+		return cleanNew, true
+	}
+	prefix := cleanOld + string(filepath.Separator)
+	if strings.HasPrefix(cleanURI, prefix) {
+		rel := strings.TrimPrefix(cleanURI, prefix)
+		return filepath.Join(cleanNew, rel), true
+	}
+	return uri, false
+}
+
 // ResolveHostToContainer maps a host path to its container-accessible path.
 // When Docker mounts / to /host_fs, host path /home/user/x maps to /host_fs/home/user/x.
 func ResolveHostToContainer(hostPath string) string {
@@ -97,8 +126,8 @@ func ResolveHostToContainer(hostPath string) string {
 	}
 
 	// Check if running inside container with /host_fs mount
-	if fi, err := os.Stat("/host_fs"); err == nil && fi.IsDir() {
-		return filepath.Join("/host_fs", cleaned)
+	if fi, err := os.Stat(hostFSRoot); err == nil && fi.IsDir() {
+		return filepath.Join(hostFSRoot, cleaned)
 	}
 
 	// Outside container / local dev
@@ -143,7 +172,7 @@ func SafeMove(src, dst string) error {
 	}
 
 	// Try atomic rename first; capture error for EXDEV detection
-	renameErr := os.Rename(src, dst)
+	renameErr := renameFn(src, dst)
 	if renameErr == nil {
 		_ = os.Chmod(dst, 0666)
 		return nil

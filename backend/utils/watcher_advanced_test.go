@@ -16,10 +16,10 @@ import (
 )
 
 // -------------------------------------------------------------------
-// S07D test helpers
+// Watcher test helpers
 // -------------------------------------------------------------------
 
-func setupTestDBS07D(t *testing.T) *gorm.DB {
+func setupWatcherTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	orig := db.DB
 	t.Cleanup(func() { db.DB = orig })
@@ -50,14 +50,14 @@ func setupTestDBS07D(t *testing.T) *gorm.DB {
 	return sqliteDB
 }
 
-func seedExpenseAccountsS07D(tx *gorm.DB) {
+func seedWatcherExpenseAccounts(tx *gorm.DB) {
 	tx.Create(&models.ChartAccount{Code: "5010", Name: "Office Supplies", Type: "EXPENSE", Active: true})
 	tx.Create(&models.ChartAccount{Code: "5020", Name: "Meals", Type: "EXPENSE", Active: true})
 	tx.Create(&models.ChartAccount{Code: "5030", Name: "Travel", Type: "EXPENSE", Active: true})
 }
 
 // -------------------------------------------------------------------
-// S07D — Additional watcher tests for debounce and sweep coverage
+// Watcher — Additional watcher tests for debounce and sweep coverage
 // -------------------------------------------------------------------
 
 func TestDebounceEvent_SuccessPath(t *testing.T) {
@@ -165,7 +165,7 @@ func TestProcessExistingFilesSweep_EmptyDir(t *testing.T) {
 	}
 }
 
-func TestAcquireReleaseInFlight_S07D(t *testing.T) {
+func TestAcquireReleaseInFlight_Watcher(t *testing.T) {
 	// Clean state
 	inFlight = make(map[string]bool)
 
@@ -241,8 +241,8 @@ func TestProcessExistingFiles_SkipsSubdirs(t *testing.T) {
 }
 
 func TestParseCsvStatement_NoHeader(t *testing.T) {
-	db := setupTestDBS07D(t)
-	seedExpenseAccountsS07D(db)
+	db := setupWatcherTestDB(t)
+	seedWatcherExpenseAccounts(db)
 
 	dir := t.TempDir()
 	csvData := "line1\nline2\nline3\n" // No recognizable header
@@ -259,8 +259,8 @@ func TestParseCsvStatement_NoHeader(t *testing.T) {
 }
 
 func TestParseCsvStatement_InvalidAmount(t *testing.T) {
-	db := setupTestDBS07D(t)
-	seedExpenseAccountsS07D(db)
+	db := setupWatcherTestDB(t)
+	seedWatcherExpenseAccounts(db)
 
 	dir := t.TempDir()
 	csvData := "Date,Description,Amount\n2026-01-15,Vendor,NOTANUMBER\n2026-01-15,Valid,10.00\n"
@@ -419,7 +419,7 @@ func TestParseExtractedAmount_AllCurrencySymbols(t *testing.T) {
 	}
 }
 
-func TestValidateExtractedCategory_NilPointer(t *testing.T) {
+func TestValidateExtractedCategory_NilPointerWatcher(t *testing.T) {
 	result := ValidateExtractedCategory(nil)
 	if result != nil {
 		t.Error("expected nil for nil pointer")
@@ -427,10 +427,10 @@ func TestValidateExtractedCategory_NilPointer(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// Helper for S07D test coverage
+// Helper for Watcher test coverage
 // -------------------------------------------------------------------
 
-func TestS07D_CompanyNameFallback(t *testing.T) {
+func TestCompanyNameFallback(t *testing.T) {
 	// Ensure "Unnamed Company" fallback works
 	// This is covered by the UI components in S13; here we just verify no regression
 	_ = fmt.Sprintf("%s", "Test")

@@ -132,6 +132,7 @@ export function ReviewFilterBar({
               <option value="ALL">All items</option>
               <option value="transaction">Bank transactions</option>
               <option value="expense">Expenses</option>
+              <option value="invoice">Invoices</option>
             </Select>
             <Select
               label="Issue / Status"
@@ -144,6 +145,8 @@ export function ReviewFilterBar({
               {isPending && <option value="UNLINKED">Unlinked</option>}
               {isPending && <option value="UNDER_ALLOCATED">Under-Allocated</option>}
               {isPending && <option value="OVER_ALLOCATED">Over-Allocated</option>}
+              {isPending && <option value="OVERDUE">Overdue Invoices</option>}
+              {isPending && <option value="UNPAID">Unpaid / Sent Invoices</option>}
               {isIgnored && (
                 <>
                   <optgroup label="Filter by Reason">

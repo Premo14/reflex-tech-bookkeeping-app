@@ -16,9 +16,9 @@ import { EXCLUSION_REASON_LABELS } from "../utils/ledgerStatus";
 interface ExcludeItemModalProps {
   isOpen: boolean;
   onClose: () => void;
-  itemType?: "transaction" | "expense";
+  itemType?: "transaction" | "expense" | "invoice";
   itemId?: number;
-  targets?: Array<{ type: "transaction" | "expense"; id: number }>;
+  targets?: Array<{ type: "transaction" | "expense" | "invoice"; id: number }>;
   /** Called after the item (and its link group) was successfully excluded. */
   onExcluded: () => void;
   linkedChoice?: "ONLY_THIS" | "ALL_LINKED";
@@ -309,6 +309,8 @@ export default function ExcludeItemModal({
                       <p className="text-xs text-zinc-400">
                         {i.type === "transaction"
                           ? "Bank transaction"
+                          : i.type === "invoice"
+                          ? "Invoice"
                           : "Expense"}{" "}
                         · {formatDate(i.date)}
                       </p>

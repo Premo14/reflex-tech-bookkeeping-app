@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"gorm.io/gorm"
 )
 
 // allowedSettingsKeys defines the set of settings that can be updated via UpdateSettings.
@@ -96,18 +97,21 @@ func UpdateSettings(c fiber.Ctx) error {
 	}
 
 	// Custom Validation and Dynamic Configuration for DocumentDropboxPath
+	var movedOldContainer, movedNewContainer string
 	if input.Key == "DocumentDropboxPath" {
 		hostPath := strings.TrimSpace(input.Value)
 		if hostPath == "" {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Dropbox path cannot be empty"})
 		}
 
+		movedOldContainer = constants.GetCurrentContainerDir()
 		containerDir, err := constants.MoveDropboxLocation(hostPath)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error": fmt.Sprintf("Failed to move directory to '%s': %v", hostPath, err),
 			})
 		}
+		movedNewContainer = containerDir
 
 		// Ensure setting stores the normalized host path ending in document-data
 		input.Value = constants.GetCurrentHostPath()
@@ -177,12 +181,49 @@ func UpdateSettings(c fiber.Ctx) error {
 		}
 	}
 
+	if movedOldContainer != "" && movedNewContainer != "" && movedOldContainer != movedNewContainer {
+		if err := rewriteStoredURIsInTx(tx, movedOldContainer, movedNewContainer); err != nil {
+			tx.Rollback()
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update stored document paths after move"})
+		}
+	}
+
 	tx.Commit()
 	events.Broadcast("SETTINGS_UPDATED", nil)
 	if input.Key == "BooksClosedDate" {
 		events.Broadcast("QUEUE_UPDATED", nil)
 	}
 	return c.JSON(setting)
+}
+
+func rewriteStoredURIsInTx(tx *gorm.DB, oldBase, newBase string) error {
+	if tx.Migrator().HasTable(&models.Receipt{}) {
+		var receipts []models.Receipt
+		if err := tx.Select("id", "document_uri").Find(&receipts).Error; err != nil {
+			return err
+		}
+		for _, r := range receipts {
+			if updated, ok := constants.RewriteStoredPathPrefix(r.DocumentURI, oldBase, newBase); ok {
+				if err := tx.Model(&models.Receipt{}).Where("id = ?", r.ID).Update("document_uri", updated).Error; err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if tx.Migrator().HasTable(&models.BankStatement{}) {
+		var statements []models.BankStatement
+		if err := tx.Select("id", "document_uri").Find(&statements).Error; err != nil {
+			return err
+		}
+		for _, s := range statements {
+			if updated, ok := constants.RewriteStoredPathPrefix(s.DocumentURI, oldBase, newBase); ok {
+				if err := tx.Model(&models.BankStatement{}).Where("id = ?", s.ID).Update("document_uri", updated).Error; err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // GetAuditLogs retrieves history of BooksClosedDate changes.
@@ -286,8 +327,9 @@ func computeClosePreflight(dateStr string) (ClosePreflight, error) {
 	db.DB.Model(&models.BankTransaction{}).
 		Where("date < ?", before).
 		Where(inBooksClause).
+		Where("amount != 0").
 		Where("category_account_id IS NULL").
-		Where("id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')").
+		Where("(id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed') OR (amount < 0 AND allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL')))").
 		Where("NOT (amount > 0 AND chart_account_id IN (SELECT id FROM chart_accounts WHERE type = 'LIABILITY'))").
 		Count(&pf.UncategorizedTxCount)
 

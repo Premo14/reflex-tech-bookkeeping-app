@@ -188,6 +188,8 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
 
     let lastRenderedGroup: string | undefined;
 
+    const hasCustomHeight = className.includes('h-') || className.includes('min-h-');
+
     return (
       <div
         className={`${isAuto ? 'w-auto' : 'w-full'} flex flex-col gap-1.5 text-left ${isOpen ? 'relative z-50' : ''}`}
@@ -225,14 +227,14 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
               isOpen && highlightedIndex >= 0 ? `${generatedId}-opt-${highlightedIndex}` : undefined
             }
             className={`
-              ${isAuto ? 'w-auto' : 'w-full'} min-h-[38px] bg-white/5 border ${
+              ${isAuto ? 'w-auto' : 'w-full'} ${hasCustomHeight ? '' : 'min-h-[38px]'} bg-white/5 border ${
               isOpen
                 ? 'border-emerald-500/70 ring-1 ring-emerald-500/40 glow-border-emerald'
                 : 'border-white/10 hover:border-white/20 focus-visible:border-emerald-500/60 focus-visible:ring-1 focus-visible:ring-emerald-500/40'
             }
               rounded-lg text-sm text-zinc-200 touch-glow-emerald focus:outline-none cursor-pointer
               flex items-center justify-between gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap
-              ${icon ? 'pl-9 pr-3 py-2' : 'px-3 py-2'}
+              ${hasCustomHeight ? (icon ? 'pl-8 pr-2.5' : 'px-2.5') : (icon ? 'pl-9 pr-3 py-2' : 'px-3 py-2')}
               ${error ? 'border-red-500/60 ring-1 ring-red-500/40' : ''}
               ${className}
             `.trim()}
@@ -254,7 +256,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
               className={`absolute top-full ${
                 dropdownAlign === 'right' ? 'right-0' : 'left-0'
               } mt-2 min-w-full ${
-                dropdownWidth || (isAuto ? 'w-max min-w-[200px]' : 'w-full')
+                dropdownWidth || 'w-max'
               } max-w-[calc(100vw-32px)] border border-white/10 rounded-xl shadow-2xl z-50 py-1.5 animate-in fade-in zoom-in-95 duration-200 backdrop-blur-xl bg-zinc-900/95 max-h-[340px] flex flex-col`}
             >
               {searchable && (

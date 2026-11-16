@@ -197,6 +197,10 @@ func TestReportsHTTPEndpointsFullIntegration(t *testing.T) {
 	if int(scReport["year"].(float64)) != 2026 {
 		t.Fatalf("expected year 2026 extracted from startDate, got %v", scReport["year"])
 	}
+	if scReport["returnsAndAllowances"].(float64) != 100.0 || scReport["netReceipts"].(float64) != 199900.0 {
+		t.Fatalf("expected returnsAndAllowances=100.0 and netReceipts=199900.0 (200000 - 100), got returns=%v netReceipts=%v",
+			scReport["returnsAndAllowances"], scReport["netReceipts"])
+	}
 	if scReport["nondeductibleMeals"].(float64) != 40.0 {
 		t.Fatalf("expected 50%% nondeductible meals = 40.0, got %v", scReport["nondeductibleMeals"])
 	}
@@ -222,6 +226,10 @@ func TestReportsHTTPEndpointsFullIntegration(t *testing.T) {
 	if cfReport["totalCashIn"].(float64) != 200075.0 {
 		t.Fatalf("expected cashIn=200075.0, got %v", cfReport["totalCashIn"])
 	}
+	// Bank outflows ($1,775.00) + standalone cash-tender expenses ($80.00 + $15.00 = $95.00) = $1,870.00
+	if cfReport["totalCashOut"].(float64) != 1870.0 {
+		t.Fatalf("expected cashOut=1870.0 (including $95.00 physical cash-tender outflows), got %v", cfReport["totalCashOut"])
+	}
 
 	// 4. GetVendorSpendReport
 	code, vsResp := doJSONMap(t, app, "GET", "/api/reports/vendor-spend?startDate=2026-01-01&endDate=2026-12-31", nil)
@@ -231,6 +239,10 @@ func TestReportsHTTPEndpointsFullIntegration(t *testing.T) {
 	vsReport := vsResp["report"].(map[string]interface{})
 	if int(vsReport["contractorsOver600"].(float64)) != 1 {
 		t.Fatalf("expected 1 contractor >= $600 (AWS $1200), got %v", vsReport["contractorsOver600"])
+	}
+	// TotalSpend matches P&L operating expenses ($1200 AWS + $60 partialExp + $40 partialDebit remainder + $80 cashMeal + $15 uncatCashExp + $300 unlinkedCOGS + $40 archivedDebit + $35 uncatDebit = $1770.00)
+	if vsReport["totalSpend"].(float64) != 1770.0 {
+		t.Fatalf("expected totalSpend=1770.0 matching P&L expenses, got %v", vsReport["totalSpend"])
 	}
 
 	// 5. GetARAgingReport
@@ -252,5 +264,16 @@ func TestReportsHTTPEndpointsFullIntegration(t *testing.T) {
 	if tbReport["isBalanced"] != true || int64(tbReport["varianceCents"].(float64)) != 0 {
 		t.Fatalf("Trial Balance MUST balance across archived accounts & cash expenses! got balanced=%v variance=%v totalDebit=%v totalCredit=%v",
 			tbReport["isBalanced"], tbReport["varianceCents"], tbReport["totalDebit"], tbReport["totalCredit"])
+	}
+	tbAccounts := tbReport["accounts"].([]interface{})
+	var found9998 float64
+	for _, raw := range tbAccounts {
+		acc := raw.(map[string]interface{})
+		if acc["accountCode"] == "9998" {
+			found9998 = acc["netCredit"].(float64)
+		}
+	}
+	if found9998 != 25.0 {
+		t.Fatalf("expected Trial Balance 9998 Uncategorized Income = 25.0 (excluding $300 LIABILITY card payment), got %v", found9998)
 	}
 }

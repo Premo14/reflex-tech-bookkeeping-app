@@ -42,7 +42,7 @@ type ChartAccount struct {
 
 	// Soft-disable: inactive accounts can no longer receive new transactions
 	// but their history is preserved.
-	Active bool `gorm:"default:true" json:"active"`
+	Active bool `json:"active"`
 
 	// System/default accounts cannot be deleted, and their Type cannot be changed.
 	IsDefault bool `gorm:"default:false" json:"isDefault"`

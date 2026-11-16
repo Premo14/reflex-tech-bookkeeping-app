@@ -218,6 +218,11 @@ export function ReviewBulkToolbar({
               >
                 Send to Review Queue
               </Button>
+              {totalSelected === 1 && (
+                <Button variant="secondary" size="sm" onClick={onOpenSingleDrawer}>
+                  Open in Drawer
+                </Button>
+              )}
               <Button
                 variant="primary"
                 size="sm"
@@ -239,6 +244,11 @@ export function ReviewBulkToolbar({
               <Button variant="danger" size="sm" disabled={totalSelected === 0} onClick={onShowExcludeModal}>
                 Exclude Selected {totalSelected > 0 ? `(${totalSelected})` : ""}
               </Button>
+              {totalSelected === 1 && (
+                <Button variant="secondary" size="sm" onClick={onOpenSingleDrawer}>
+                  Open in Drawer
+                </Button>
+              )}
               <Button
                 variant="primary"
                 size="sm"
@@ -272,6 +282,11 @@ export function ReviewBulkToolbar({
               >
                 Delete Permanently {totalSelected > 0 ? `(${totalSelected})` : ""}
               </Button>
+              {totalSelected === 1 && (
+                <Button variant="secondary" size="sm" onClick={onOpenSingleDrawer}>
+                  Open in Drawer
+                </Button>
+              )}
               <Button
                 variant="primary"
                 size="sm"

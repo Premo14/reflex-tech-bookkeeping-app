@@ -776,3 +776,142 @@ func TestRulesControllerFullLifecycle(t *testing.T) {
 		t.Fatalf("expected 200 DeleteRule, got %d", code)
 	}
 }
+
+func TestInvoiceAndRules_AuditRegressions(t *testing.T) {
+	testDB := setupTestDB(t)
+	defer teardownTestDB()
+
+	testDB.Create(&models.AppSetting{Key: "BooksClosedDate", Value: "2026-01-31"})
+	bankAcc := models.ChartAccount{Code: "1010", Name: "Checking", Type: "ASSET", Active: true}
+	revAcc := models.ChartAccount{Code: "4010", Name: "Sales", Type: "INCOME", Active: true}
+	cat1 := models.ChartAccount{Code: "5010", Name: "Cloud", Type: "EXPENSE", Active: true}
+	cat2 := models.ChartAccount{Code: "5020", Name: "Security", Type: "EXPENSE", Active: true}
+	testDB.Create(&bankAcc)
+	testDB.Create(&revAcc)
+	testDB.Create(&cat1)
+	testDB.Create(&cat2)
+
+	app := newTestApp()
+	setupInvoiceRulesRoutes(app)
+
+	openDate := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+	dep := models.BankTransaction{
+		ChartAccountID:   &bankAcc.ID,
+		Date:             openDate,
+		Description:      "ACH CLIENT PAY",
+		Amount:           models.NewMoney(100.00),
+		FITID:            "INV-DEL-TX-1",
+		AllocationStatus: "BALANCED",
+		ReviewStatus:     "APPROVED",
+	}
+	testDB.Create(&dep)
+
+	invToDelete := models.Invoice{
+		InvoiceNumber:     "INV-DEL-LINK",
+		ClientName:        "Client A",
+		IssueDate:         openDate,
+		DueDate:           openDate.AddDate(0, 0, 30),
+		TotalAmount:       models.NewMoney(100.00),
+		AmountPaid:        models.NewMoney(100.00),
+		BalanceDue:        models.NewMoney(0),
+		Status:            "PAID",
+		BankTransactionID: &dep.ID,
+		CategoryAccountID: &revAcc.ID,
+		ReviewStatus:      "APPROVED",
+	}
+	testDB.Create(&invToDelete)
+
+	// 1. DeleteInvoice clears BankTransactionID on soft-deleted invoice
+	if code, _ := doJSONMap(t, app, "DELETE", "/api/invoices/"+itoa(invToDelete.ID), nil); code != 200 {
+		t.Fatalf("expected 200 DeleteInvoice, got %d", code)
+	}
+	var deletedInv models.Invoice
+	if err := testDB.Unscoped().First(&deletedInv, invToDelete.ID).Error; err != nil {
+		t.Fatalf("load deleted invoice: %v", err)
+	}
+	if deletedInv.BankTransactionID != nil || deletedInv.DeletedAt == nil {
+		t.Fatalf("expected deleted invoice BankTransactionID nil and DeletedAt set, got tx=%v del=%v", deletedInv.BankTransactionID, deletedInv.DeletedAt)
+	}
+
+	// 2. UpdateInvoice blocks closed-period issueDate & accepts negative discount line items
+	invOpen := models.Invoice{
+		InvoiceNumber:     "INV-DISC-01",
+		ClientName:        "Client B",
+		IssueDate:         openDate,
+		DueDate:           openDate.AddDate(0, 0, 30),
+		TotalAmount:       models.NewMoney(100.00),
+		BalanceDue:        models.NewMoney(100.00),
+		Status:            "SENT",
+		CategoryAccountID: &revAcc.ID,
+		ReviewStatus:      "APPROVED",
+	}
+	testDB.Create(&invOpen)
+
+	if code, _ := doJSONMap(t, app, "PATCH", "/api/invoices/"+itoa(invOpen.ID), map[string]interface{}{
+		"issueDate": "2026-01-15",
+	}); code != 403 {
+		t.Fatalf("expected 403 moving open invoice into closed period, got %d", code)
+	}
+
+	if code, updResp := doJSONMap(t, app, "PATCH", "/api/invoices/"+itoa(invOpen.ID), map[string]interface{}{
+		"items": []map[string]interface{}{
+			{"description": "Consulting", "quantity": 1, "unitPrice": 100.00},
+			{"description": "Loyalty Discount", "quantity": 1, "unitPrice": -15.00},
+		},
+	}); code != 200 {
+		t.Fatalf("expected 200 updating invoice with negative discount item, got %d (%v)", code, updResp)
+	}
+	var updatedInv models.Invoice
+	testDB.First(&updatedInv, invOpen.ID)
+	if updatedInv.Subtotal.Cents != 8500 || updatedInv.TotalAmount.Cents != 8500 {
+		t.Fatalf("expected discounted subtotal/total 8500 cents, got sub=%d total=%d", updatedInv.Subtotal.Cents, updatedInv.TotalAmount.Cents)
+	}
+
+	// 3. CreateRule rejects invalid regex on "matches" operator
+	if code, _ := doJSONMap(t, app, "POST", "/api/rules", map[string]interface{}{
+		"name":       "Bad Matches Regex",
+		"matchLogic": "AND",
+		"conditions": []models.RuleCondition{{Field: "description", Operator: "matches", Value: "["}},
+	}); code != 400 {
+		t.Fatalf("expected 400 for invalid 'matches' regex, got %d", code)
+	}
+
+	// 4. GetRuleSuggestions separates suggestions by (category, payee)
+	for i := 0; i < 2; i++ {
+		testDB.Create(&models.BankTransaction{
+			ChartAccountID:    &bankAcc.ID,
+			CategoryAccountID: &cat1.ID,
+			Date:              openDate,
+			Description:       "CLOUDFLARE",
+			Amount:            models.NewMoney(-20.00),
+			FITID:             fmt.Sprintf("CF-CAT1-%d", i),
+			AllocationStatus:  "UNLINKED",
+			ReviewStatus:      "APPROVED",
+		})
+		testDB.Create(&models.BankTransaction{
+			ChartAccountID:    &bankAcc.ID,
+			CategoryAccountID: &cat2.ID,
+			Date:              openDate,
+			Description:       "CLOUDFLARE",
+			Amount:            models.NewMoney(-25.00),
+			FITID:             fmt.Sprintf("CF-CAT2-%d", i),
+			AllocationStatus:  "UNLINKED",
+			ReviewStatus:      "APPROVED",
+		})
+	}
+	code, suggResp := doJSONMap(t, app, "GET", "/api/rules/suggestions", nil)
+	if code != 200 {
+		t.Fatalf("expected 200 GetRuleSuggestions, got %d", code)
+	}
+	suggs := suggResp["suggestions"].([]interface{})
+	cfCount := 0
+	for _, rawS := range suggs {
+		s := rawS.(map[string]interface{})
+		if strings.EqualFold(fmt.Sprint(s["payeeKeyword"]), "CLOUDFLARE") {
+			cfCount++
+		}
+	}
+	if cfCount != 2 {
+		t.Fatalf("expected 2 distinct category suggestions for CLOUDFLARE, got %d (%v)", cfCount, suggs)
+	}
+}

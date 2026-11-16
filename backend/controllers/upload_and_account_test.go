@@ -62,6 +62,24 @@ func teardownTestDB() {
 	if db.DB != nil {
 		sqlDB, _ := db.DB.DB()
 		if sqlDB != nil {
+			// Clear all tables before closing to ensure test isolation
+			// Order matters: child tables first, then parent tables
+			tables := []interface{}{
+				&models.ExpenseBankTransaction{},
+				&models.ItemAuditLog{},
+				&models.PeriodAuditLog{},
+				&models.Receipt{},
+				&models.Expense{},
+				&models.BankTransaction{},
+				&models.BankStatement{},
+				&models.Invoice{},
+				&models.BankRule{},
+				&models.ChartAccount{},
+				&models.AppSetting{},
+			}
+			for _, t := range tables {
+				db.DB.Session(&gorm.Session{DryRun: false}).Delete(t)
+			}
 			sqlDB.Close()
 		}
 	}
@@ -557,15 +575,16 @@ func TestCreateChartAccount_SubCategoryPrefix(t *testing.T) {
 	app := newTestApp()
 	app.Post("/account", CreateChartAccount)
 
-	// EXPENSE with prefix 50 is valid, 58 is not
-	payload := `{"code":"5800","name":"Bad Expense","type":"EXPENSE"}`
+	// ASSET with prefix 19 is invalid
+	payload := `{"code":"1900","name":"Bad Asset","type":"ASSET"}`
 	req := httptest.NewRequest(http.MethodPost, "/account", bytes.NewReader([]byte(payload)))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := app.Test(req)
 	require.NoError(t, err)
 	require.Equal(t, 400, resp.StatusCode)
 
-	payload2 := `{"code":"5000","name":"Good Expense","type":"EXPENSE"}`
+	// EXPENSE with prefix 58 (Merchant & Processing Fees) is valid
+	payload2 := `{"code":"5800","name":"Good Merchant Fees","type":"EXPENSE"}`
 	req2 := httptest.NewRequest(http.MethodPost, "/account", bytes.NewReader([]byte(payload2)))
 	req2.Header.Set("Content-Type", "application/json")
 	resp2, err := app.Test(req2)
@@ -607,7 +626,7 @@ func TestCreateChartAccount_ValidParent(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	parent := models.ChartAccount{Code: "5000", Name: "Operating", Type: "EXPENSE"}
+	parent := models.ChartAccount{Code: "5000", Name: "Operating", Type: "EXPENSE", Active: true}
 	db.DB.Create(&parent)
 
 	app := newTestApp()
@@ -631,15 +650,13 @@ func TestCreateChartAccount_InactiveParent(t *testing.T) {
 	app := newTestApp()
 	app.Post("/account", CreateChartAccount)
 
-	// Note: the createInput struct is defined inside CreateChartAccount with ParentID *uint json:"parentId"
-	// Fiber's c.Bind().JSON may not bind optional pointer fields from JSON when the field is a local type
-	// This test verifies the account creation path works; parent validation is tested separately
+	// Controller blocks inactive parents — see CreateChartAccount line 98-100
 	payload := `{"code":"5010","name":"Rent","type":"EXPENSE","parentId":1}`
 	req := httptest.NewRequest(http.MethodPost, "/account", bytes.NewReader([]byte(payload)))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := app.Test(req)
 	require.NoError(t, err)
-	require.Equal(t, 201, resp.StatusCode)
+	require.Equal(t, 400, resp.StatusCode)
 }
 
 func TestCreateChartAccount_TypeMismatchParent(t *testing.T) {
@@ -1065,37 +1082,49 @@ func TestGetDemoStatus(t *testing.T) {
 func TestSeedDemoData(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
+	origHost := constants.GetCurrentHostPath()
+	_, _ = constants.SetDropboxLocation(t.TempDir())
+	t.Cleanup(func() { _, _ = constants.SetDropboxLocation(origHost) })
+
 	app := newTestApp()
 	app.Post("/demo/seed", SeedDemoData)
 
 	req := httptest.NewRequest(http.MethodPost, "/demo/seed", nil)
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 60 * time.Second})
 	require.NoError(t, err)
-	_ = resp
+	require.Equal(t, 200, resp.StatusCode)
 }
 
 func TestResetDemoData(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
+	origHost := constants.GetCurrentHostPath()
+	_, _ = constants.SetDropboxLocation(t.TempDir())
+	t.Cleanup(func() { _, _ = constants.SetDropboxLocation(origHost) })
+
 	app := newTestApp()
 	app.Post("/demo/reset", ResetDemoData)
 
 	req := httptest.NewRequest(http.MethodPost, "/demo/reset", nil)
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 60 * time.Second})
 	require.NoError(t, err)
-	_ = resp
+	require.Equal(t, 200, resp.StatusCode)
 }
 
 func TestRemoveDemoData(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
+	origHost := constants.GetCurrentHostPath()
+	_, _ = constants.SetDropboxLocation(t.TempDir())
+	t.Cleanup(func() { _, _ = constants.SetDropboxLocation(origHost) })
+
 	app := newTestApp()
 	app.Post("/demo/remove", RemoveDemoData)
 
 	req := httptest.NewRequest(http.MethodPost, "/demo/remove", nil)
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 60 * time.Second})
 	require.NoError(t, err)
-	_ = resp
+	require.Equal(t, 200, resp.StatusCode)
 }
 
 // ========== BOOK FILTERS TESTS ==========
@@ -1984,7 +2013,7 @@ func TestSeedDemoData_NilDB(t *testing.T) {
 // ========== VALIDATE ACCOUNT CODE TESTS ==========
 
 func TestValidateAccountCode_InvalidSubcategory(t *testing.T) {
-	err := ValidateAccountCode("5800", "EXPENSE")
+	err := ValidateAccountCode("1900", "ASSET")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid sub-category prefix")
 }
@@ -1994,3 +2023,78 @@ func TestValidateAccountCode_UnknownType(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid account type")
 }
+
+func TestHealthSettingsAndDemoFullBranches(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	tmpDir := t.TempDir()
+	docDir := filepath.Join(tmpDir, "document-data")
+	_, err := constants.SetDropboxLocation(docDir)
+	require.NoError(t, err)
+
+	db.DB.Create(&models.AppSetting{Key: "CompanyName", Value: "Reflex Technologies LLC"})
+
+	app := newTestApp()
+	app.Get("/health", GetSystemHealth)
+	app.Post("/settings", UpdateSettings)
+	app.Get("/settings/browse", BrowseDirectories)
+	app.Get("/demo/status", GetDemoStatus)
+	app.Post("/demo/reset", ResetDemoData)
+	app.Delete("/demo", RemoveDemoData)
+
+	// 1. GetSystemHealth with active DB + CompanyName setting
+	reqHealth := httptest.NewRequest(http.MethodGet, "/health", nil)
+	respHealth, err := app.Test(reqHealth)
+	require.NoError(t, err)
+	require.Equal(t, 200, respHealth.StatusCode)
+
+	// 2. UpdateSettings: BooksClosedDate lifecycle (LOCKED -> LOCKED (Advanced) -> UNLOCKED (Rolled Back) -> UNLOCKED)
+	for _, d := range []string{"2026-01-31", "2026-02-28", "2026-01-15", ""} {
+		body := `{"key":"BooksClosedDate","value":"` + d + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/settings", bytes.NewReader([]byte(body)))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := app.Test(req)
+		require.NoError(t, err)
+		require.Equal(t, 200, resp.StatusCode)
+	}
+
+	// 3. UpdateSettings: DocumentDropboxPath empty -> 400, valid -> 200
+	reqEmptyDrop := httptest.NewRequest(http.MethodPost, "/settings", bytes.NewReader([]byte(`{"key":"DocumentDropboxPath","value":"   "}`)))
+	reqEmptyDrop.Header.Set("Content-Type", "application/json")
+	respEmptyDrop, err := app.Test(reqEmptyDrop)
+	require.NoError(t, err)
+	require.Equal(t, 400, respEmptyDrop.StatusCode)
+
+	nextParent := filepath.Join(tmpDir, "moved-parent")
+	require.NoError(t, os.MkdirAll(nextParent, 0755))
+	bodyMove, _ := json.Marshal(map[string]string{
+		"key":   "DocumentDropboxPath",
+		"value": filepath.Join(nextParent, "document-data"),
+	})
+	reqMoveDrop := httptest.NewRequest(http.MethodPost, "/settings", bytes.NewReader(bodyMove))
+	reqMoveDrop.Header.Set("Content-Type", "application/json")
+	respMoveDrop, err := app.Test(reqMoveDrop)
+	require.NoError(t, err)
+	require.Equal(t, 200, respMoveDrop.StatusCode)
+
+	// 4. BrowseDirectories: relative Users/, tilde ~, and outside-home fallback
+	for _, q := range []string{"", "?path=~", "?path=Users/test", "?path=/etc"} {
+		reqBrowse := httptest.NewRequest(http.MethodGet, "/settings/browse"+q, nil)
+		respBrowse, err := app.Test(reqBrowse)
+		require.NoError(t, err)
+		require.Contains(t, []int{200, 400}, respBrowse.StatusCode)
+	}
+
+	// 5. Demo endpoints with active DB (GetDemoStatus + RemoveDemoData)
+	reqDemoSt := httptest.NewRequest(http.MethodGet, "/demo/status", nil)
+	respDemoSt, err := app.Test(reqDemoSt)
+	require.NoError(t, err)
+	require.Equal(t, 200, respDemoSt.StatusCode)
+
+	reqDemoRm := httptest.NewRequest(http.MethodDelete, "/demo", nil)
+	respDemoRm, err := app.Test(reqDemoRm)
+	require.NoError(t, err)
+	require.Equal(t, 200, respDemoRm.StatusCode)
+}
+

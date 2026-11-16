@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -272,7 +273,7 @@ func TestDefaultBankRules_Count(t *testing.T) {
 	if len(defaultBankRules) == 0 {
 		t.Fatal("defaultBankRules is empty")
 	}
-	expected := 183
+	expected := 233
 	if len(defaultBankRules) != expected {
 		t.Errorf("defaultBankRules count = %d, want %d", len(defaultBankRules), expected)
 	}
@@ -512,3 +513,157 @@ func TestDefaultBankRules_AccountCodeRanges(t *testing.T) {
 		}
 	}
 }
+
+func TestConnect_DefaultAndCustomEnv(t *testing.T) {
+	origOpen := openGormDB
+	origFatal := fatalConnect
+	defer func() {
+		openGormDB = origOpen
+		fatalConnect = origFatal
+	}()
+
+	var capturedDSN string
+	openGormDB = func(dsn string) (*gorm.DB, error) {
+		capturedDSN = dsn
+		return gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	}
+
+	// 1. Default env vars
+	t.Setenv("POSTGRES_HOST", "")
+	t.Setenv("POSTGRES_USER", "")
+	t.Setenv("POSTGRES_PASSWORD", "")
+	t.Setenv("POSTGRES_DB", "")
+	t.Setenv("POSTGRES_PORT", "")
+
+	Connect()
+	wantDefault := "host=postgres user=user password=pass dbname=reflex-tech-bookkeeping-app-postgres-db port=5432 sslmode=disable TimeZone=UTC"
+	if capturedDSN != wantDefault {
+		t.Errorf("default DSN = %q, want %q", capturedDSN, wantDefault)
+	}
+
+	// 2. Custom env vars
+	t.Setenv("POSTGRES_HOST", "db.local")
+	t.Setenv("POSTGRES_USER", "admin")
+	t.Setenv("POSTGRES_PASSWORD", "secret")
+	t.Setenv("POSTGRES_DB", "books")
+	t.Setenv("POSTGRES_PORT", "5433")
+
+	Connect()
+	wantCustom := "host=db.local user=admin password=secret dbname=books port=5433 sslmode=disable TimeZone=UTC"
+	if capturedDSN != wantCustom {
+		t.Errorf("custom DSN = %q, want %q", capturedDSN, wantCustom)
+	}
+
+	// 3. Error branch triggers fatalConnect
+	fatalCalled := false
+	fatalConnect = func(v ...interface{}) {
+		fatalCalled = true
+	}
+	openGormDB = func(dsn string) (*gorm.DB, error) {
+		return nil, fmt.Errorf("connection refused")
+	}
+	Connect()
+	if !fatalCalled {
+		t.Error("expected fatalConnect to be called when openGormDB fails")
+	}
+}
+
+func TestInitSchemaAndSeed_NoClosedDateAndNilDB(t *testing.T) {
+	// Nil DB early return
+	InitSchemaAndSeed(nil)
+	DB = nil
+	SeedChartOfAccounts()
+	SeedDefaultBankRules()
+
+	// Fresh DB without BooksClosedDate (hits else branch approving all PENDING items)
+	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("failed to open sqlite: %v", err)
+	}
+	InitSchemaAndSeed(gdb)
+}
+
+func TestSeedDefaultBankRules_PreservesUserCustomizations(t *testing.T) {
+	oldDB := DB
+	defer func() { DB = oldDB }()
+
+	gdb := openTestDB(t)
+	InitSchemaAndSeed(gdb)
+
+	var amazon models.BankRule
+	if err := gdb.Where("name = ?", "Amazon").First(&amazon).Error; err != nil {
+		t.Fatalf("failed to find seeded Amazon rule: %v", err)
+	}
+	if err := gdb.Model(&amazon).Updates(map[string]interface{}{
+		"priority":       999,
+		"renamed_vendor": "Custom Amazon Co",
+		"active":         false,
+	}).Error; err != nil {
+		t.Fatalf("failed to customize Amazon rule: %v", err)
+	}
+
+	// Re-running SeedDefaultBankRules must NOT clobber user edits.
+	SeedDefaultBankRules()
+
+	var reloaded models.BankRule
+	if err := gdb.First(&reloaded, amazon.ID).Error; err != nil {
+		t.Fatalf("failed to reload Amazon rule: %v", err)
+	}
+	if reloaded.Priority != 999 || reloaded.RenamedVendor != "Custom Amazon Co" || reloaded.Active {
+		t.Fatalf("SeedDefaultBankRules overwrote user customization: %+v", reloaded)
+	}
+}
+
+func TestInitSchemaAndSeed_PreservesOpenMissingDataReceiptsAndCleanAccountDesc(t *testing.T) {
+	oldDB := DB
+	defer func() { DB = oldDB }()
+
+	gdb := openTestDB(t)
+	gdb.AutoMigrate(
+		&models.ChartAccount{}, &models.AppSetting{}, &models.BankStatement{},
+		&models.BankTransaction{}, &models.Invoice{}, &models.Expense{},
+		&models.Receipt{}, &models.ExpenseBankTransaction{},
+		&models.PeriodAuditLog{}, &models.ItemAuditLog{}, &models.BankRule{},
+	)
+	DB = gdb
+	SeedChartOfAccounts()
+
+	openDate := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	missingExp := models.Expense{
+		Timestamp:        openDate,
+		Vendor:           "Receipt 1",
+		Description:      "[MISSING AMOUNT - AI could not read receipt total]",
+		Tender:           "cash / paper",
+		AllocationStatus: "UNLINKED",
+		ReviewStatus:     "PENDING",
+	}
+	fallbackExp := models.Expense{
+		Timestamp:        openDate,
+		Vendor:           "Receipt 2",
+		Description:      "Receipt uploaded; AI extraction unavailable. Please enter details manually.",
+		Tender:           "card",
+		AllocationStatus: "UNLINKED",
+		ReviewStatus:     "PENDING",
+	}
+	gdb.Create(&missingExp)
+	gdb.Create(&fallbackExp)
+
+	InitSchemaAndSeed(gdb)
+
+	var gotMissing, gotFallback models.Expense
+	gdb.First(&gotMissing, missingExp.ID)
+	gdb.First(&gotFallback, fallbackExp.ID)
+	if gotMissing.ReviewStatus != "PENDING" || gotMissing.AllocationStatus != "UNLINKED" {
+		t.Errorf("expected missing-amount cash receipt to stay (PENDING, UNLINKED), got (%s, %s)", gotMissing.ReviewStatus, gotMissing.AllocationStatus)
+	}
+	if gotFallback.ReviewStatus != "PENDING" {
+		t.Errorf("expected AI-unavailable fallback receipt to stay PENDING, got %s", gotFallback.ReviewStatus)
+	}
+
+	var checking models.ChartAccount
+	gdb.Where("code = ?", "1010").First(&checking)
+	if checking.Description == "OFX ID: 50106954S:05" {
+		t.Errorf("fresh 1010 checking description polluted with hardcoded personal OFX ID")
+	}
+}
+

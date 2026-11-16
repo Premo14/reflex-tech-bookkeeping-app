@@ -22,7 +22,7 @@ export function ReviewRowCard({
 }: ReviewRowCardProps) {
   const isIgnored = activeTab === "IGNORED";
   const isDeleted = activeTab === "DELETED";
-  const isCredit = row.type === "transaction" ? row.amount >= 0 : false;
+  const isCredit = row.type === "invoice" ? true : (row.type === "transaction" ? row.amount >= 0 : false);
   const formattedAbs = formatCurrency(Math.abs(row.amount));
 
   return (
@@ -49,10 +49,14 @@ export function ReviewRowCard({
           <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
             <span
               className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                row.type === "transaction" ? "bg-blue-500/10 text-blue-400" : "bg-emerald-500/10 text-emerald-400"
+                row.type === "transaction"
+                  ? "bg-blue-500/10 text-blue-400"
+                  : row.type === "invoice"
+                  ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                  : "bg-emerald-500/10 text-emerald-400"
               }`}
             >
-              {row.type === "transaction" ? "Transaction" : "Expense"}
+              {row.type === "transaction" ? "Transaction" : row.type === "invoice" ? "Invoice" : "Expense"}
             </span>
             {isDeleted && <Badge variant="danger" size="sm" glow>DELETED</Badge>}
             {isDeleted && (
@@ -62,6 +66,12 @@ export function ReviewRowCard({
             )}
             {row.issues.includes("CLOSED_PERIOD") && (
               <Badge variant="warning" size="sm" glow>CLOSED PERIOD</Badge>
+            )}
+            {row.issues.includes("OVERDUE") && (
+              <Badge variant="danger" size="sm" glow>OVERDUE</Badge>
+            )}
+            {row.issues.includes("UNPAID") && (
+              <Badge variant="warning" size="sm">UNPAID</Badge>
             )}
             {row.issues.includes("UNLINKED") && <Badge variant="neutral" size="sm">UNLINKED</Badge>}
             {row.issues.includes("UNDER_ALLOCATED") && (

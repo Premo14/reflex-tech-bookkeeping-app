@@ -7,6 +7,9 @@ import (
 )
 
 func SetupRoutes(app *fiber.App) {
+	// Container & Reverse-Proxy Health Checks
+	app.Get("/health", controllers.GetSystemHealth)
+
 	api := app.Group("/api")
 
 	// Health Check

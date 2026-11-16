@@ -506,6 +506,7 @@ export default function LedgerGrid({
                 setTxPage(1);
                 setExpPage(1);
               }}
+              className="h-9 text-xs"
               icon={
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
@@ -527,7 +528,7 @@ export default function LedgerGrid({
                 setSortField(f);
                 setSortOrder(o as "asc" | "desc");
               }}
-              className="py-1.5! text-xs! whitespace-nowrap"
+              className="h-9 text-xs whitespace-nowrap"
               autoWidth
               dropdownAlign="right"
               icon={
@@ -554,7 +555,7 @@ export default function LedgerGrid({
               aria-haspopup="menu"
               aria-expanded={isExportMenuOpen}
               onClick={() => setIsExportMenuOpen((prev) => !prev)}
-              className="flex items-center gap-1.5"
+              className="h-9 text-xs px-3 flex items-center gap-1.5"
             >
               <svg className="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
@@ -682,10 +683,11 @@ export default function LedgerGrid({
                   onClick={() => {
                     setTxFilter("NEEDS_ATTENTION");
                     setExpFilter("NEEDS_ATTENTION");
+                    setSourceDocTab("receipts");
                     setTxPage(1);
                     setExpPage(1);
                   }}
-                  className="max-w-full py-1! px-2.5! text-xs!"
+                  className="max-w-full h-8 px-2.5 text-xs"
                   title="Filter both lists to show items requiring your attention"
                 >
                   <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -826,7 +828,7 @@ export default function LedgerGrid({
               mobileTab === "expenses" || mobileTab === "invoices" ? "flex" : "hidden lg:flex"
             }`}
           >
-            <div className="px-2.5 sm:px-4 py-2 flex justify-between items-center gap-2 bg-[#0c0c0f] border-b border-white/5 shrink-0 min-w-0">
+            <div className="px-4 sm:px-5 py-2.5 min-h-[50px] flex justify-between items-center gap-2 bg-[#0c0c0f] border-b border-white/5 shrink-0 min-w-0">
               {/* Mobile / Tablet Header Label */}
               <div className="lg:hidden flex items-center gap-2 font-bold text-xs text-white shrink-0 min-w-0">
                 {mobileTab === "invoices" || sourceDocTab === "invoices" ? (
@@ -858,7 +860,7 @@ export default function LedgerGrid({
                   title="Receipts & Expense Slips"
                   aria-label="Receipts & Expense Slips"
                   aria-pressed={mobileTab === "invoices" ? false : sourceDocTab === "receipts"}
-                  className={`px-2 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 cursor-pointer touch-glow-emerald ${
+                  className={`h-8 px-2.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 cursor-pointer touch-glow-emerald ${
                     (mobileTab === "invoices" ? false : sourceDocTab === "receipts")
                       ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 glow-emerald"
                       : "text-zinc-400 hover:text-zinc-200 border border-transparent"
@@ -884,7 +886,7 @@ export default function LedgerGrid({
                   title="Client Invoices & Receivables"
                   aria-label="Client Invoices & Receivables"
                   aria-pressed={mobileTab === "invoices" || sourceDocTab === "invoices"}
-                  className={`px-2 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 cursor-pointer touch-glow-purple ${
+                  className={`h-8 px-2.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 cursor-pointer touch-glow-purple ${
                     mobileTab === "invoices" || sourceDocTab === "invoices"
                       ? "bg-purple-500/15 text-purple-200 border border-purple-500/30 glow-purple"
                       : "text-zinc-400 hover:text-zinc-200 border border-transparent"
@@ -910,7 +912,7 @@ export default function LedgerGrid({
                       aria-label="Filter invoices"
                       value={invFilter}
                       onChange={(e) => setInvFilter(e.target.value)}
-                      className="py-1! sm:py-1.5! text-xs! whitespace-nowrap"
+                      className="h-8 text-xs whitespace-nowrap"
                       autoWidth
                       dropdownAlign="right"
                     >
@@ -928,7 +930,7 @@ export default function LedgerGrid({
                       onClick={onOpenInvoices}
                       title="Create Client Invoice (+)"
                       aria-label="Create Client Invoice"
-                      className="p-1.5! shrink-0 touch-glow-purple"
+                      className="h-8 w-8 p-0 shrink-0 touch-glow-purple flex items-center justify-center"
                       size="sm"
                     >
                       <svg className="w-3.5 h-3.5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -947,7 +949,7 @@ export default function LedgerGrid({
                         setExpFilter(e.target.value);
                         setExpPage(1);
                       }}
-                      className="py-1! sm:py-1.5! text-xs! whitespace-nowrap"
+                      className="h-8 text-xs whitespace-nowrap"
                       autoWidth
                       dropdownAlign="right"
                     >
@@ -965,7 +967,7 @@ export default function LedgerGrid({
                     onClick={handleOpenAddExpense}
                     title="Add Manual Expense (+)"
                     aria-label="Add Manual Expense"
-                    className="p-1.5! shrink-0 touch-glow-emerald"
+                    className="h-8 w-8 p-0 shrink-0 touch-glow-emerald flex items-center justify-center"
                     size="sm"
                   >
                     <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1020,9 +1022,9 @@ export default function LedgerGrid({
 
           {/* BANK TRANSACTIONS COLUMN */}
           <div className={`flex-col bg-[#050505] min-h-0 ${mobileTab === "transactions" ? "flex" : "hidden lg:flex"}`}>
-            <div className="px-4 sm:px-6 py-3.5 flex justify-between items-center gap-2 bg-[#0c0c0f] border-b border-white/5 shrink-0 min-w-0">
-              <h2 className="text-base sm:text-lg font-bold flex items-center gap-2 text-white tracking-tight shrink-0 whitespace-nowrap">
-                <svg className="w-5 h-5 text-blue-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="px-4 sm:px-5 py-2.5 min-h-[50px] flex justify-between items-center gap-2 bg-[#0c0c0f] border-b border-white/5 shrink-0 min-w-0">
+              <h2 className="text-sm sm:text-base font-bold flex items-center gap-2 text-white tracking-tight shrink-0 whitespace-nowrap">
+                <svg className="w-4 h-4 text-blue-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -1033,7 +1035,7 @@ export default function LedgerGrid({
                 <span>Bank Transactions</span>
                 {isTxLoading && <LoadingSpinner size="xs" color="text-blue-400" className="ml-1" />}
               </h2>
-              <div className="flex gap-2 items-center shrink-0">
+              <div className="flex gap-1.5 sm:gap-2 items-center shrink-0">
                 <div className="w-auto shrink-0">
                   <Select
                     aria-label="Filter transactions"
@@ -1042,7 +1044,7 @@ export default function LedgerGrid({
                       setTxFilter(e.target.value);
                       setTxPage(1);
                     }}
-                    className="py-1.5! text-xs! whitespace-nowrap"
+                    className="h-8 text-xs whitespace-nowrap"
                     autoWidth
                     dropdownAlign="right"
                   >
@@ -1060,10 +1062,10 @@ export default function LedgerGrid({
                   onClick={handleOpenAddTx}
                   title="Add Transaction"
                   aria-label="Add Transaction"
-                  className="p-1.5! touch-glow-blue"
+                  className="h-8 w-8 p-0 touch-glow-blue flex items-center justify-center shrink-0"
                   size="sm"
                 >
-                  <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
                   </svg>
                 </Button>

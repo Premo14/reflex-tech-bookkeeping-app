@@ -46,6 +46,7 @@ func TestValidateAccountCode(t *testing.T) {
 		{"Valid EXPENSE 5510", "5510", "EXPENSE", false, ""},
 		{"Valid EXPENSE 5610", "5610", "EXPENSE", false, ""},
 		{"Valid EXPENSE 5710", "5710", "EXPENSE", false, ""},
+		{"Valid EXPENSE 5810", "5810", "EXPENSE", false, ""},
 		{"Valid EXPENSE 5910", "5910", "EXPENSE", false, ""},
 
 		// Non-numeric
@@ -71,7 +72,6 @@ func TestValidateAccountCode(t *testing.T) {
 		{"Invalid LIABILITY prefix 24", "2400", "LIABILITY", true, "invalid sub-category prefix (24)"},
 		{"Invalid EQUITY prefix 32", "3200", "EQUITY", true, "invalid sub-category prefix (32)"},
 		{"Invalid REVENUE prefix 43", "4300", "REVENUE", true, "invalid sub-category prefix (43)"},
-		{"Invalid EXPENSE prefix 58", "5800", "EXPENSE", true, "invalid sub-category prefix (58)"},
 
 		// Unknown account type
 		{"Unknown type", "1010", "UNKNOWN", true, "invalid account type"},

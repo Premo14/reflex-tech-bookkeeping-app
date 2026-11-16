@@ -9,12 +9,13 @@ import { formatDate, toLocalISODate } from "../utils/dateUtils";
 
 interface SettingsModalProps {
   isOpen: boolean;
+  suspended?: boolean;
   onClose: () => void;
   refreshData: () => void;
   onViewItems?: (date: string) => void;
 }
 
-export default function SettingsModal({ isOpen, onClose, refreshData, onViewItems }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, suspended = false, onClose, refreshData, onViewItems }: SettingsModalProps) {
   const [booksClosedDate, setBooksClosedDate] = useState("");
   const [currentClosedDate, setCurrentClosedDate] = useState("");
   const [auditLogs, setAuditLogs] = useState<PeriodAuditLog[]>([]);
@@ -125,6 +126,7 @@ export default function SettingsModal({ isOpen, onClose, refreshData, onViewItem
   return (
     <Modal 
       isOpen={isOpen} 
+      suspended={suspended}
       onClose={onClose} 
       title="Accounting Period Management" 
       maxWidth="xl"

@@ -135,6 +135,18 @@ func EvaluateRule(rule models.BankRule, tx models.BankTransaction) bool {
 	return true
 }
 
+// appendRawNote preserves an original raw vendor/description label once in notes when renaming.
+func appendRawNote(existingNotes, rawLabel string) (string, bool) {
+	rawTrimmed := strings.TrimSpace(rawLabel)
+	if rawTrimmed == "" || strings.Contains(existingNotes, "Raw: ") {
+		return existingNotes, false
+	}
+	if strings.TrimSpace(existingNotes) == "" {
+		return "Raw: " + rawTrimmed, true
+	}
+	return existingNotes + "\nRaw: " + rawTrimmed, true
+}
+
 // ApplyBankRulesToTransaction checks all active rules in priority order against a transaction.
 // If a match is found, the transaction is mutated in-memory with the rule's actions.
 // Returns the matched rule and whether any fields were modified.
@@ -214,8 +226,179 @@ func ApplyBankRulesToTransaction(tx *models.BankTransaction, db *gorm.DB) (*mode
 	return nil, false
 }
 
+// EvaluateConditionForExpense tests a single condition against an Expense.
+func EvaluateConditionForExpense(cond models.RuleCondition, exp models.Expense) bool {
+	field := strings.ToLower(strings.TrimSpace(cond.Field))
+	op := strings.ToLower(strings.TrimSpace(cond.Operator))
+	targetVal := strings.TrimSpace(cond.Value)
+
+	switch field {
+	case "description", "vendor", "payee":
+		if evaluateStringOperator(exp.Vendor, op, targetVal) {
+			return true
+		}
+		if exp.Description != "" && evaluateStringOperator(exp.Description, op, targetVal) {
+			return true
+		}
+		return false
+
+	case "amount":
+		expAmt := exp.Amount.Abs().Cents
+		targetFloat, err := strconv.ParseFloat(strings.ReplaceAll(targetVal, "$", ""), 64)
+		if err != nil {
+			return false
+		}
+		targetCents := int64(math.Round(math.Abs(targetFloat * 100)))
+
+		switch op {
+		case "equals", "equals_amount", "eq", "==":
+			return expAmt == targetCents
+		case "greater_than", "gt", ">":
+			return expAmt > targetCents
+		case "greater_than_or_equal", "gte", ">=":
+			return expAmt >= targetCents
+		case "less_than", "lt", "<":
+			return expAmt < targetCents
+		case "less_than_or_equal", "lte", "<=":
+			return expAmt <= targetCents
+		default:
+			return false
+		}
+
+	case "chart_account_id", "account_id", "category_account_id":
+		if exp.ChartAccountID == nil {
+			return false
+		}
+		targetID, err := strconv.ParseUint(targetVal, 10, 64)
+		if err != nil {
+			return false
+		}
+		if op == "not_equals" || op == "!=" {
+			return uint(targetID) != *exp.ChartAccountID
+		}
+		return uint(targetID) == *exp.ChartAccountID
+
+	default:
+		if evaluateStringOperator(exp.Vendor, op, targetVal) {
+			return true
+		}
+		if exp.Description != "" && evaluateStringOperator(exp.Description, op, targetVal) {
+			return true
+		}
+		return false
+	}
+}
+
+// EvaluateRuleForExpense tests whether all (AND) or any (OR) conditions of a rule match an Expense.
+func EvaluateRuleForExpense(rule models.BankRule, exp models.Expense) bool {
+	if !rule.Active {
+		return false
+	}
+
+	var conditions []models.RuleCondition
+	if err := json.Unmarshal([]byte(rule.ConditionsJSON), &conditions); err != nil {
+		return false
+	}
+
+	if len(conditions) == 0 {
+		return false
+	}
+
+	isOr := strings.EqualFold(strings.TrimSpace(rule.MatchLogic), "OR")
+
+	if isOr {
+		for _, cond := range conditions {
+			if EvaluateConditionForExpense(cond, exp) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Default is AND
+	for _, cond := range conditions {
+		if !EvaluateConditionForExpense(cond, exp) {
+			return false
+		}
+	}
+	return true
+}
+
+// ApplyBankRulesToExpense checks all active rules in priority order against an expense.
+// If a match is found, the expense is mutated in-memory with the rule's actions.
+// Returns the matched rule and whether any fields were modified.
+func ApplyBankRulesToExpense(exp *models.Expense, db *gorm.DB) (*models.BankRule, bool) {
+	if db == nil {
+		return nil, false
+	}
+	var rules []models.BankRule
+	if err := db.Where("active = true").Order("priority ASC, id ASC").Find(&rules).Error; err != nil {
+		return nil, false
+	}
+
+	for i := range rules {
+		rule := &rules[i]
+		if EvaluateRuleForExpense(*rule, *exp) {
+			modified := false
+
+			// Category Assignment (if currently unassigned)
+			if rule.CategoryAccountID != nil && exp.ChartAccountID == nil {
+				exp.ChartAccountID = rule.CategoryAccountID
+				modified = true
+			}
+
+			// Clean Vendor Renaming
+			if strings.TrimSpace(rule.RenamedVendor) != "" {
+				renamed := strings.TrimSpace(rule.RenamedVendor)
+				if strings.TrimSpace(exp.Vendor) != renamed {
+					if strings.TrimSpace(exp.Notes) == "" {
+						exp.Notes = "Raw: " + exp.Vendor
+					} else if !strings.Contains(exp.Notes, "Raw: ") {
+						exp.Notes = exp.Notes + "\nRaw: " + exp.Vendor
+					}
+					exp.Vendor = renamed
+					modified = true
+				}
+			}
+
+			// Notes / Annotation
+			if strings.TrimSpace(rule.Notes) != "" {
+				if strings.TrimSpace(exp.Notes) == "" {
+					exp.Notes = strings.TrimSpace(rule.Notes)
+				} else if !strings.Contains(exp.Notes, rule.Notes) {
+					exp.Notes = exp.Notes + "\n" + strings.TrimSpace(rule.Notes)
+				}
+				modified = true
+			}
+
+			// Auto-Exclude
+			if rule.AutoExclude {
+				exp.ReviewStatus = "IGNORED"
+				modified = true
+			} else if rule.AutoConfirm {
+				if exp.ReviewStatus == "" || exp.ReviewStatus == "PENDING" {
+					exp.ReviewStatus = "APPROVED"
+					modified = true
+				}
+			}
+
+			if modified {
+				now := time.Now().UTC()
+				db.Model(&models.BankRule{}).Where("id = ?", rule.ID).Updates(map[string]interface{}{
+					"apply_count":     gorm.Expr("apply_count + 1"),
+					"last_applied_at": now,
+				})
+			}
+
+			return rule, modified
+		}
+	}
+
+	return nil, false
+}
+
 // ApplyAllRulesToExisting runs active rules against all unlinked or uncategorized bank transactions
-// in open accounting periods.
+// and expenses in open accounting periods.
 func ApplyAllRulesToExisting(db *gorm.DB) (int, error) {
 	if db == nil {
 		return 0, fmt.Errorf("nil database")
@@ -228,13 +411,13 @@ func ApplyAllRulesToExisting(db *gorm.DB) (int, error) {
 		return 0, nil
 	}
 
-	// Query open transactions that are uncategorized, unlinked, or pending
+	updatedCount := 0
+
+	// 1. Process open transactions
 	var transactions []models.BankTransaction
 	if err := db.Where("COALESCE(review_status, '') NOT IN ('DELETED', 'IGNORED')").Find(&transactions).Error; err != nil {
 		return 0, err
 	}
-
-	updatedCount := 0
 
 	for i := range transactions {
 		tx := &transactions[i]
@@ -251,11 +434,28 @@ func ApplyAllRulesToExisting(db *gorm.DB) (int, error) {
 				if rule.CategoryAccountID != nil && tx.CategoryAccountID == nil {
 					tx.CategoryAccountID = rule.CategoryAccountID
 					updates["category_account_id"] = rule.CategoryAccountID
+					var linkedExpIDs []uint
+					db.Model(&models.ExpenseBankTransaction{}).
+						Where("bank_transaction_id = ? AND status = 'confirmed'", tx.ID).
+						Pluck("expense_id", &linkedExpIDs)
+					if len(linkedExpIDs) == 1 {
+						var catAcc models.ChartAccount
+						if db.First(&catAcc, *rule.CategoryAccountID).Error == nil && catAcc.Type == "EXPENSE" {
+							db.Model(&models.Expense{}).
+								Where("id = ? AND chart_account_id IS NULL", linkedExpIDs[0]).
+								Update("chart_account_id", *rule.CategoryAccountID)
+						}
+					}
 				}
 
 				if strings.TrimSpace(rule.RenamedVendor) != "" && tx.Description != strings.TrimSpace(rule.RenamedVendor) {
+					origDesc := tx.Description
 					tx.Description = strings.TrimSpace(rule.RenamedVendor)
 					updates["description"] = tx.Description
+					if nextNotes, changed := appendRawNote(tx.Notes, origDesc); changed {
+						tx.Notes = nextNotes
+						updates["notes"] = tx.Notes
+					}
 				}
 
 				if strings.TrimSpace(rule.Notes) != "" {
@@ -277,7 +477,7 @@ func ApplyAllRulesToExisting(db *gorm.DB) (int, error) {
 					tx.ExclusionReason = reason
 					updates["review_status"] = "IGNORED"
 					updates["exclusion_reason"] = reason
-				} else if rule.AutoConfirm && tx.ReviewStatus != "APPROVED" {
+				} else if rule.AutoConfirm && (tx.ReviewStatus == "" || tx.ReviewStatus == "PENDING") {
 					tx.ReviewStatus = "APPROVED"
 					updates["review_status"] = "APPROVED"
 				}
@@ -292,7 +492,86 @@ func ApplyAllRulesToExisting(db *gorm.DB) (int, error) {
 						})
 					}
 				}
-				break // Applied the highest priority matching rule
+				break // Applied highest priority matching rule
+			}
+		}
+	}
+
+	// 2. Process open expenses
+	var expenses []models.Expense
+	if err := db.Where("COALESCE(review_status, '') NOT IN ('DELETED', 'IGNORED')").Find(&expenses).Error; err == nil {
+		for i := range expenses {
+			exp := &expenses[i]
+
+			if IsDateInClosedPeriod(exp.Timestamp) {
+				continue
+			}
+
+			for _, rule := range rules {
+				if EvaluateRuleForExpense(rule, *exp) {
+					updates := map[string]interface{}{}
+
+					if rule.CategoryAccountID != nil && exp.ChartAccountID == nil {
+						exp.ChartAccountID = rule.CategoryAccountID
+						updates["chart_account_id"] = rule.CategoryAccountID
+						var parentTxIDs []uint
+						db.Model(&models.ExpenseBankTransaction{}).
+							Where("expense_id = ? AND status = 'confirmed'", exp.ID).
+							Pluck("bank_transaction_id", &parentTxIDs)
+						for _, parentTxID := range parentTxIDs {
+							var siblings int64
+							db.Model(&models.ExpenseBankTransaction{}).
+								Where("bank_transaction_id = ? AND status = 'confirmed'", parentTxID).
+								Count(&siblings)
+							if siblings == 1 {
+								db.Model(&models.BankTransaction{}).
+									Where("id = ? AND category_account_id IS NULL", parentTxID).
+									Update("category_account_id", *rule.CategoryAccountID)
+							}
+						}
+					}
+
+					if strings.TrimSpace(rule.RenamedVendor) != "" && strings.TrimSpace(exp.Vendor) != strings.TrimSpace(rule.RenamedVendor) {
+						origVendor := exp.Vendor
+						exp.Vendor = strings.TrimSpace(rule.RenamedVendor)
+						updates["vendor"] = exp.Vendor
+						if nextNotes, changed := appendRawNote(exp.Notes, origVendor); changed {
+							exp.Notes = nextNotes
+							updates["notes"] = exp.Notes
+						}
+					}
+
+					if strings.TrimSpace(rule.Notes) != "" {
+						if strings.TrimSpace(exp.Notes) == "" {
+							exp.Notes = strings.TrimSpace(rule.Notes)
+							updates["notes"] = exp.Notes
+						} else if !strings.Contains(exp.Notes, rule.Notes) {
+							exp.Notes = exp.Notes + "\n" + strings.TrimSpace(rule.Notes)
+							updates["notes"] = exp.Notes
+						}
+					}
+
+					if rule.AutoExclude && exp.ReviewStatus != "IGNORED" {
+						exp.ReviewStatus = "IGNORED"
+						updates["review_status"] = "IGNORED"
+					} else if rule.AutoConfirm && (exp.ReviewStatus == "" || exp.ReviewStatus == "PENDING") &&
+						exp.Amount.Cents > 0 && !strings.Contains(exp.Description, "[MISSING") {
+						exp.ReviewStatus = "APPROVED"
+						updates["review_status"] = "APPROVED"
+					}
+
+					if len(updates) > 0 {
+						if err := db.Model(&models.Expense{}).Where("id = ?", exp.ID).Updates(updates).Error; err == nil {
+							updatedCount++
+							now := time.Now().UTC()
+							db.Model(&models.BankRule{}).Where("id = ?", rule.ID).Updates(map[string]interface{}{
+								"apply_count":     gorm.Expr("apply_count + 1"),
+								"last_applied_at": now,
+							})
+						}
+					}
+					break // Applied highest priority matching rule
+				}
 			}
 		}
 	}
@@ -300,8 +579,10 @@ func ApplyAllRulesToExisting(db *gorm.DB) (int, error) {
 	if updatedCount > 0 {
 		UpdateAllocationStatuses()
 		events.Broadcast("TRANSACTIONS_UPDATED", nil)
+		events.Broadcast("EXPENSES_UPDATED", nil)
 		events.Broadcast("RECONCILIATION_UPDATED", nil)
 		events.Broadcast("QUEUE_UPDATED", nil)
+		events.Broadcast("SUMMARY_UPDATED", nil)
 	}
 
 	return updatedCount, nil

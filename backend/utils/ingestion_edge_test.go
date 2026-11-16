@@ -3,6 +3,7 @@ package utils
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,10 +20,9 @@ import (
 func TestConvertHeicToPng_FunctionExists(t *testing.T) {
 	// Converter requires a real HEIC file and libde265; verify the function exists
 	// and has the correct signature by checking it is not nil via reflection.
-	var fn func(string, string) error
-	fn = ConvertHeicToPng
-	if fn == nil {
-		t.Error("ConvertHeicToPng should not be nil")
+	v := reflect.ValueOf(ConvertHeicToPng)
+	if !v.IsValid() || v.IsNil() || v.Kind() != reflect.Func {
+		t.Error("ConvertHeicToPng should be a valid non-nil function")
 	}
 }
 
@@ -34,10 +34,10 @@ func TestConvertHeicToPng_NoSuchFile(t *testing.T) {
 }
 
 // ============================================================
-// CleanAIJSON — additional regex edge cases (S05-specific)
+// CleanAIJSON — additional regex edge cases
 // ============================================================
 
-func TestCleanAIJSON_S05Additional(t *testing.T) {
+func TestCleanAIJSON_Additional(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
@@ -62,7 +62,7 @@ func TestCleanAIJSON_S05Additional(t *testing.T) {
 // BuildReceiptPrompt — unit tests
 // ============================================================
 
-func TestBuildReceiptPrompt_S05Additional(t *testing.T) {
+func TestBuildReceiptPrompt_AccountsEdgeCases(t *testing.T) {
 	accounts := []models.ChartAccount{
 		{ID: 1, Name: "Office Supplies"},
 		{ID: 2, Name: "Travel"},
@@ -94,17 +94,17 @@ func TestBuildReceiptPrompt_S05Additional(t *testing.T) {
 // ParseExtractedChartAccountID — float rounding tests
 // ============================================================
 
-func TestParseExtractedChartAccountID_FloatRounding_S05(t *testing.T) {
+func TestParseExtractedChartAccountID_FloatRounding(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    interface{}
 		expected *uint
 	}{
-		{"Float 42.0", 42.0, ptrUintS05(42)},
-		{"Float 42.4 rounds down", 42.4, ptrUintS05(42)},
-		{"Float 42.5 rounds up", 42.5, ptrUintS05(43)},
-		{"Float 42.9 rounds up", 42.9, ptrUintS05(43)},
-		{"Float32 42.0", float32(42.0), ptrUintS05(42)},
+		{"Float 42.0", 42.0, ptrUint(42)},
+		{"Float 42.4 rounds down", 42.4, ptrUint(42)},
+		{"Float 42.5 rounds up", 42.5, ptrUint(43)},
+		{"Float 42.9 rounds up", 42.9, ptrUint(43)},
+		{"Float32 42.0", float32(42.0), ptrUint(42)},
 		{"Negative float", -1.0, nil},
 		{"Zero float", 0.0, nil},
 	}
@@ -125,13 +125,13 @@ func TestParseExtractedChartAccountID_FloatRounding_S05(t *testing.T) {
 	}
 }
 
-func ptrUintS05(u uint) *uint { return &u }
+func ptrUint(u uint) *uint { return &u }
 
 // ============================================================
 // ParseExtractedAmount — float32 type support
 // ============================================================
 
-func TestParseExtractedAmount_Float32Support_S05(t *testing.T) {
+func TestParseExtractedAmount_Float32Support(t *testing.T) {
 	got := ParseExtractedAmount(float32(42.5))
 	if got != 42.5 {
 		t.Errorf("ParseExtractedAmount(float32(42.5)) = %f, expected 42.5", got)
@@ -142,7 +142,7 @@ func TestParseExtractedAmount_Float32Support_S05(t *testing.T) {
 // FetchActiveExpenseAccounts — nil DB guard
 // ============================================================
 
-func TestFetchActiveExpenseAccounts_NilDB_S05(t *testing.T) {
+func TestFetchActiveExpenseAccounts_NilDB(t *testing.T) {
 	orig := db.DB
 	defer func() { db.DB = orig }()
 
@@ -160,7 +160,7 @@ func TestFetchActiveExpenseAccounts_NilDB_S05(t *testing.T) {
 // Constants validation — extension checks
 // ============================================================
 
-func TestConstantsExtensionValidation_S05(t *testing.T) {
+func TestConstantsExtensionValidation(t *testing.T) {
 	// Verify receipt extensions
 	if constants.IsAllowedReceiptExt(".txt") {
 		t.Error(".txt should not be a valid receipt extension")
@@ -198,7 +198,7 @@ func TestConstantsExtensionValidation_S05(t *testing.T) {
 // ValidateExtractedCategory — nil pointer
 // ============================================================
 
-func TestValidateExtractedCategory_NilPointer_S05(t *testing.T) {
+func TestValidateExtractedCategory_NilPointer(t *testing.T) {
 	result := ValidateExtractedCategory(nil)
 	if result != nil {
 		t.Error("ValidateExtractedCategory(nil) should return nil")
@@ -209,7 +209,7 @@ func TestValidateExtractedCategory_NilPointer_S05(t *testing.T) {
 // resolveOrCreateChartAccount — nil DB guard
 // ============================================================
 
-func TestResolveOrCreateChartAccount_NilDB_S05(t *testing.T) {
+func TestResolveOrCreateChartAccount_NilDB(t *testing.T) {
 	orig := db.DB
 	defer func() { db.DB = orig }()
 
@@ -220,7 +220,7 @@ func TestResolveOrCreateChartAccount_NilDB_S05(t *testing.T) {
 	}
 }
 
-func TestResolveOrCreateChartAccount_EmptyAccountID_S05(t *testing.T) {
+func TestResolveOrCreateChartAccount_EmptyAccountID(t *testing.T) {
 	orig := db.DB
 	defer func() { db.DB = orig }()
 
@@ -234,7 +234,7 @@ func TestResolveOrCreateChartAccount_EmptyAccountID_S05(t *testing.T) {
 // isDefaultDescription — boundary tests
 // ============================================================
 
-func TestIsDefaultDescription_BoundaryCases_S05(t *testing.T) {
+func TestIsDefaultDescription_BoundaryCases(t *testing.T) {
 	tests := []struct {
 		name string
 		desc string
@@ -262,7 +262,7 @@ func TestIsDefaultDescription_BoundaryCases_S05(t *testing.T) {
 // nextAvailableCode — basic test
 // ============================================================
 
-func TestNextAvailableCode_Basic_S05(t *testing.T) {
+func TestNextAvailableCode_Basic(t *testing.T) {
 	code := nextAvailableCode("1")
 	// Code should start with '1' and be at least 4 chars
 	// (fallback may produce longer codes when all slots are taken)
@@ -278,7 +278,7 @@ func TestNextAvailableCode_Basic_S05(t *testing.T) {
 // ProcessExistingFiles — symlink handling
 // ============================================================
 
-func TestProcessExistingFiles_SymlinkDir_S05(t *testing.T) {
+func TestProcessExistingFiles_SymlinkDir(t *testing.T) {
 	dir := t.TempDir()
 	targetDir := filepath.Join(dir, "real")
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
@@ -297,7 +297,7 @@ func TestProcessExistingFiles_SymlinkDir_S05(t *testing.T) {
 // ProcessExistingFiles — symlink handling
 // ============================================================
 
-func TestBuildOfxDescription_S05Additional(t *testing.T) {
+func TestBuildOfxDescription_EdgeCases(t *testing.T) {
 	tests := []struct {
 		name     string
 		n        string
@@ -320,10 +320,10 @@ func TestBuildOfxDescription_S05Additional(t *testing.T) {
 }
 
 // ============================================================
-// GenerateCSVFitID — integer-cent determinism (S05)
+// GenerateCSVFitID — integer-cent determinism
 // ============================================================
 
-func TestGenerateCSVFitID_IntCentDeterminism_S05(t *testing.T) {
+func TestGenerateCSVFitID_IntCentDeterminism(t *testing.T) {
 	d := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 
 	// Verify that amounts that look close in float64 produce the same FITID

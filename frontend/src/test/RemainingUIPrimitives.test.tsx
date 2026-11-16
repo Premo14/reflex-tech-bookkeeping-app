@@ -320,6 +320,39 @@ describe('Pagination & LoadingSpinner', () => {
     expect(onPageChange).toHaveBeenNthCalledWith(2, 3)
   })
 
+  it('renders load-more variant with progress counts and triggers onLoadMore', async () => {
+    const user = userEvent.setup()
+    const onLoadMore = vi.fn()
+    const { rerender } = render(
+      <Pagination
+        variant="load-more"
+        hasMore={false}
+        onLoadMore={onLoadMore}
+        loadedCount={10}
+        totalItems={10}
+        label="Load More Items"
+      />
+    )
+    expect(screen.queryByRole('button', { name: 'Load More Items' })).not.toBeInTheDocument()
+    expect(screen.getByText('Showing 10 of 10')).toBeInTheDocument()
+
+    rerender(
+      <Pagination
+        variant="load-more"
+        hasMore={true}
+        onLoadMore={onLoadMore}
+        loadedCount={3}
+        totalItems={15}
+        label="Load More Items"
+      />
+    )
+    const btn = screen.getByRole('button', { name: 'Load More Items' })
+    expect(btn).toBeInTheDocument()
+    expect(screen.getByText('Showing 3 of 15')).toBeInTheDocument()
+    await user.click(btn)
+    expect(onLoadMore).toHaveBeenCalledTimes(1)
+  })
+
   it('applies tailwind text color class vs raw stroke on LoadingSpinner', () => {
     const { rerender } = render(<LoadingSpinner size="lg" color="text-emerald-400" />)
     const svg1 = screen.getByRole('status', { name: 'Loading' })

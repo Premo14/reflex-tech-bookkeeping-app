@@ -1,6 +1,7 @@
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 import { LoadingSpinner } from "../ui/LoadingSpinner";
 import type { ARAgingReport } from "../../types/models";
 import { formatDateMMDDYYYY } from "../../utils/dateUtils";
@@ -17,6 +18,7 @@ interface ARAgingTabProps {
   onExportCSV: (report: ARAgingReport) => void;
   onPrint: () => void;
   onOpenInvoiceDetail?: (invoiceId: number) => void;
+  onClose?: () => void;
 }
 
 const DSO_WINDOW_OPTIONS = [30, 90, 180, 365];
@@ -32,9 +34,10 @@ export function ARAgingTab({
   onExportCSV,
   onPrint,
   onOpenInvoiceDetail,
+  onClose: _onClose,
 }: ARAgingTabProps) {
   const allInvoices = report
-    ? report.buckets.flatMap((b) =>
+    ? (report.buckets ?? []).flatMap((b) =>
         (b.invoices || []).map((inv) => ({ ...inv, bucketName: b.bucketName }))
       )
     : [];
@@ -60,7 +63,7 @@ export function ARAgingTab({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-end justify-between gap-3 surface-glass p-3 sm:p-3.5 rounded-xl border border-white/5 print:hidden">
+      <div className="relative z-30 flex flex-wrap items-end justify-between gap-3 surface-glass p-3 sm:p-3.5 rounded-xl border border-white/5 print:hidden">
         <div className="flex flex-wrap items-end gap-2.5 flex-1 min-w-[220px]">
           <div className="w-44">
             <Input
@@ -72,23 +75,21 @@ export function ARAgingTab({
               onChange={(e) => onAsOfDateChange(e.target.value)}
             />
           </div>
-          <div>
-            <label htmlFor="ar-dso-window" className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
-              DSO Window (Days)
-            </label>
-            <select
+          <div className="w-40">
+            <Select
               id="ar-dso-window"
+              label="DSO Window (Days)"
               value={dsoWindow}
               onChange={(e) => onDsoWindowChange(Number(e.target.value))}
-              className="bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-2 text-xs font-bold text-white focus:outline-none focus:border-rose-500 cursor-pointer touch-glow-rose"
               title="Trailing credit-sales window used as the DSO denominator"
+              className="text-xs font-bold font-mono"
             >
               {DSO_WINDOW_OPTIONS.map((win) => (
                 <option key={win} value={win}>
                   {win}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           <Button variant="secondary" size="sm" glow onClick={onRecalculate} isLoading={isLoading}>
             Recalculate Aging
@@ -103,11 +104,11 @@ export function ARAgingTab({
               </svg>
               Export CSV
             </Button>
-            <Button variant="secondary" size="sm" onClick={onPrint} title="Print or Save PDF">
+            <Button variant="secondary" size="sm" onClick={onPrint} title="Print or Save as PDF">
               <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
               </svg>
-              Print
+              Print / PDF
             </Button>
           </div>
         )}
@@ -119,7 +120,11 @@ export function ARAgingTab({
           <p className="text-sm">Calculating A/R aging buckets and invoice statuses...</p>
         </div>
       ) : report ? (
-        <div className="space-y-4">
+        <div
+          className={`relative z-10 space-y-4 transition-opacity duration-200 ${
+            isLoading ? "opacity-50 pointer-events-none" : ""
+          }`}
+        >
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
             <div className="surface-glass border border-white/10 rounded-xl p-3 sm:p-3.5">
               <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
@@ -211,7 +216,7 @@ export function ARAgingTab({
               Aging Distribution Buckets (As of {formatDateMMDDYYYY(report.asOfDate)})
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5">
-              {report.buckets.map((b) => {
+              {(report.buckets ?? []).map((b) => {
                 const isPastDue = b.bucketName !== "Current (Not Due)";
                 const hasBalance = b.totalAmount > 0;
                 const share =
@@ -353,8 +358,10 @@ export function ARAgingTab({
                                 variant="secondary"
                                 size="sm"
                                 glow
-                                onClick={() => onOpenInvoiceDetail(inv.id)}
-                                title="Open invoice in the Invoices panel"
+                                onClick={() => {
+                                  onOpenInvoiceDetail(inv.id);
+                                }}
+                                title="Open invoice details"
                               >
                                 View
                               </Button>

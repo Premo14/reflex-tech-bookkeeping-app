@@ -5,6 +5,10 @@ import (
 	"testing"
 
 	"reflex-tech-bookkeeping-app-api/models"
+
+	"gorm.io/driver/postgres"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 // ---- Money: MustParseMoney, CentsValue, SumMoney ----
@@ -269,3 +273,65 @@ func TestModel_NoFloat64Money(t *testing.T) {
 	_ = inv.AmountPaid
 	_ = inv.BalanceDue
 }
+
+func TestMoney_FullMethodCoverage(t *testing.T) {
+	zero := models.Money{Cents: 0}
+	pos := models.NewMoney(15.25)
+	neg := models.NewMoney(-15.25)
+
+	if !zero.IsZero() || pos.IsZero() {
+		t.Errorf("IsZero failed: zero=%v pos=%v", zero.IsZero(), pos.IsZero())
+	}
+	if pos.Abs().Cents != 1525 || neg.Abs().Cents != 1525 {
+		t.Errorf("Abs failed: pos=%d neg=%d", pos.Abs().Cents, neg.Abs().Cents)
+	}
+
+	// Scan error branches & integer variants
+	var scanned models.Money
+	if err := scanned.Scan(int(100)); err != nil || scanned.Cents != 100 {
+		t.Errorf("Scan(int) = %v, %d", err, scanned.Cents)
+	}
+	if err := scanned.Scan(int32(200)); err != nil || scanned.Cents != 200 {
+		t.Errorf("Scan(int32) = %v, %d", err, scanned.Cents)
+	}
+	if err := scanned.Scan(uint(300)); err != nil || scanned.Cents != 300 {
+		t.Errorf("Scan(uint) = %v, %d", err, scanned.Cents)
+	}
+	if err := scanned.Scan(uint32(400)); err != nil || scanned.Cents != 400 {
+		t.Errorf("Scan(uint32) = %v, %d", err, scanned.Cents)
+	}
+	if err := scanned.Scan(uint64(500)); err != nil || scanned.Cents != 500 {
+		t.Errorf("Scan(uint64) = %v, %d", err, scanned.Cents)
+	}
+	if err := scanned.Scan(float32(1.50)); err != nil || scanned.Cents != 150 {
+		t.Errorf("Scan(float32) = %v, %d", err, scanned.Cents)
+	}
+	if err := scanned.Scan([]byte("not-a-number")); err == nil {
+		t.Error("expected Scan([]byte invalid) error")
+	}
+	if err := scanned.Scan("not-a-number"); err == nil {
+		t.Error("expected Scan(string invalid) error")
+	}
+	if err := scanned.Scan(struct{}{}); err == nil {
+		t.Error("expected Scan(struct) unsupported type error")
+	}
+
+	// UnmarshalJSON error branch
+	if err := scanned.UnmarshalJSON([]byte(`"invalid"`)); err == nil {
+		t.Error("expected UnmarshalJSON error on invalid input")
+	}
+
+	// GormDBDataType for sqlite ("real") and postgres ("decimal(12,2)")
+	sqliteDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("failed to open sqlite: %v", err)
+	}
+	if got := zero.GormDBDataType(sqliteDB, nil); got != "real" {
+		t.Errorf("GormDBDataType(sqlite) = %q, want real", got)
+	}
+	pgDB := &gorm.DB{Config: &gorm.Config{Dialector: postgres.New(postgres.Config{})}}
+	if got := zero.GormDBDataType(pgDB, nil); got != "decimal(12,2)" {
+		t.Errorf("GormDBDataType(postgres) = %q, want decimal(12,2)", got)
+	}
+}
+

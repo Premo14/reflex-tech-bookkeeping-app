@@ -264,9 +264,9 @@ export interface PeriodAuditLog {
   createdAt: string;
 }
 
-// One member of a link group (a bank transaction or an expense) affected by exclude/restore.
+// One member of a link group (a bank transaction, expense, or invoice) affected by exclude/restore.
 export interface GroupItem {
-  type: "transaction" | "expense";
+  type: "transaction" | "expense" | "invoice";
   id: number;
   label: string;
   date: string;
@@ -421,6 +421,10 @@ export interface Invoice {
   categoryAccountId?: number;
   categoryAccount?: ChartAccount;
   linkedExpenses?: Expense[];
+  reviewStatus?: string;
+  exclusionReason?: string;
+  exclusionNote?: string;
+  deletedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -431,6 +435,7 @@ export interface InvoiceSummary {
   totalUnpaid: number;
   overdueCount: number;
   invoiceCount: number;
+  statusCounts?: Record<string, number>;
 }
 
 export interface InvoicesResponse {

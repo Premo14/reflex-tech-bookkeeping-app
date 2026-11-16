@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflex-tech-bookkeeping-app-api/constants"
 	"reflex-tech-bookkeeping-app-api/db"
+	"reflex-tech-bookkeeping-app-api/events"
 	"reflex-tech-bookkeeping-app-api/models"
 	"reflex-tech-bookkeeping-app-api/utils"
 	"strings"
@@ -81,47 +82,43 @@ func GetReviewQueueCounts(c fiber.Ctx) error {
 	if db.DB == nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
 	}
-	closedDate, _, hasClosed := getBooksClosedDate(db.DB)
 
 	var pendingTxCount int64
 	var pendingExpCount int64
+	var pendingInvCount int64
 
-	if hasClosed {
-		endOfClosed := closedDate.Add(24 * time.Hour)
-		db.DB.Model(&models.BankTransaction{}).
-			Where("(review_status = 'PENDING' AND date < ?) OR ((allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED'))", endOfClosed).
-			Count(&pendingTxCount)
+	db.DB.Model(&models.BankTransaction{}).
+		Where("deleted_at IS NULL AND ((review_status = 'PENDING') OR ((allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')))").
+		Count(&pendingTxCount)
 
-		db.DB.Model(&models.Expense{}).
-			Where("(review_status = 'PENDING' AND timestamp < ?) OR (LOWER(COALESCE(tender, '')) != 'cash' AND (allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED'))", endOfClosed).
-			Count(&pendingExpCount)
-	} else {
-		db.DB.Model(&models.BankTransaction{}).
-			Where("(allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')").
-			Count(&pendingTxCount)
+	db.DB.Model(&models.Expense{}).
+		Where("deleted_at IS NULL AND ((review_status = 'PENDING') OR ("+notCashClause+" AND (allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')))").
+		Count(&pendingExpCount)
 
-		db.DB.Model(&models.Expense{}).
-			Where("LOWER(COALESCE(tender, '')) != 'cash' AND (allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')").
-			Count(&pendingExpCount)
-	}
+	db.DB.Model(&models.Invoice{}).
+		Where("deleted_at IS NULL AND ((review_status = 'PENDING') OR (status IN ('SENT', 'OVERDUE', 'PARTIALLY_PAID') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')))").
+		Count(&pendingInvCount)
 
-	var ignoredTxCount, ignoredExpCount int64
+	var ignoredTxCount, ignoredExpCount, ignoredInvCount int64
 	db.DB.Model(&models.BankTransaction{}).Where("review_status = 'IGNORED'").Count(&ignoredTxCount)
 	db.DB.Model(&models.Expense{}).Where("review_status = 'IGNORED'").Count(&ignoredExpCount)
+	db.DB.Model(&models.Invoice{}).Where("review_status = 'IGNORED'").Count(&ignoredInvCount)
 
-	var warnTxCount, warnExpCount int64
+	var warnTxCount, warnExpCount, warnInvCount int64
 	db.DB.Model(&models.BankTransaction{}).Where("review_status = 'WARNINGS_IGNORED'").Count(&warnTxCount)
 	db.DB.Model(&models.Expense{}).Where("review_status = 'WARNINGS_IGNORED'").Count(&warnExpCount)
+	db.DB.Model(&models.Invoice{}).Where("review_status = 'WARNINGS_IGNORED'").Count(&warnInvCount)
 
-	var delTxCount, delExpCount int64
+	var delTxCount, delExpCount, delInvCount int64
 	db.DB.Model(&models.BankTransaction{}).Where("review_status = 'DELETED'").Count(&delTxCount)
 	db.DB.Model(&models.Expense{}).Where("review_status = 'DELETED'").Count(&delExpCount)
+	db.DB.Model(&models.Invoice{}).Where("review_status = 'DELETED'").Count(&delInvCount)
 
 	return c.JSON(fiber.Map{
-		"pending":         pendingTxCount + pendingExpCount,
-		"excluded":        ignoredTxCount + ignoredExpCount,
-		"warningsIgnored": warnTxCount + warnExpCount,
-		"deleted":         delTxCount + delExpCount,
+		"pending":         pendingTxCount + pendingExpCount + pendingInvCount,
+		"excluded":        ignoredTxCount + ignoredExpCount + ignoredInvCount,
+		"warningsIgnored": warnTxCount + warnExpCount + warnInvCount,
+		"deleted":         delTxCount + delExpCount + delInvCount,
 	})
 }
 
@@ -139,7 +136,7 @@ func GetReviewQueue(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "status must be PENDING, IGNORED, WARNINGS_IGNORED or DELETED"})
 	}
 
-	closedDate, closedRaw, hasClosed := getBooksClosedDate(db.DB)
+	_, closedRaw, _ := getBooksClosedDate(db.DB)
 
 	if status == "DELETED" {
 		// Auto-purge items that have been in the trash for longer than 30 days
@@ -165,33 +162,41 @@ func GetReviewQueue(c fiber.Ctx) error {
 				removeUnreferencedReceiptFile(r.DocumentURI)
 			}
 		}
+
+		var oldInvIDs []uint
+		db.DB.Model(&models.Invoice{}).Where("review_status = ? AND deleted_at < ?", "DELETED", purgeThreshold).Pluck("id", &oldInvIDs)
+		if len(oldInvIDs) > 0 {
+			db.DB.Where("id IN ?", oldInvIDs).Delete(&models.Invoice{})
+		}
 	}
 
-	// Initialize base queries for transactions and expenses.
+	// Initialize base queries for transactions, expenses, and invoices.
 	queryTx := db.DB
 	queryExp := db.DB
+	queryInv := db.DB
 
-	// PENDING means items needing review: allocation_status != 'BALANCED' AND
-	// review_status in {NULL, '', 'APPROVED'} — mirroring the counts logic exactly.
+	// PENDING means items needing review:
+	//   1. Items awaiting review (imported into a closed period OR open-period receipts missing amount/date)
+	//   2. Active items in the books (review_status in NULL, '', 'APPROVED') with allocation_status != 'BALANCED'
+	//   3. Invoices in a closed period or unpaid/overdue/unmatched invoices needing attention
+	// Mirroring the counts logic exactly.
 	if status == "PENDING" {
-		queryTx = queryTx.Where("(allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')")
-		queryExp = queryExp.Where("LOWER(COALESCE(tender, '')) != 'cash' AND (allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')")
-		if hasClosed {
-			endOfClosed := closedDate.Add(24 * time.Hour)
-			queryTx = queryTx.Where("date < ?", endOfClosed)
-			queryExp = queryExp.Where("timestamp < ?", endOfClosed)
-		}
-		// When no closed period: return all non-balanced items (no date filter)
+		queryTx = queryTx.Where("deleted_at IS NULL AND ((review_status = 'PENDING') OR ((allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')))")
+		queryExp = queryExp.Where("deleted_at IS NULL AND ((review_status = 'PENDING') OR ("+notCashClause+" AND (allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')))")
+		queryInv = queryInv.Where("deleted_at IS NULL AND ((review_status = 'PENDING') OR (status IN ('SENT', 'OVERDUE', 'PARTIALLY_PAID') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')))")
 	} else {
 		queryTx = queryTx.Where("review_status = ?", status)
 		queryExp = queryExp.Where("review_status = ?", status)
+		queryInv = queryInv.Where("review_status = ?", status)
 	}
 
 	orderTx := "date DESC"
 	orderExp := "timestamp DESC"
+	orderInv := "issue_date DESC"
 	if status == "DELETED" {
 		orderTx = "COALESCE(deleted_at, updated_at) DESC, date DESC"
 		orderExp = "COALESCE(deleted_at, updated_at) DESC, timestamp DESC"
+		orderInv = "COALESCE(deleted_at, updated_at) DESC, issue_date DESC"
 	}
 
 	txs := []models.BankTransaction{}
@@ -200,14 +205,20 @@ func GetReviewQueue(c fiber.Ctx) error {
 	}
 
 	exps := []models.Expense{}
-	if err := queryExp.Preload("ChartAccount").Order(orderExp).Find(&exps).Error; err != nil {
+	if err := queryExp.Preload("ChartAccount").Preload("BankTransactions.ChartAccount").Order(orderExp).Find(&exps).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to load expenses"})
+	}
+
+	invs := []models.Invoice{}
+	if err := queryInv.Preload("CategoryAccount").Preload("BankTransaction").Preload("BankTransaction.ChartAccount").Order(orderInv).Find(&invs).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to load invoices"})
 	}
 
 	return c.JSON(fiber.Map{
 		"status":          "success",
 		"transactions":    txs,
 		"expenses":        exps,
+		"invoices":        invs,
 		"booksClosedDate": closedRaw,
 	})
 }
@@ -215,6 +226,7 @@ func GetReviewQueue(c fiber.Ctx) error {
 type ResolveRequest struct {
 	TransactionIDs []uint `json:"transactionIds"`
 	ExpenseIDs     []uint `json:"expenseIds"`
+	InvoiceIDs     []uint `json:"invoiceIds"`
 	// Action is one of:
 	//   "allow"            - approve PENDING items (reopens the books back to the oldest one)
 	//   "pending"          - send excluded items that sit in a closed period back to the queue
@@ -236,12 +248,15 @@ func newResolveError(status int, msg string) *resolveError {
 	return &resolveError{status: status, msg: msg}
 }
 
-func splitItemIDs(items []GroupItem) (txIDs []uint, expIDs []uint) {
+func splitItemIDs(items []GroupItem) (txIDs []uint, expIDs []uint, invIDs []uint) {
 	for _, it := range items {
-		if it.Type == "transaction" {
+		switch it.Type {
+		case "transaction":
 			txIDs = append(txIDs, it.ID)
-		} else {
+		case "expense":
 			expIDs = append(expIDs, it.ID)
+		case "invoice":
+			invIDs = append(invIDs, it.ID)
 		}
 	}
 	return
@@ -251,7 +266,7 @@ func isNormalReviewStatus(s string) bool {
 	return s == "" || s == "APPROVED"
 }
 
-func applyReviewStatus(tx *gorm.DB, txIDs, expIDs []uint, fields map[string]interface{}) error {
+func applyReviewStatus(tx *gorm.DB, txIDs, expIDs, invIDs []uint, fields map[string]interface{}) error {
 	if len(txIDs) > 0 {
 		if err := tx.Model(&models.BankTransaction{}).Where("id IN ?", txIDs).Updates(fields).Error; err != nil {
 			return err
@@ -259,6 +274,11 @@ func applyReviewStatus(tx *gorm.DB, txIDs, expIDs []uint, fields map[string]inte
 	}
 	if len(expIDs) > 0 {
 		if err := tx.Model(&models.Expense{}).Where("id IN ?", expIDs).Updates(fields).Error; err != nil {
+			return err
+		}
+	}
+	if len(invIDs) > 0 {
+		if err := tx.Model(&models.Invoice{}).Where("id IN ?", invIDs).Updates(fields).Error; err != nil {
 			return err
 		}
 	}
@@ -283,7 +303,7 @@ func ResolveQueueItems(c fiber.Ctx) error {
 	if err := c.Bind().JSON(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid input"})
 	}
-	if len(req.TransactionIDs) == 0 && len(req.ExpenseIDs) == 0 {
+	if len(req.TransactionIDs) == 0 && len(req.ExpenseIDs) == 0 && len(req.InvoiceIDs) == 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No items were selected."})
 	}
 
@@ -296,7 +316,7 @@ func ResolveQueueItems(c fiber.Ctx) error {
 	resp := fiber.Map{"status": "success"}
 
 	err := db.DB.Transaction(func(tx *gorm.DB) error {
-		requested := loadGroupItems(tx, req.TransactionIDs, req.ExpenseIDs)
+		requested := loadGroupItems(tx, req.TransactionIDs, req.ExpenseIDs, req.InvoiceIDs)
 		if len(requested) == 0 {
 			return newResolveError(fiber.StatusNotFound, "The selected items no longer exist.")
 		}
@@ -311,15 +331,15 @@ func ResolveQueueItems(c fiber.Ctx) error {
 				}
 			}
 			// Linked items always move together.
-			txIDs, expIDs := expandToLinkGroups(tx, req.TransactionIDs, req.ExpenseIDs)
+			txIDs, expIDs, invIDs := expandToLinkGroups(tx, req.TransactionIDs, req.ExpenseIDs, req.InvoiceIDs)
 			var allowed []GroupItem
-			for _, it := range loadGroupItems(tx, txIDs, expIDs) {
+			for _, it := range loadGroupItems(tx, txIDs, expIDs, invIDs) {
 				if it.ReviewStatus == "PENDING" {
 					allowed = append(allowed, it)
 				}
 			}
-			allowTx, allowExp := splitItemIDs(allowed)
-			if err := applyReviewStatus(tx, allowTx, allowExp, map[string]interface{}{"review_status": "APPROVED", "exclusion_reason": "", "exclusion_note": ""}); err != nil {
+			allowTx, allowExp, allowInv := splitItemIDs(allowed)
+			if err := applyReviewStatus(tx, allowTx, allowExp, allowInv, map[string]interface{}{"review_status": "APPROVED", "exclusion_reason": "", "exclusion_note": ""}); err != nil {
 				return err
 			}
 			if err := writeReviewAudit(tx, allowed, "APPROVED", "", "Review Queue", groupID); err != nil {
@@ -344,15 +364,15 @@ func ResolveQueueItems(c fiber.Ctx) error {
 					return newResolveError(fiber.StatusConflict, "Only items in a locked period can be sent to the Review Queue. Restore the others directly.")
 				}
 			}
-			txIDs, expIDs := expandToLinkGroups(tx, req.TransactionIDs, req.ExpenseIDs)
+			txIDs, expIDs, invIDs := expandToLinkGroups(tx, req.TransactionIDs, req.ExpenseIDs, req.InvoiceIDs)
 			var moved []GroupItem
-			for _, it := range loadGroupItems(tx, txIDs, expIDs) {
+			for _, it := range loadGroupItems(tx, txIDs, expIDs, invIDs) {
 				if it.ReviewStatus == "IGNORED" {
 					moved = append(moved, it)
 				}
 			}
-			moveTx, moveExp := splitItemIDs(moved)
-			if err := applyReviewStatus(tx, moveTx, moveExp, map[string]interface{}{"review_status": "PENDING", "exclusion_reason": "", "exclusion_note": ""}); err != nil {
+			moveTx, moveExp, moveInv := splitItemIDs(moved)
+			if err := applyReviewStatus(tx, moveTx, moveExp, moveInv, map[string]interface{}{"review_status": "PENDING", "exclusion_reason": "", "exclusion_note": ""}); err != nil {
 				return err
 			}
 			if err := writeReviewAudit(tx, moved, "SENT_TO_REVIEW", "", "Review Queue", groupID); err != nil {
@@ -361,13 +381,16 @@ func ResolveQueueItems(c fiber.Ctx) error {
 			resp["affected"] = moved
 
 		case "ignore_warnings":
+			closedDate, _, hasClosed := getBooksClosedDate(tx)
+			endOfClosed := closedDate.Add(24 * time.Hour)
 			for _, it := range requested {
-				if !isNormalReviewStatus(it.ReviewStatus) {
-					return newResolveError(fiber.StatusConflict, "Warnings can only be ignored on items that are in the books and not already excluded or awaiting review.")
+				isOpenPending := it.ReviewStatus == "PENDING" && (!hasClosed || !it.Date.Before(endOfClosed))
+				if !isNormalReviewStatus(it.ReviewStatus) && !isOpenPending {
+					return newResolveError(fiber.StatusConflict, "Warnings can only be ignored on items that are in the books or open-period warning items.")
 				}
 			}
-			txIDs, expIDs := splitItemIDs(requested)
-			if err := applyReviewStatus(tx, txIDs, expIDs, map[string]interface{}{"review_status": "WARNINGS_IGNORED", "exclusion_reason": "", "exclusion_note": ""}); err != nil {
+			txIDs, expIDs, invIDs := splitItemIDs(requested)
+			if err := applyReviewStatus(tx, txIDs, expIDs, invIDs, map[string]interface{}{"review_status": "WARNINGS_IGNORED", "exclusion_reason": "", "exclusion_note": ""}); err != nil {
 				return err
 			}
 			if err := writeReviewAudit(tx, requested, "WARNINGS_IGNORED", "", "Review Queue", groupID); err != nil {
@@ -381,8 +404,8 @@ func ResolveQueueItems(c fiber.Ctx) error {
 					return newResolveError(fiber.StatusConflict, "Warnings are not currently ignored on some of the selected items.")
 				}
 			}
-			txIDs, expIDs := splitItemIDs(requested)
-			if err := applyReviewStatus(tx, txIDs, expIDs, map[string]interface{}{"review_status": "APPROVED"}); err != nil {
+			txIDs, expIDs, invIDs := splitItemIDs(requested)
+			if err := applyReviewStatus(tx, txIDs, expIDs, invIDs, map[string]interface{}{"review_status": "APPROVED"}); err != nil {
 				return err
 			}
 			if err := writeReviewAudit(tx, requested, "WARNINGS_RESTORED", "", "Review Queue", groupID); err != nil {
@@ -394,7 +417,7 @@ func ResolveQueueItems(c fiber.Ctx) error {
 			if locked := groupLockedItem(requested); locked != nil {
 				return newResolveError(fiber.StatusForbidden, "Cannot delete items from a locked accounting period. Unlock the books first.")
 			}
-			txIDs, expIDs := splitItemIDs(requested)
+			txIDs, expIDs, invIDs := splitItemIDs(requested)
 			now := time.Now()
 			if len(txIDs) > 0 {
 				tx.Where("bank_transaction_id IN ?", txIDs).Delete(&models.ExpenseBankTransaction{})
@@ -402,7 +425,10 @@ func ResolveQueueItems(c fiber.Ctx) error {
 			if len(expIDs) > 0 {
 				tx.Where("expense_id IN ?", expIDs).Delete(&models.ExpenseBankTransaction{})
 			}
-			if err := applyReviewStatus(tx, txIDs, expIDs, map[string]interface{}{"review_status": "DELETED", "deleted_at": now}); err != nil {
+			if len(invIDs) > 0 {
+				tx.Model(&models.Invoice{}).Where("id IN ?", invIDs).Updates(map[string]interface{}{"bank_transaction_id": nil})
+			}
+			if err := applyReviewStatus(tx, txIDs, expIDs, invIDs, map[string]interface{}{"review_status": "DELETED", "deleted_at": now}); err != nil {
 				return err
 			}
 			if err := writeReviewAudit(tx, requested, "DELETED", "", "Review Queue", groupID); err != nil {
@@ -478,15 +504,22 @@ func reopenBooksForAllowedItems(tx *gorm.DB, allowed []GroupItem, groupID string
 		others = append(others, GroupItem{Type: "transaction", ID: t.ID, Label: t.Description, Date: t.Date, Amount: t.Amount, ReviewStatus: t.ReviewStatus})
 	}
 	var exps []models.Expense
-	if err = tx.Where("review_status = ? AND timestamp >= ?", "PENDING", endOfClosed).Find(&exps).Error; err != nil {
+	if err = tx.Where("review_status = ? AND timestamp >= ? AND COALESCE(description, '') NOT LIKE '%[MISSING AMOUNT%' AND COALESCE(description, '') NOT LIKE '%[MISSING DATE%' AND COALESCE(description, '') NOT LIKE '%AI extraction unavailable%'", "PENDING", endOfClosed).Find(&exps).Error; err != nil {
 		return
 	}
 	for _, e := range exps {
 		others = append(others, GroupItem{Type: "expense", ID: e.ID, Label: e.Vendor, Date: e.Timestamp, Amount: e.Amount, ReviewStatus: e.ReviewStatus})
 	}
+	var invs []models.Invoice
+	if err = tx.Where("review_status = ? AND issue_date >= ?", "PENDING", endOfClosed).Find(&invs).Error; err != nil {
+		return
+	}
+	for _, iv := range invs {
+		others = append(others, GroupItem{Type: "invoice", ID: iv.ID, Label: strings.TrimSpace(iv.InvoiceNumber + " " + iv.ClientName), Date: iv.IssueDate, Amount: iv.TotalAmount, ReviewStatus: iv.ReviewStatus})
+	}
 	if len(others) > 0 {
-		otherTx, otherExp := splitItemIDs(others)
-		if err = applyReviewStatus(tx, otherTx, otherExp, map[string]interface{}{"review_status": "APPROVED"}); err != nil {
+		otherTx, otherExp, otherInv := splitItemIDs(others)
+		if err = applyReviewStatus(tx, otherTx, otherExp, otherInv, map[string]interface{}{"review_status": "APPROVED"}); err != nil {
 			return
 		}
 		if err = writeReviewAudit(tx, others, "APPROVED", "", "Auto-approved: books were reopened past this item", groupID); err != nil {
@@ -501,10 +534,11 @@ func reopenBooksForAllowedItems(tx *gorm.DB, allowed []GroupItem, groupID string
 type BatchCategorizeRequest struct {
 	TransactionIDs []uint `json:"transactionIds"`
 	ExpenseIDs     []uint `json:"expenseIds"`
+	InvoiceIDs     []uint `json:"invoiceIds"`
 	CategoryID     uint   `json:"categoryId"`
 }
 
-// BatchCategorizeItems updates the category on multiple transactions and expenses in a single atomic transaction.
+// BatchCategorizeItems updates the category on multiple transactions, expenses, and invoices in a single atomic transaction.
 func BatchCategorizeItems(c fiber.Ctx) error {
 	if db.DB == nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
@@ -514,7 +548,7 @@ func BatchCategorizeItems(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid input"})
 	}
 
-	if len(req.TransactionIDs) == 0 && len(req.ExpenseIDs) == 0 {
+	if len(req.TransactionIDs) == 0 && len(req.ExpenseIDs) == 0 && len(req.InvoiceIDs) == 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No items were selected."})
 	}
 
@@ -631,6 +665,34 @@ func BatchCategorizeItems(c fiber.Ctx) error {
 			}
 		}
 
+		if len(req.InvoiceIDs) > 0 {
+			var invs []models.Invoice
+			if err := tx.Where("id IN ?", req.InvoiceIDs).Find(&invs).Error; err != nil {
+				return err
+			}
+			for _, iv := range invs {
+				if utils.IsDateInClosedPeriod(iv.IssueDate) {
+					return fmt.Errorf("invoice %d is in a closed accounting period", iv.ID)
+				}
+			}
+
+			if err := tx.Model(&models.Invoice{}).
+				Where("id IN ?", req.InvoiceIDs).
+				Update("category_account_id", req.CategoryID).Error; err != nil {
+				return err
+			}
+
+			for _, ivID := range req.InvoiceIDs {
+				_ = tx.Create(&models.ItemAuditLog{
+					ItemType: "invoice",
+					ItemID:   ivID,
+					Action:   "BATCH_CATEGORIZE",
+					Reason:   fmt.Sprintf("Category set to %s - %s", catAccount.Code, catAccount.Name),
+					GroupID:  groupID,
+				})
+			}
+		}
+
 		return nil
 	})
 
@@ -638,12 +700,14 @@ func BatchCategorizeItems(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
+	totalUpdated := len(req.TransactionIDs) + len(req.ExpenseIDs) + len(req.InvoiceIDs)
 	utils.RunReconciliation()
 	broadcastReconciliationSync()
+	events.Broadcast("INVOICES_UPDATED", nil)
 
 	return c.JSON(fiber.Map{
 		"status":  "success",
-		"message": fmt.Sprintf("Successfully categorized %d items as %s - %s", len(req.TransactionIDs)+len(req.ExpenseIDs), catAccount.Code, catAccount.Name),
-		"count":   len(req.TransactionIDs) + len(req.ExpenseIDs),
+		"message": fmt.Sprintf("Successfully categorized %d items as %s - %s", totalUpdated, catAccount.Code, catAccount.Name),
+		"count":   totalUpdated,
 	})
 }

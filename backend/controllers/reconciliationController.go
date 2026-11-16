@@ -9,7 +9,6 @@ import (
 	"reflex-tech-bookkeeping-app-api/utils"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -67,42 +66,20 @@ type ReconciliationTriggerResponse struct {
 	PreviousRun string `json:"previousRun,omitempty"`
 }
 
-var (
-	reconciliationLastRun time.Time
-	reconciliationMutex   sync.Mutex
-	reconciliationRunning bool
-)
-
 // TriggerReconciliation runs the matching/reconciliation engine on demand.
 func TriggerReconciliation(c fiber.Ctx) error {
 	if db.DB == nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
 	}
 
-	reconciliationMutex.Lock()
-	running := reconciliationRunning
-	prevRun := reconciliationLastRun
-	if !running {
-		reconciliationRunning = true
-	}
-	reconciliationMutex.Unlock()
-
-	if running {
+	started, prevRun := utils.TryTriggerReconciliation(broadcastReconciliationSync)
+	if !started {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
 			"status":    "success",
 			"runStatus": "running",
 			"message":   "Reconciliation is already running. Please wait and try again.",
 		})
 	}
-
-	go func() {
-		utils.RunReconciliation()
-		reconciliationMutex.Lock()
-		reconciliationLastRun = time.Now()
-		reconciliationRunning = false
-		reconciliationMutex.Unlock()
-		broadcastReconciliationSync()
-	}()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":      "success",
@@ -265,14 +242,13 @@ func LinkExpenseToTransaction(c fiber.Ctx) error {
 		}
 	}
 
-
 	// Wrap in a DB transaction
 	err := db.DB.Transaction(func(tx *gorm.DB) error {
 		// Delete any existing row for this pair first (e.g. "suggested")
 		tx.Where("expense_id = ? AND bank_transaction_id = ?", req.ExpenseID, req.TransactionID).
 			Delete(&models.ExpenseBankTransaction{})
 
-		// Ensure categories match. Split transactions allow different categories on the expenses, 
+		// Ensure categories match. Split transactions allow different categories on the expenses,
 		// but if it's a 1:1 link or the first link, or if the user provides an override, we apply it.
 		// For 1:many (1 Tx -> Many Expenses), the Tx's category might not match the new Expense,
 		// but since it's a split, we allow it UNLESS the Expense has NO category.
@@ -575,13 +551,13 @@ func GetUnlinkedItems(c fiber.Ctx) error {
 	expQuery.Preload("Receipts").Preload("ChartAccount").Offset(offset).Limit(limit).Find(&expenses)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"status":          "success",
-		"transactions":    txs,
-		"totalTxs":        totalTxs,
-		"expenses":        expenses,
-		"totalExpenses":   totalExps,
-		"page":            page,
-		"limit":           limit,
+		"status":        "success",
+		"transactions":  txs,
+		"totalTxs":      totalTxs,
+		"expenses":      expenses,
+		"totalExpenses": totalExps,
+		"page":          page,
+		"limit":         limit,
 	})
 }
 
@@ -605,7 +581,8 @@ func ValidateAccountForRole(acc *models.ChartAccount, allowedTypes ...string) er
 // When itemType is "receipt", a bank account (ASSET or LIABILITY) is required, and category (if provided) must be EXPENSE or REVENUE.
 // When itemType is "transaction", category must be EXPENSE.
 func ValidateCreateAndLinkRoles(itemType string, bankAcc *models.ChartAccount, catAcc *models.ChartAccount) error {
-	if itemType == "receipt" {
+	switch itemType {
+	case "receipt":
 		if bankAcc == nil {
 			return errors.New("bank account is required when creating a transaction")
 		}
@@ -618,7 +595,7 @@ func ValidateCreateAndLinkRoles(itemType string, bankAcc *models.ChartAccount, c
 			}
 		}
 		return nil
-	} else if itemType == "transaction" {
+	case "transaction":
 		if catAcc != nil {
 			if err := ValidateAccountForRole(catAcc, "EXPENSE"); err != nil {
 				return fmt.Errorf("category error: %w", err)
@@ -684,14 +661,15 @@ func CreateAndLink(c fiber.Ctx) error {
 		return ValidateAccountForRole(&acc, allowedTypes...)
 	}
 
-	if req.Type == "transaction" {
+	switch req.Type {
+	case "transaction":
 		if err := checkAccount(req.ChartAccountID, "EXPENSE"); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
 		if err := checkAccount(req.OverrideChartAccountID, "EXPENSE"); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
-	} else if req.Type == "receipt" {
+	case "receipt":
 		if req.ChartAccountID == nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Bank account is required when creating a transaction"})
 		}
@@ -709,7 +687,8 @@ func CreateAndLink(c fiber.Ctx) error {
 	var newExpenseID, newTxID uint
 
 	err := db.DB.Transaction(func(tx *gorm.DB) error {
-		if req.Type == "transaction" {
+		switch req.Type {
+		case "transaction":
 			var existingTx models.BankTransaction
 			if err := tx.First(&existingTx, req.TargetID).Error; err != nil {
 				return errors.New("TARGET_NOT_FOUND")
@@ -782,7 +761,7 @@ func CreateAndLink(c fiber.Ctx) error {
 					tx.Omit(clause.Associations).Save(&expense)
 				}
 			}
-		} else if req.Type == "receipt" {
+		case "receipt":
 			var existingExp models.Expense
 			if err := tx.First(&existingExp, req.TargetID).Error; err != nil {
 				return errors.New("TARGET_NOT_FOUND")

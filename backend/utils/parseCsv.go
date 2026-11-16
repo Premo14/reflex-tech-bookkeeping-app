@@ -38,6 +38,13 @@ var csvDateFormats = []string{
 	"01/02/06",
 }
 
+// GenerateSyntheticFitID computes a deterministic SHA256 unique identifier invariant to DB IDs.
+func GenerateSyntheticFitID(prefix string, txDate time.Time, desc string, cents int64, occurrenceIndex int, acctRef string) string {
+	dupKey := fmt.Sprintf("%s|%s|%d", txDate.Format("2006-01-02"), strings.ToUpper(strings.TrimSpace(desc)), cents)
+	h := sha256.Sum256(fmt.Appendf(nil, "%s|%d|%s", dupKey, occurrenceIndex, acctRef))
+	return fmt.Sprintf("%s-%x", prefix, h[:8])
+}
+
 // GenerateCSVFitID computes a deterministic SHA256 unique identifier for a CSV transaction.
 // Uses integer-cent representation (abs(amount)*100) to avoid float64 precision issues.
 func GenerateCSVFitID(txDate time.Time, desc string, amount float64, occurrenceIndex int, acctRef uint) string {
@@ -46,9 +53,7 @@ func GenerateCSVFitID(txDate time.Time, desc string, amount float64, occurrenceI
 	if amount < 0 {
 		cents = -cents
 	}
-	dupKey := fmt.Sprintf("%s|%s|%d", txDate.Format("2006-01-02"), strings.ToUpper(strings.TrimSpace(desc)), cents)
-	h := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d", dupKey, occurrenceIndex, acctRef)))
-	return fmt.Sprintf("CSV-%x", h[:8])
+	return GenerateSyntheticFitID("CSV", txDate, desc, cents, occurrenceIndex, fmt.Sprintf("%d", acctRef))
 }
 
 func parseCSVDate(s string) (time.Time, error) {

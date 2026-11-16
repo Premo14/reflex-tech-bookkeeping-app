@@ -8,18 +8,88 @@ import (
 	"reflex-tech-bookkeeping-app-api/events"
 	"reflex-tech-bookkeeping-app-api/models"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
-var reconciliationMutex sync.Mutex
+var (
+	reconciliationMutex   sync.Mutex
+	reconcilStateMu       sync.Mutex
+	reconciliationRunning bool
+	reconciliationLastRun time.Time
+)
+
+// IsReconciliationRunning reports whether a reconciliation pass is currently active.
+func IsReconciliationRunning() bool {
+	reconcilStateMu.Lock()
+	defer reconcilStateMu.Unlock()
+	return reconciliationRunning
+}
+
+// SetReconciliationRunningForTest toggles the shared running flag for controller unit tests.
+func SetReconciliationRunningForTest(running bool) {
+	reconcilStateMu.Lock()
+	defer reconcilStateMu.Unlock()
+	reconciliationRunning = running
+}
+
+// TryTriggerReconciliation launches an asynchronous reconciliation run unless one is already running.
+func TryTriggerReconciliation(onComplete func()) (started bool, prevRun time.Time) {
+	reconcilStateMu.Lock()
+	prevRun = reconciliationLastRun
+	if reconciliationRunning {
+		reconcilStateMu.Unlock()
+		return false, prevRun
+	}
+	reconciliationRunning = true
+	reconcilStateMu.Unlock()
+
+	go func() {
+		defer func() {
+			reconcilStateMu.Lock()
+			reconciliationRunning = false
+			reconciliationLastRun = time.Now()
+			reconcilStateMu.Unlock()
+		}()
+		runReconciliationLocked()
+		if onComplete != nil {
+			onComplete()
+		}
+	}()
+	return true, prevRun
+}
 
 // RunReconciliation links expenses to bank transactions.
 // pass 1: exact 1-to-1 matches
-// pass 2: recursive subset-sum for split expenses
+// pass 2: subset-sum suggestions for split expenses
 // pass 3: recalculates status flags
+// pass 4: automated invoice deposit matching
 func RunReconciliation() {
+	if db.DB == nil {
+		return
+	}
+	reconcilStateMu.Lock()
+	alreadyRunning := reconciliationRunning
+	if !alreadyRunning {
+		reconciliationRunning = true
+	}
+	reconcilStateMu.Unlock()
+
+	defer func() {
+		if !alreadyRunning {
+			reconcilStateMu.Lock()
+			reconciliationRunning = false
+			reconciliationLastRun = time.Now()
+			reconcilStateMu.Unlock()
+		}
+	}()
+
+	runReconciliationLocked()
+}
+
+func runReconciliationLocked() {
 	if db.DB == nil {
 		return
 	}
@@ -33,51 +103,53 @@ func RunReconciliation() {
 		}
 	}()
 
-	// Fetch all Expenses that have no confirmed row in the join table.
-	// Previously this was "bank_transaction_id IS NULL" — now we check the join table
-	// directly, since the FK field no longer exists on the Expense struct.
-	var unlinkedExpenses []models.Expense
-	// PENDING (closed-period review) and IGNORED (excluded) items never participate in matching.
-	db.DB.Where("id NOT IN (?)",
-		db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed"),
-	).Where("review_status IS NULL OR review_status = '' OR review_status IN (?, ?)", "APPROVED", "WARNINGS_IGNORED").Find(&unlinkedExpenses)
+	// Fetch all open-period active Expenses that have no confirmed row in the join table.
+	// PENDING, IGNORED, DELETED, and closed-period items never auto-match or alter links.
+	var rawUnlinkedExpenses []models.Expense
+	db.DB.Where("deleted_at IS NULL").
+		Where("id NOT IN (?)",
+			db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed"),
+		).Where("review_status IS NULL OR review_status = '' OR review_status IN (?, ?)", "APPROVED", "WARNINGS_IGNORED").Find(&rawUnlinkedExpenses)
 
-	// Fetch all BankTransactions, then manually load each one's confirmed expenses.
-	// We can't use Preload("Expenses") without a status condition here, because that
-	// would include suggested links and inflate the sum used for match-checking.
+	var unlinkedExpenses []models.Expense
+	for i := range rawUnlinkedExpenses {
+		if !IsDateInClosedPeriod(rawUnlinkedExpenses[i].Timestamp) {
+			unlinkedExpenses = append(unlinkedExpenses, rawUnlinkedExpenses[i])
+		}
+	}
+
+	// Fetch active BankTransactions and load only active confirmed expenses.
 	var allTransactions []models.BankTransaction
-	db.DB.Where("review_status IS NULL OR review_status = '' OR review_status IN (?, ?)", "APPROVED", "WARNINGS_IGNORED").Find(&allTransactions)
+	db.DB.Where("deleted_at IS NULL").
+		Where("review_status IS NULL OR review_status = '' OR review_status IN (?, ?)", "APPROVED", "WARNINGS_IGNORED").Find(&allTransactions)
 	for i := range allTransactions {
 		db.DB.
 			Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
-			Where("ebt.bank_transaction_id = ? AND ebt.status = ?", allTransactions[i].ID, "confirmed").
+			Where("ebt.bank_transaction_id = ? AND ebt.status = ? AND expenses.deleted_at IS NULL AND COALESCE(expenses.review_status, '') NOT IN ('IGNORED', 'DELETED')", allTransactions[i].ID, "confirmed").
 			Find(&allTransactions[i].Expenses)
 	}
 
 	// Lookup active Balance Sheet accounts (ASSET, LIABILITY, EQUITY).
-	// Negative bank transactions categorized to these accounts (e.g. credit card payments,
-	// inter-account transfers, loan payments, owner draws) do not require expense receipts.
+	// Negative bank transactions categorized to these accounts do not require expense receipts.
 	balanceSheetAccountIDs := getBalanceSheetAccountIDs()
 
-	// Only consider transactions that are not already fully reconciled and are NOT deposits or balance-sheet transfers.
+	// Only consider open-period debit transactions not already fully reconciled or balance-sheet transfers.
 	var availableTransactions []*models.BankTransaction
 	for i := range allTransactions {
 		tx := &allTransactions[i]
-		if tx.Amount.Cents >= 0 {
+		if tx.Amount.Cents >= 0 || IsDateInClosedPeriod(tx.Date) {
 			continue
 		}
 		if len(tx.Expenses) == 0 && tx.CategoryAccountID != nil && balanceSheetAccountIDs[*tx.CategoryAccountID] {
 			continue
 		}
 		sum := calculateExpenseSum(tx.Expenses)
-		// Use exact integer cents comparison instead of float64
 		if tx.AllocationStatus == "" || tx.AllocationStatus != "BALANCED" || sum != tx.Amount.Abs().Cents {
 			availableTransactions = append(availableTransactions, tx)
 		}
 	}
 
-	// Clear previous unconfirmed suggestions so Pass 1 and Pass 2 compute fresh matches
-	// (prevents stale suggestions from lingering after an item's amount, date, or category is edited).
+	// Clear previous unconfirmed suggestions so Pass 1 and Pass 2 compute fresh matches.
 	db.DB.Where("status = ?", "suggested").Delete(&models.ExpenseBankTransaction{})
 
 	// Fetch all explicitly unlinked pairs so the reconciler never automatically re-links or re-suggests them.
@@ -91,7 +163,7 @@ func RunReconciliation() {
 	// Track expenses confirmed during this pass so we don't attempt to re-match them.
 	confirmedInPass1 := map[uint]bool{}
 
-	// pass 1: direct matches
+	// pass 1: exact-amount 1-to-1 direct matches
 	for i := range unlinkedExpenses {
 		expense := &unlinkedExpenses[i]
 
@@ -113,10 +185,8 @@ func RunReconciliation() {
 			bestMatch = matches[0].Tx
 		}
 
-		// If we found a confident exact-amount match, link them.
-		if bestScore >= 80 && bestMatch != nil {
-			// Delete first in case a "suggested" row for this pair already exists,
-			// so we don't hit the composite PK constraint on insert.
+		// Auto-confirm strictly when exact 1:1 amount matches with no prior confirmed splits on tx
+		if bestScore >= 80 && bestMatch != nil && len(bestMatch.Expenses) == 0 && expense.Amount.Abs().Cents == bestMatch.Amount.Abs().Cents {
 			db.DB.Where("expense_id = ? AND bank_transaction_id = ?", expense.ID, bestMatch.ID).
 				Delete(&models.ExpenseBankTransaction{})
 			db.DB.Create(&models.ExpenseBankTransaction{
@@ -125,8 +195,6 @@ func RunReconciliation() {
 				Status:            "confirmed",
 			})
 
-			// Mark in-memory so we don't re-process this expense, and update
-			// the in-memory Expenses slice so availability checks stay accurate.
 			confirmedInPass1[expense.ID] = true
 			bestMatch.Expenses = append(bestMatch.Expenses, *expense)
 
@@ -137,22 +205,29 @@ func RunReconciliation() {
 			}
 
 		} else if len(matches) > 0 {
-			// Not confident enough for a hard link — write suggested rows for all ranked candidates.
+			// Variance pairs or split candidates — write suggested rows for user confirmation.
 			persistReconcilerSuggestions(expense.ID, matches)
 		}
 	}
 
-	// Re-fetch remaining unconfirmed expenses for Pass 2 (since Pass 1 linked some).
+	// Re-fetch remaining open-period unconfirmed expenses for Pass 2.
+	var rawRemaining []models.Expense
+	db.DB.Where("deleted_at IS NULL").
+		Where("id NOT IN (?)",
+			db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed"),
+		).Where("review_status IS NULL OR review_status = '' OR review_status IN (?, ?)", "APPROVED", "WARNINGS_IGNORED").Find(&rawRemaining)
+
 	var remainingExpenses []models.Expense
-	db.DB.Where("id NOT IN (?)",
-		db.DB.Table("expense_bank_transactions").Select("expense_id").Where("status = ?", "confirmed"),
-	).Where("review_status IS NULL OR review_status = '' OR review_status IN (?, ?)", "APPROVED", "WARNINGS_IGNORED").Find(&remainingExpenses)
+	for i := range rawRemaining {
+		if !IsDateInClosedPeriod(rawRemaining[i].Timestamp) {
+			remainingExpenses = append(remainingExpenses, rawRemaining[i])
+		}
+	}
 
 	// Track expenses claimed in Pass 2 to prevent double-use across transactions.
 	claimedInPass2 := map[uint]bool{}
 
 	// pass 2: split transaction matches
-	// find combinations of same-day expenses that equal the tx amount
 	for _, tx := range availableTransactions {
 		sum := calculateExpenseSum(tx.Expenses)
 		targetCents := tx.Amount.Abs().Cents
@@ -162,48 +237,44 @@ func RunReconciliation() {
 			continue // It's already balanced or over-allocated
 		}
 
-		// Find all remaining unclaimed expenses on the exact same day (Priority A).
+		// Find remaining unclaimed expenses on the exact same day (Priority A).
+		// Allow differing categories on splits when tx already has confirmed links or expense is strictly smaller than remaining.
 		var sameDayExpenses []models.Expense
 		for _, e := range remainingExpenses {
-			if IsCashTender(e.Tender) || unlinkedMap[[2]uint{e.ID, tx.ID}] {
+			if IsCashTender(e.Tender) || unlinkedMap[[2]uint{e.ID, tx.ID}] || claimedInPass2[e.ID] {
 				continue
 			}
-			if !claimedInPass2[e.ID] && daysDifference(e.Timestamp, tx.Date) == 0 {
-				if e.ChartAccountID != nil && tx.CategoryAccountID != nil {
-					if *e.ChartAccountID != *tx.CategoryAccountID {
-						continue
-					}
+			if daysDifference(e.Timestamp, tx.Date) == 0 {
+				isSplitCandidate := len(tx.Expenses) > 0 || e.Amount.Abs().Cents < remainingCents
+				if !isSplitCandidate && e.ChartAccountID != nil && tx.CategoryAccountID != nil && *e.ChartAccountID != *tx.CategoryAccountID {
+					continue
 				}
 				sameDayExpenses = append(sameDayExpenses, e)
 			}
 		}
 
-		// Check if any combination of same-day expenses adds up exactly to the remaining amount.
-		matches := findSubsetSum(sameDayExpenses, remainingCents)
+		matches := findSubsetSumForTx(*tx, sameDayExpenses, remainingCents)
 
-		// Priority B: If no exact same-day subset found, check 1-3 day settlement clearing window
-		// (handles weekend purchases that post on Monday/Tuesday).
+		// Priority B: 1-3 day settlement clearing window
 		if len(matches) == 0 {
 			var windowExpenses []models.Expense
 			for _, e := range remainingExpenses {
-				if IsCashTender(e.Tender) || unlinkedMap[[2]uint{e.ID, tx.ID}] {
+				if IsCashTender(e.Tender) || unlinkedMap[[2]uint{e.ID, tx.ID}] || claimedInPass2[e.ID] {
 					continue
 				}
 				diff := daysDifference(e.Timestamp, tx.Date)
-				if !claimedInPass2[e.ID] && diff > 0 && diff <= 3 {
-					if e.ChartAccountID != nil && tx.CategoryAccountID != nil {
-						if *e.ChartAccountID != *tx.CategoryAccountID {
-							continue
-						}
+				if diff > 0 && diff <= 3 {
+					isSplitCandidate := len(tx.Expenses) > 0 || e.Amount.Abs().Cents < remainingCents
+					if !isSplitCandidate && e.ChartAccountID != nil && tx.CategoryAccountID != nil && *e.ChartAccountID != *tx.CategoryAccountID {
+						continue
 					}
 					windowExpenses = append(windowExpenses, e)
 				}
 			}
-			matches = findSubsetSum(windowExpenses, remainingCents)
+			matches = findSubsetSumForTx(*tx, windowExpenses, remainingCents)
 		}
 		if len(matches) > 0 {
 			for _, m := range matches {
-				// Delete-then-create, same pattern as Pass 1.
 				db.DB.Where("expense_id = ? AND bank_transaction_id = ?", m.ID, tx.ID).
 					Delete(&models.ExpenseBankTransaction{})
 				db.DB.Create(&models.ExpenseBankTransaction{
@@ -211,7 +282,6 @@ func RunReconciliation() {
 					BankTransactionID: tx.ID,
 					Status:            "suggested",
 				})
-				// Mark as claimed so we don't assign this expense to the next tx.
 				claimedInPass2[m.ID] = true
 			}
 		}
@@ -240,10 +310,41 @@ func CalculateMerchantFee(grossCents int64) (feeCents int64, netCents int64) {
 	return feeCents, netCents
 }
 
+var invoiceProcessorTokens = []string{
+	"stripe", "square", "sq *", "paypal", "pypl", "venmo", "clover", "toast", "intuit", "quickbooks",
+}
+
+func clientNameMatchesDeposit(cleanTxDesc, clientName string) bool {
+	cleanClient := strings.TrimSpace(normalizeString(clientName))
+	if cleanClient == "" {
+		return false
+	}
+	if len(cleanClient) >= 4 && !commonStopWords[cleanClient] && strings.Contains(cleanTxDesc, cleanClient) {
+		return true
+	}
+	for _, tok := range strings.Fields(cleanClient) {
+		if len(tok) >= 4 && !commonStopWords[tok] && strings.Contains(cleanTxDesc, tok) {
+			return true
+		}
+	}
+	return false
+}
+
+func descriptionHasProcessorSignal(cleanTxDesc string) bool {
+	for _, tok := range invoiceProcessorTokens {
+		if strings.Contains(cleanTxDesc, tok) {
+			return true
+		}
+	}
+	return false
+}
+
 // EvaluateInvoiceDepositMatch checks whether an incoming bank deposit reconciles against an open invoice
 // via exact balance match (Pass 1) or standard merchant fee net deposit match (Pass 2).
 func EvaluateInvoiceDepositMatch(inv *models.Invoice, tx *models.BankTransaction, openInvoiceCount int) (matched bool, isMerchantFee bool, feeDollars float64) {
-	if inv == nil || tx == nil || inv.Status == "PAID" || inv.Status == "VOID" || inv.Status == "DRAFT" || inv.BalanceDue.Cents <= 0 || tx.Amount.Cents <= 0 {
+	if inv == nil || tx == nil || inv.Status == "PAID" || inv.Status == "VOID" || inv.Status == "DRAFT" ||
+		inv.DeletedAt != nil || inv.ReviewStatus == "DELETED" || inv.ReviewStatus == "IGNORED" ||
+		inv.BalanceDue.Cents <= 0 || tx.Amount.Cents <= 0 {
 		return false, false, 0
 	}
 	if inv.DeclinedTxIDs != "" && strings.Contains(inv.DeclinedTxIDs, fmt.Sprintf(",%d,", tx.ID)) {
@@ -256,12 +357,12 @@ func EvaluateInvoiceDepositMatch(inv *models.Invoice, tx *models.BankTransaction
 		return false, false, 0
 	}
 
-	cleanTxDesc := strings.ToLower(tx.Description)
-	cleanClient := strings.ToLower(strings.TrimSpace(inv.ClientName))
+	cleanTxDesc := normalizeString(tx.Description)
 	cleanInvNum := strings.ToLower(strings.TrimSpace(inv.InvoiceNumber))
 
-	hasNameMatch := cleanClient != "" && (strings.Contains(cleanTxDesc, cleanClient) || (len(cleanClient) > 4 && strings.Contains(cleanTxDesc, cleanClient[:4])))
-	hasNumMatch := cleanInvNum != "" && strings.Contains(cleanTxDesc, cleanInvNum)
+	hasNameMatch := clientNameMatchesDeposit(cleanTxDesc, inv.ClientName)
+	hasNumMatch := cleanInvNum != "" && strings.Contains(strings.ToLower(tx.Description), cleanInvNum)
+	hasProcessorMatch := descriptionHasProcessorSignal(cleanTxDesc)
 
 	// PASS 1: Exact Balance Match
 	if tx.Amount.Cents == inv.BalanceDue.Cents && (hasNameMatch || hasNumMatch || openInvoiceCount == 1) {
@@ -269,6 +370,7 @@ func EvaluateInvoiceDepositMatch(inv *models.Invoice, tx *models.BankTransaction
 	}
 
 	// PASS 2: Merchant Processing Fee Net Deposit (Stripe / Square 2.9% + $0.30)
+	// Require positive identifying signal (client token, invoice number, known processor, or sole open invoice within 7 days).
 	grossCents := inv.BalanceDue.Cents
 	if grossCents > 500 { // Only consider balances > $5.00
 		feeCents, expectedNetCents := CalculateMerchantFee(grossCents)
@@ -276,7 +378,7 @@ func EvaluateInvoiceDepositMatch(inv *models.Invoice, tx *models.BankTransaction
 		if diffCents < 0 {
 			diffCents = -diffCents
 		}
-		if diffCents <= 150 && (hasNameMatch || hasNumMatch || (daysSinceIssue >= 0 && daysSinceIssue <= 7)) {
+		if diffCents <= 150 && (hasNameMatch || hasNumMatch || hasProcessorMatch || (openInvoiceCount == 1 && daysSinceIssue >= 0 && daysSinceIssue <= 7)) {
 			return true, true, float64(feeCents) / 100.0
 		}
 	}
@@ -288,30 +390,32 @@ func EvaluateInvoiceDepositMatch(inv *models.Invoice, tx *models.BankTransaction
 // Pass 1: High-confidence exact match: Deposit amount matches open invoice BalanceDue within 90 days,
 //         AND client name or invoice number appears in bank description (or is sole open invoice). Auto-marks PAID.
 // Pass 2: Merchant processing fee match: Deposit matches open invoice balance minus standard Stripe/Square fee (2.9% + $0.30),
-//         with customer/invoice reference or tight date proximity (within 7 days). Auto-marks PAID with fee notation.
+//         with customer/invoice/processor reference or sole open invoice within 7 days. Auto-marks PAID with fee notation.
 func RunInvoiceReconciliation() {
 	if db.DB == nil {
 		return
 	}
 
-	// 1. Fetch all open invoices (SENT, UNPAID, PARTIALLY_PAID, OVERDUE) with balance due > 0
+	// 1. Fetch all active open invoices (SENT, UNPAID, PARTIALLY_PAID, OVERDUE) with balance due > 0
 	var openInvoices []models.Invoice
-	if err := db.DB.Where("status IN ('SENT', 'UNPAID', 'PARTIALLY_PAID', 'OVERDUE') AND balance_due > 0").
+	if err := db.DB.Where("deleted_at IS NULL AND COALESCE(review_status, '') NOT IN ('DELETED', 'IGNORED') AND status IN ('SENT', 'UNPAID', 'PARTIALLY_PAID', 'OVERDUE') AND balance_due > 0").
 		Order("due_date ASC").Find(&openInvoices).Error; err != nil || len(openInvoices) == 0 {
 		return
 	}
 
-	// 2. Fetch all linked deposit IDs to exclude already-matched bank transactions
+	// 2. Fetch all linked deposit IDs from non-deleted invoices to exclude already-matched bank transactions
 	var linkedTxIDs []uint
-	db.DB.Model(&models.Invoice{}).Where("bank_transaction_id IS NOT NULL").Pluck("bank_transaction_id", &linkedTxIDs)
+	db.DB.Model(&models.Invoice{}).
+		Where("bank_transaction_id IS NOT NULL AND deleted_at IS NULL AND COALESCE(review_status, '') != 'DELETED'").
+		Pluck("bank_transaction_id", &linkedTxIDs)
 	linkedMap := make(map[uint]bool, len(linkedTxIDs))
 	for _, id := range linkedTxIDs {
 		linkedMap[id] = true
 	}
 
-	// 3. Fetch candidate incoming deposits (amount > 0 and review_status != 'DELETED')
+	// 3. Fetch candidate active in-books incoming deposits (amount > 0)
 	var deposits []models.BankTransaction
-	query := db.DB.Where("amount > 0 AND COALESCE(review_status, '') NOT IN ('DELETED', 'IGNORED')")
+	query := db.DB.Where("deleted_at IS NULL AND amount > 0 AND COALESCE(review_status, '') NOT IN ('DELETED', 'IGNORED', 'PENDING')")
 	if len(linkedTxIDs) > 0 {
 		query = query.Where("id NOT IN (?)", linkedTxIDs)
 	}
@@ -337,6 +441,7 @@ func RunInvoiceReconciliation() {
 				continue
 			}
 
+			origBalanceCents := inv.BalanceDue.Cents
 			inv.AmountPaid = inv.TotalAmount
 			inv.BalanceDue = models.NewMoney(0)
 			inv.Status = "PAID"
@@ -348,12 +453,18 @@ func RunInvoiceReconciliation() {
 				tx.CategoryAccountID = inv.CategoryAccountID
 			}
 			tx.AllocationStatus = "BALANCED"
-			tx.ReviewStatus = "APPROVED"
+			if tx.ReviewStatus == "" {
+				tx.ReviewStatus = "APPROVED"
+			}
 			if isMerchantFee {
+				actualFee := float64(origBalanceCents-tx.Amount.Cents) / 100.0
+				if actualFee <= 0 {
+					actualFee = feeDollars
+				}
 				tx.Notes = fmt.Sprintf("Payment for Invoice %s (%s) [Net of $%.2f merchant fee]",
-					inv.InvoiceNumber, inv.ClientName, feeDollars)
+					inv.InvoiceNumber, inv.ClientName, actualFee)
 				log.Printf("✅ Inflow Reconciler: auto-matched merchant deposit $%.2f to Invoice %s ($%.2f fee deducted)",
-					tx.Amount.Dollars(), inv.InvoiceNumber, feeDollars)
+					tx.Amount.Dollars(), inv.InvoiceNumber, actualFee)
 			} else {
 				tx.Notes = fmt.Sprintf("Payment for Invoice %s (%s)", inv.InvoiceNumber, inv.ClientName)
 				log.Printf("✅ Inflow Reconciler: auto-matched deposit $%.2f (%s) to Invoice %s (%s)",
@@ -396,8 +507,10 @@ func toCents(amount float64) int64 {
 }
 
 func daysDifference(date1, date2 time.Time) int {
-	d1 := time.Date(date1.Year(), date1.Month(), date1.Day(), 0, 0, 0, 0, date1.Location())
-	d2 := time.Date(date2.Year(), date2.Month(), date2.Day(), 0, 0, 0, 0, date2.Location())
+	u1 := date1.UTC()
+	u2 := date2.UTC()
+	d1 := time.Date(u1.Year(), u1.Month(), u1.Day(), 0, 0, 0, 0, time.UTC)
+	d2 := time.Date(u2.Year(), u2.Month(), u2.Day(), 0, 0, 0, 0, time.UTC)
 	return int(math.Abs(d2.Sub(d1).Hours() / 24))
 }
 
@@ -446,21 +559,21 @@ func UpdateAllocationStatuses() {
 		DELETE FROM expense_bank_transactions
 		WHERE status = 'suggested'
 		  AND (
-		    expense_id IN (SELECT id FROM expenses WHERE allocation_status = 'BALANCED' OR LOWER(tender) = 'cash' OR LOWER(tender) = 'cash / paper')
+		    expense_id IN (SELECT id FROM expenses WHERE allocation_status = 'BALANCED' OR LOWER(TRIM(tender)) IN ('cash', 'cash / paper', 'cash/paper', 'currency', 'paper'))
 		    OR bank_transaction_id IN (SELECT id FROM bank_transactions WHERE allocation_status = 'BALANCED' OR amount >= 0)
 		  )
 	`)
 
 	var transactions []models.BankTransaction
-	db.DB.Where("COALESCE(review_status, '') NOT IN ('IGNORED', 'DELETED')").Find(&transactions)
+	db.DB.Where("deleted_at IS NULL AND COALESCE(review_status, '') NOT IN ('IGNORED', 'DELETED')").Find(&transactions)
 
 	for i := range transactions {
 		tx := &transactions[i]
 
-		// Load only confirmed expenses for this transaction via a direct join.
+		// Load only active confirmed expenses for this transaction via a direct join.
 		db.DB.
 			Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
-			Where("ebt.bank_transaction_id = ? AND ebt.status = ?", tx.ID, "confirmed").
+			Where("ebt.bank_transaction_id = ? AND ebt.status = ? AND expenses.deleted_at IS NULL AND COALESCE(expenses.review_status, '') NOT IN ('IGNORED', 'DELETED')", tx.ID, "confirmed").
 			Find(&tx.Expenses)
 
 		var status string
@@ -543,7 +656,7 @@ func UpdateAllocationStatuses() {
 	}
 
 	var expenses []models.Expense
-	db.DB.Where("COALESCE(review_status, '') NOT IN ('IGNORED', 'DELETED')").Find(&expenses)
+	db.DB.Where("deleted_at IS NULL AND COALESCE(review_status, '') NOT IN ('IGNORED', 'DELETED')").Find(&expenses)
 	for i := range expenses {
 		exp := &expenses[i]
 
@@ -615,6 +728,20 @@ func UpdateAllocationStatuses() {
 			})
 		}
 	}
+
+	// Final consistency pass: clear stale has_suggestions flags if counterparty expense balancing deleted suggested links.
+	db.DB.Exec(`
+		UPDATE bank_transactions
+		SET has_suggestions = false
+		WHERE has_suggestions = true
+		  AND id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'suggested')
+	`)
+	db.DB.Exec(`
+		UPDATE expenses
+		SET has_suggestions = false
+		WHERE has_suggestions = true
+		  AND id NOT IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'suggested')
+	`)
 }
 
 // Backward-compatible alias
@@ -622,8 +749,23 @@ func UpdateReconciliationStatuses() {
 	UpdateAllocationStatuses()
 }
 
+// findSubsetSumForTx prioritizes vendor-matching candidates stably before running subset-sum matching.
+func findSubsetSumForTx(tx models.BankTransaction, expenses []models.Expense, targetCents int64) []models.Expense {
+	if len(expenses) == 0 || targetCents <= 0 {
+		return nil
+	}
+	ordered := make([]models.Expense, len(expenses))
+	copy(ordered, expenses)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		mi := vendorMatchesDescription(tx.Description, ordered[i].Vendor)
+		mj := vendorMatchesDescription(tx.Description, ordered[j].Vendor)
+		return mi && !mj
+	})
+	return findSubsetSum(ordered, targetCents)
+}
+
 // findSubsetSum explores combinations of expenses to find a subset that equals the target amount (in cents).
-// Uses a bounded knapsack DP algorithm for exact-change matching.
+// Uses bounded knapsack DP up to $2,000 (200,000 cents) and falls back to DFS above that to keep memory flat.
 func findSubsetSum(expenses []models.Expense, targetCents int64) []models.Expense {
 	if len(expenses) == 0 {
 		return nil
@@ -633,10 +775,9 @@ func findSubsetSum(expenses []models.Expense, targetCents int64) []models.Expens
 		return nil
 	}
 
-	// DP array size limit: 50,000,000 cents ($500,000.00).
-	// If the transaction amount is > $500k, DP array would consume too much memory (>400MB),
-	// so we fall back to a safely capped DFS.
-	if targetCents > 50000000 {
+	// DP array size limit: 200,000 cents ($2,000.00) -> <= ~1.6MB slice.
+	// Larger targets fall back to pruned DFS without allocating multi-hundred-MB arrays.
+	if targetCents > 200000 {
 		return findSubsetSumDFS(expenses, targetCents)
 	}
 
@@ -684,11 +825,11 @@ func findSubsetSum(expenses []models.Expense, targetCents int64) []models.Expens
 	return result
 }
 
-// findSubsetSumDFS is a fallback DFS with hard cap for target amounts > $500k.
+// findSubsetSumDFS is a fallback DFS with hard cap for target amounts > $2,000.
 // Uses integer cents throughout to avoid IEEE-754 precision issues.
 func findSubsetSumDFS(expenses []models.Expense, targetCents int64) []models.Expense {
-	if len(expenses) > 15 {
-		expenses = expenses[:15]
+	if len(expenses) > 20 {
+		expenses = expenses[:20]
 	}
 
 	// Calculate suffix sums (in cents) for pruning
@@ -749,8 +890,8 @@ func findSubsetSumDFS(expenses []models.Expense, targetCents int64) []models.Exp
 }
 
 func calculateMatchScore(expense models.Expense, bankTx models.BankTransaction) int {
-	// Guard against conflicting categories
-	if expense.ChartAccountID != nil && bankTx.CategoryAccountID != nil {
+	// Guard against conflicting categories on 1:1 matches; allow multi-category 1:N splits when tx already holds confirmed links.
+	if len(bankTx.Expenses) == 0 && expense.ChartAccountID != nil && bankTx.CategoryAccountID != nil {
 		if *expense.ChartAccountID != *bankTx.CategoryAccountID {
 			return 0
 		}

@@ -179,32 +179,32 @@ func TestCallOllama_VisionMulti_Success(t *testing.T) {
 
 	t.Setenv("OLLAMA_HOST", ts.URL)
 
-	req := OllamaVisionMultiRequest{
-		Model:  "qwen2.5vl:3b",
-		Prompt: "extract receipt from image",
-		Images: []string{"iVBORw0KGgoAAAANSUhEUg=="},
-		Stream: false,
-		Format: "json",
+	req := OllamaRequest{
+		Model:   "qwen2.5vl:3b",
+		Prompt:  "extract receipt from image",
+		Images:  []string{"iVBORw0KGgoAAAANSUhEUg=="},
+		Stream:  false,
+		Format:  "json",
 		Options: map[string]any{"temperature": 0.0},
 	}
-	result, err := callOllamaVisionMulti(req)
+	result, err := callOllama(req)
 	if err != nil {
-		t.Fatalf("callOllamaVisionMulti() error: %v", err)
+		t.Fatalf("callOllama() error: %v", err)
 	}
 	if result != resp {
-		t.Errorf("callOllamaVisionMulti() = %q, want %q", result, resp)
+		t.Errorf("callOllama() = %q, want %q", result, resp)
 	}
 }
 
 func TestCallOllama_VisionMulti_NetworkError(t *testing.T) {
 	t.Setenv("OLLAMA_HOST", "http://127.0.0.1:1")
-	req := OllamaVisionMultiRequest{Model: "test", Prompt: "test", Images: []string{"a"}}
-	_, err := callOllamaVisionMulti(req)
+	req := OllamaRequest{Model: "test", Prompt: "test", Images: []string{"a"}}
+	_, err := callOllama(req)
 	if err == nil {
 		t.Fatal("expected error for unreachable host")
 	}
-	if !strings.Contains(err.Error(), "ollama vision request") {
-		t.Errorf("error should contain 'ollama vision request': %v", err)
+	if !strings.Contains(err.Error(), "ollama request") {
+		t.Errorf("error should contain 'ollama request': %v", err)
 	}
 }
 
@@ -213,13 +213,13 @@ func TestCallOllama_VisionMulti_Non200(t *testing.T) {
 	defer ts.Close()
 	t.Setenv("OLLAMA_HOST", ts.URL)
 
-	req := OllamaVisionMultiRequest{Model: "test", Prompt: "test"}
-	_, err := callOllamaVisionMulti(req)
+	req := OllamaRequest{Model: "test", Prompt: "test", Images: []string{"a"}}
+	_, err := callOllama(req)
 	if err == nil {
 		t.Fatal("expected error for non-200")
 	}
-	if !strings.Contains(err.Error(), "ollama vision status") {
-		t.Errorf("error should contain 'ollama vision status': %v", err)
+	if !strings.Contains(err.Error(), "ollama status") {
+		t.Errorf("error should contain 'ollama status': %v", err)
 	}
 }
 
@@ -228,13 +228,13 @@ func TestCallOllama_VisionMulti_EmptyResponse(t *testing.T) {
 	defer ts.Close()
 	t.Setenv("OLLAMA_HOST", ts.URL)
 
-	req := OllamaVisionMultiRequest{Model: "test", Prompt: "test"}
-	_, err := callOllamaVisionMulti(req)
+	req := OllamaRequest{Model: "test", Prompt: "test", Images: []string{"a"}}
+	_, err := callOllama(req)
 	if err == nil {
 		t.Fatal("expected error for empty response")
 	}
-	if !strings.Contains(err.Error(), "empty vision response") {
-		t.Errorf("error should contain 'empty vision response': %v", err)
+	if !strings.Contains(err.Error(), "empty response") {
+		t.Errorf("error should contain 'empty response': %v", err)
 	}
 }
 
@@ -469,14 +469,15 @@ func TestResizeImage_ZeroDimensions(t *testing.T) {
 
 func TestProcess_SupportedMimes(t *testing.T) {
 	testCases := []struct {
-		filename string
-		payload  []byte
-		wantMIME string
+		filename  string
+		payload   []byte
+		wantMIME  string
+		wantValid bool
 	}{
-		{"receipt.heic", []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c', ' ', ' ', ' ', ' '}, "image/heic"},
-		{"receipt.heif", []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'm', 'p', '4', ' ', ' ', ' ', ' ', ' '}, "image/heic"},
-		{"image.tif", []byte{0, 0, 'I', 'I', 42, 0, 8, 0, 0, 0, 4, 0, 1, 254}, "image/tiff"},
-		{"image.tiff", []byte{0, 0, 'I', 'I', 42, 0, 8, 0, 0, 0, 4, 0, 1, 254}, "image/tiff"},
+		{"receipt.heic", []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c', ' ', ' ', ' ', ' '}, "image/heic", false},
+		{"receipt.heif", []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'm', 'p', '4', ' ', ' ', ' ', ' ', ' '}, "image/heic", false},
+		{"image.tif", []byte{0, 0, 'I', 'I', 42, 0, 8, 0, 0, 0, 4, 0, 1, 254}, "image/tiff", true},
+		{"image.tiff", []byte{0, 0, 'I', 'I', 42, 0, 8, 0, 0, 0, 4, 0, 1, 254}, "image/tiff", true},
 	}
 
 	for _, tc := range testCases {
@@ -506,8 +507,9 @@ func TestProcess_SupportedMimes(t *testing.T) {
 				t.Errorf("resolveUploadMIME(%q) = %q, want %q", tc.filename, gotMIME, tc.wantMIME)
 			}
 
-			if err := validateUpload(int64(len(tc.payload)), gotMIME); err != nil {
-				t.Errorf("validateUpload(%q) failed: %v", gotMIME, err)
+			err = validateUpload(int64(len(tc.payload)), gotMIME)
+			if (err == nil) != tc.wantValid {
+				t.Errorf("validateUpload(%q) err=%v, wantValid=%v", gotMIME, err, tc.wantValid)
 			}
 		})
 	}
@@ -835,7 +837,7 @@ func TestValidateUpload_WebpAndBmp(t *testing.T) {
 		{"image/webp", false},
 		{"image/bmp", false},
 		{"image/tiff", false},
-		{"image/heic", false},
+		{"image/heic", true}, // HEIC must be converted upstream before file-processor
 	}
 	for _, tt := range tests {
 		t.Run(tt.mime, func(t *testing.T) {
@@ -865,9 +867,6 @@ func TestCompactOCRText_Boundary(t *testing.T) {
 func TestMainConstants(t *testing.T) {
 	if maxUploadSize != 20<<20 {
 		t.Errorf("maxUploadSize = %d, want %d", maxUploadSize, 20<<20)
-	}
-	if maxBase64Size != 12<<20 {
-		t.Errorf("maxBase64Size = %d, want %d", maxBase64Size, 12<<20)
 	}
 }
 

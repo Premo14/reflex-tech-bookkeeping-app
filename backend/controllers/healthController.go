@@ -128,11 +128,14 @@ func checkOllamaHealth() map[string]interface{} {
 }
 
 // computeOverallStatus returns the aggregate health status.
-func computeOverallStatus(db, storage, fp, ai map[string]interface{}) string {
+func computeOverallStatus(db, storage, fp, _ /* ai */ map[string]any) string {
 	if db["status"] != "connected" {
 		return "degraded"
 	}
 	if storage["status"] == "warning" {
+		return "degraded"
+	}
+	if fp["status"] != "connected" {
 		return "degraded"
 	}
 	return "healthy"

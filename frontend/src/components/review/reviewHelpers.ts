@@ -1,5 +1,5 @@
 import type { ReviewStatusType } from "../../services/api";
-import type { BankTransaction, ChartAccount, Expense } from "../../types/models";
+import type { BankTransaction, ChartAccount, Expense, Invoice } from "../../types/models";
 import { addDaysToISODate } from "../../utils/dateUtils";
 import { normalizeAllocationStatus } from "../../utils/ledgerStatus";
 
@@ -8,13 +8,15 @@ export type IssueType =
   | "UNLINKED"
   | "UNDER_ALLOCATED"
   | "OVER_ALLOCATED"
+  | "OVERDUE"
+  | "UNPAID"
   | "IGNORED"
   | "WARNINGS_IGNORED"
   | "DELETED";
 
 export interface ReviewRow {
   key: string;
-  type: "transaction" | "expense";
+  type: "transaction" | "expense" | "invoice";
   id: number;
   title: string;
   subtitle: string;
@@ -32,6 +34,7 @@ export interface ReviewRow {
   bankAccount?: ChartAccount;
   categoryAccountId?: number;
   categoryAccount?: ChartAccount;
+  invoiceStatus?: string;
 }
 
 export interface ReviewBannerConfig {
@@ -142,18 +145,26 @@ interface UpsertExtra {
   daysRemaining?: number;
 }
 
+/** Returns true when itemDate falls on or before closedDate (YYYY-MM-DD calendar check). */
+export function isItemDateClosed(closedDate: string, itemDate?: string): boolean {
+  if (!closedDate || !itemDate) return false;
+  const dateStr = itemDate.split("T")[0];
+  return Boolean(dateStr && dateStr <= closedDate);
+}
+
 /** Merges a queue item into a deduplicated ReviewRow map keyed by `<type>-<id>`. */
 export function upsertReviewRow(
   rowMap: Map<string, ReviewRow>,
   closedDate: string,
   params: {
-    type: "transaction" | "expense";
+    type: "transaction" | "expense" | "invoice";
     id: number;
     title: string;
     subtitle: string;
     date: string;
     amount: number;
     transactionType?: string;
+    invoiceStatus?: string;
     reason: string;
     note: string;
     issue: IssueType;
@@ -162,8 +173,7 @@ export function upsertReviewRow(
   }
 ): void {
   const key = `${params.type}-${params.id}`;
-  const dateStr = params.date ? params.date.split("T")[0] : "";
-  const isLocked = Boolean(closedDate && dateStr && dateStr <= closedDate);
+  const isLocked = isItemDateClosed(closedDate, params.date);
 
   const bankAccount =
     params.extra?.bankAccount && params.extra.bankAccount.id > 0 ? params.extra.bankAccount : undefined;
@@ -213,6 +223,7 @@ export function upsertReviewRow(
     date: params.date,
     amount: params.amount,
     transactionType: params.transactionType,
+    invoiceStatus: params.invoiceStatus,
     reason: params.reason,
     note: params.note,
     issues: [params.issue],
@@ -280,7 +291,9 @@ export function appendExpenseRow(
     daysRemaining: options?.daysRemaining,
   };
 
-  const title = `${exp.vendor}${exp.description ? ` – ${exp.description}` : ""}`;
+  const title = exp.vendor
+    ? `${exp.vendor}${exp.description ? ` – ${exp.description}` : ""}`
+    : exp.description || "Untitled Expense";
   for (const issue of issues) {
     upsertReviewRow(rowMap, closedDate, {
       type: "expense",
@@ -291,6 +304,45 @@ export function appendExpenseRow(
       amount: exp.amount,
       reason: options?.clearReason ? "" : exp.exclusionReason || "",
       note: options?.clearReason ? "" : exp.exclusionNote || "",
+      issue,
+      hasSuggestions: Boolean(exp.hasSuggestions),
+      extra,
+    });
+  }
+}
+
+/** Appends an Invoice entry with one or more issue tags to rowMap. */
+export function appendInvoiceRow(
+  rowMap: Map<string, ReviewRow>,
+  closedDate: string,
+  inv: Invoice,
+  issues: IssueType[],
+  options?: { deletedAt?: string; daysRemaining?: number; clearReason?: boolean }
+): void {
+  const extra: UpsertExtra = {
+    bankAccountId: inv.bankTransaction?.chartAccountId || undefined,
+    bankAccount: inv.bankTransaction?.chartAccount || undefined,
+    categoryAccountId: inv.categoryAccountId || undefined,
+    categoryAccount: inv.categoryAccount || undefined,
+    deletedAt: options?.deletedAt || inv.deletedAt,
+    daysRemaining: options?.daysRemaining,
+  };
+
+  const title = `${inv.invoiceNumber || `INV-${inv.id}`} – ${inv.clientName}`;
+  const subtitle = inv.paymentTerms || "Net 30";
+  const amount = (inv.balanceDue !== undefined && inv.balanceDue > 0) ? inv.balanceDue : inv.totalAmount;
+
+  for (const issue of issues) {
+    upsertReviewRow(rowMap, closedDate, {
+      type: "invoice",
+      id: inv.id,
+      title,
+      subtitle,
+      date: inv.issueDate,
+      amount,
+      invoiceStatus: inv.status,
+      reason: options?.clearReason ? "" : inv.exclusionReason || "",
+      note: options?.clearReason ? "" : inv.exclusionNote || "",
       issue,
       hasSuggestions: false,
       extra,

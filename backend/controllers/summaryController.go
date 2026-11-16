@@ -34,7 +34,9 @@ func GetSummary(c fiber.Ctx) error {
 		accountIDs = GetAccountAndDescendantIDs(uint(parsedID))
 	}
 
-	type amtResult struct{ Total float64 }
+	type amtResult struct {
+		Total models.Money `gorm:"column:total"`
+	}
 
 	applyTxAccountFilter := func(q *gorm.DB) *gorm.DB {
 		if len(accountIDs) > 0 {
@@ -84,7 +86,7 @@ func GetSummary(c fiber.Ctx) error {
 	uncatDepQ = ApplyDateRange(uncatDepQ, "bt.date", startDate, endDate)
 	_ = uncatDepQ.Scan(&uncatDeposits)
 
-	totalIncome := models.NewMoney(revCategorized.Total).Add(models.NewMoney(uncatDeposits.Total))
+	totalIncome := revCategorized.Total.Add(uncatDeposits.Total)
 
 	// 2. Bank Cash Flow (Deposits & Debits):
 	var totalDeposits amtResult
@@ -99,17 +101,17 @@ func GetSummary(c fiber.Ctx) error {
 	debQ = ApplyDateRange(debQ, "date", startDate, endDate)
 	_ = debQ.Scan(&totalDebits)
 
-	depositsMoney := models.NewMoney(totalDeposits.Total)
-	debitsMoney := models.NewMoney(totalDebits.Total)
+	depositsMoney := totalDeposits.Total
+	debitsMoney := totalDebits.Total
 
 	// 3. Operating Expenses (matches P&L sources a–d):
 	var expFromReceipts amtResult
 	expQ := db.DB.Table("expenses").
 		Select("COALESCE(SUM(expenses.amount), 0) as total").
 		Joins("LEFT JOIN chart_accounts ca ON ca.id = expenses.chart_account_id").
-		Where("(expenses.review_status IS NULL OR expenses.review_status = '' OR expenses.review_status = 'APPROVED' OR expenses.review_status = 'WARNINGS_IGNORED')").
+		Where("expenses.deleted_at IS NULL AND (expenses.review_status IS NULL OR expenses.review_status = '' OR expenses.review_status = 'APPROVED' OR expenses.review_status = 'WARNINGS_IGNORED')").
 		Where("(ca.type = 'EXPENSE' OR expenses.chart_account_id IS NULL)").
-		Where("(LOWER(COALESCE(expenses.tender, '')) = 'cash' OR expenses.review_status = 'WARNINGS_IGNORED' OR expenses.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
+		Where("(LOWER(TRIM(COALESCE(expenses.tender, ''))) IN ('cash', 'cash / paper', 'cash/paper', 'currency', 'paper') OR expenses.review_status = 'WARNINGS_IGNORED' OR expenses.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
 	expQ = applyExpAccountFilter(expQ)
 	expQ = ApplyDateRange(expQ, "expenses.timestamp", startDate, endDate)
 	_ = expQ.Scan(&expFromReceipts)
@@ -139,20 +141,21 @@ func GetSummary(c fiber.Ctx) error {
 	var partialDebitRemainder amtResult
 	partQ := db.DB.Table("bank_transactions bt").
 		Select("COALESCE(SUM(ABS(bt.amount) - sub.allocated), 0) as total").
-		Joins("JOIN (SELECT bank_transaction_id, SUM(e.amount) as allocated FROM expense_bank_transactions ebt JOIN expenses e ON e.id = ebt.expense_id WHERE ebt.status = 'confirmed' GROUP BY bank_transaction_id) sub ON sub.bank_transaction_id = bt.id").
+		Joins("JOIN (SELECT bank_transaction_id, SUM(e.amount) as allocated FROM expense_bank_transactions ebt JOIN expenses e ON e.id = ebt.expense_id WHERE ebt.status = 'confirmed' AND e.deleted_at IS NULL GROUP BY bank_transaction_id) sub ON sub.bank_transaction_id = bt.id").
 		Joins("LEFT JOIN chart_accounts ca ON ca.id = bt.category_account_id").
 		Where("bt.amount < 0").
-		Where("bt.allocation_status = 'PARTIALLY_ALLOCATED'").
+		Where("bt.allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL')").
+		Where("ABS(bt.amount) > sub.allocated").
 		Where("(ca.type = 'EXPENSE' OR bt.category_account_id IS NULL)").
 		Where(inBooksClauseBT)
 	partQ = applyJoinedTxAccountFilter(partQ)
 	partQ = ApplyDateRange(partQ, "bt.date", startDate, endDate)
 	_ = partQ.Scan(&partialDebitRemainder)
 
-	totalExpenses := models.NewMoney(expFromReceipts.Total).
-		Add(models.NewMoney(unlinkedExpDebits.Total)).
-		Add(models.NewMoney(uncatDebitTotal.Total)).
-		Add(models.NewMoney(partialDebitRemainder.Total))
+	totalExpenses := expFromReceipts.Total.
+		Add(unlinkedExpDebits.Total).
+		Add(uncatDebitTotal.Total).
+		Add(partialDebitRemainder.Total)
 
 	// Total transaction count
 	var txCount int64

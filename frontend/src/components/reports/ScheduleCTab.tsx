@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 import { LoadingSpinner } from "../ui/LoadingSpinner";
 import type { ScheduleCReport } from "../../types/models";
 import { formatCents, formatCurrency, fromCents, toCents } from "../../utils/formatCurrency";
@@ -10,6 +11,8 @@ interface ScheduleCTabProps {
   report: ScheduleCReport | null;
   isLoading: boolean;
   taxYear: number;
+  taxYearOptions: number[];
+  onTaxYearChange: (year: number) => void;
   expandedLines: Record<string, boolean>;
   onToggleLineExpand: (key: string) => void;
   onDownloadTaxPack: () => void;
@@ -23,6 +26,8 @@ export function ScheduleCTab({
   report,
   isLoading,
   taxYear,
+  taxYearOptions,
+  onTaxYearChange,
   expandedLines,
   onToggleLineExpand,
   onDownloadTaxPack,
@@ -37,7 +42,7 @@ export function ScheduleCTab({
 
   const mileageRateCents = selectedMileageRateYear === 2024 ? 67 : 70;
   const calculatedMileageCents = Math.round(businessMiles * mileageRateCents);
-  const line9Expense = report?.expenseLines.find((l) => l.lineNumber.toLowerCase().includes("line 9"));
+  const line9Expense = (report?.expenseLines ?? []).find((l) => l.lineNumber.toLowerCase().includes("line 9"));
   const actualVehicleCents = toCents(line9Expense ? line9Expense.deductibleAmount : 0);
   const mileageAdvantageCents = calculatedMileageCents - actualVehicleCents;
 
@@ -47,15 +52,36 @@ export function ScheduleCTab({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 surface-glass p-3 sm:p-3.5 rounded-xl border border-white/5 print:hidden">
+      <div className="bg-amber-500/10 border border-amber-500/20 p-3 sm:p-3.5 rounded-xl flex items-start gap-3 backdrop-blur-md print:hidden">
+        <svg className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
         <div>
-          <h4 className="text-xs font-bold text-white flex items-center gap-2 uppercase tracking-wider">
+          <h4 className="text-xs font-bold text-amber-400 flex items-center gap-2 uppercase tracking-wider">
             Form 1040 Schedule C — Profit or Loss From Business
           </h4>
-          <p className="text-[11px] text-zinc-400 mt-0.5 font-mono tabular-nums">
-            Tax year {taxYear} • Single-entry ledger mapped directly to IRS tax schedule lines.
+          <p className="text-xs text-amber-200/80 mt-1 leading-relaxed">
+            Tax year {taxYear} (<span className="font-mono tabular-nums">01/01/{taxYear} – 12/31/{taxYear}</span>) • Single-entry ledger mapped directly to IRS Form 1040 Schedule C lines, 50% meals deductibility limits, and 1040-ES quarterly tax projections.
           </p>
         </div>
+      </div>
+
+      <div className="relative z-30 flex flex-wrap items-end justify-between gap-3 surface-glass p-3 sm:p-3.5 rounded-xl border border-white/5 print:hidden">
+        <Select
+          id="schedule-c-tax-year"
+          name="taxYear"
+          label="Tax Year:"
+          autoWidth
+          value={taxYear}
+          onChange={(e) => onTaxYearChange(Number(e.target.value))}
+          className="text-xs font-bold font-mono tabular-nums"
+        >
+          {taxYearOptions.map((y) => (
+            <option key={y} value={y}>
+              {y} (01/01/{y} – 12/31/{y})
+            </option>
+          ))}
+        </Select>
 
         <div className="flex items-center gap-1.5 flex-wrap">
           <Button
@@ -80,11 +106,11 @@ export function ScheduleCTab({
                 </svg>
                 Export CSV
               </Button>
-              <Button variant="secondary" size="sm" onClick={onPrint} title="Print or Save PDF">
+              <Button variant="secondary" size="sm" onClick={onPrint} title="Print or Save as PDF">
                 <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                 </svg>
-                Print
+                Print / PDF
               </Button>
             </>
           )}
@@ -97,7 +123,11 @@ export function ScheduleCTab({
           <p className="text-sm">Compiling IRS Form 1040 Schedule C...</p>
         </div>
       ) : report ? (
-        <div className="space-y-4">
+        <div
+          className={`relative z-10 space-y-4 transition-opacity duration-200 ${
+            isLoading ? "opacity-50 pointer-events-none" : ""
+          }`}
+        >
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
             <div className="surface-glass border border-white/10 rounded-xl p-3 sm:p-3.5">
               <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
@@ -174,8 +204,17 @@ export function ScheduleCTab({
                   Uncategorized Items in Suspense
                 </h5>
                 <p className="text-xs text-amber-200/80 mt-1">
-                  There are {report.uncategorizedTxCount} transactions (
-                  <span className="font-mono tabular-nums">{formatCurrency(report.uncategorizedExpenseAmount)}</span>
+                  There are {(report.uncategorizedTxCount || 0) + (report.uncategorizedExpCount || 0)} transactions (
+                  {report.uncategorizedExpenseAmount > 0 && report.uncategorizedIncomeAmount > 0 ? (
+                    <span className="font-mono tabular-nums">
+                      {formatCurrency(report.uncategorizedExpenseAmount)} expenses,{" "}
+                      {formatCurrency(report.uncategorizedIncomeAmount)} income
+                    </span>
+                  ) : (
+                    <span className="font-mono tabular-nums">
+                      {formatCurrency(report.uncategorizedExpenseAmount || report.uncategorizedIncomeAmount)}
+                    </span>
+                  )}
                   ) awaiting categorization. For accurate tax reporting, categorize these before filing your Schedule C.
                 </p>
                 {onViewUncategorized && (
@@ -249,6 +288,11 @@ export function ScheduleCTab({
                 <div className="flex justify-between py-1.5 border-b border-white/5">
                   <span className="text-zinc-300">
                     <span className="font-mono text-amber-400 font-bold mr-2">Line 6</span> Other income (interest, refunds)
+                    {report.uncategorizedIncomeAmount > 0 && (
+                      <span className="text-[10px] text-amber-400/80 ml-1.5 font-mono tabular-nums">
+                        (includes {formatCurrency(report.uncategorizedIncomeAmount)} Suspense 9998)
+                      </span>
+                    )}
                   </span>
                   <span className="font-semibold font-mono tabular-nums text-white">
                     {formatCurrency(report.otherIncome)}
@@ -274,17 +318,18 @@ export function ScheduleCTab({
               </div>
 
               <div className="space-y-2">
-                {report.expenseLines.map((line) => {
-                  const isExpanded = Boolean(expandedLines[line.lineNumber]);
+                {(report.expenseLines ?? []).map((line) => {
+                  const lineKey = `${line.lineNumber}-${line.lineName}`;
+                  const isExpanded = Boolean(expandedLines[lineKey] || expandedLines[line.lineNumber]);
                   return (
                     <div
-                      key={line.lineNumber}
+                      key={lineKey}
                       className="border border-white/5 rounded-lg bg-zinc-950/40 overflow-hidden"
                     >
                       <button
                         type="button"
                         aria-expanded={isExpanded}
-                        onClick={() => onToggleLineExpand(line.lineNumber)}
+                        onClick={() => onToggleLineExpand(lineKey)}
                         className="w-full text-left flex items-center justify-between p-2.5 hover:bg-white/5 transition-colors cursor-pointer select-none touch-glow-amber"
                       >
                         <div className="flex items-center gap-2 flex-wrap">
@@ -477,7 +522,7 @@ export function ScheduleCTab({
                       </Badge>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="relative z-20 grid grid-cols-2 gap-2">
                       <Input
                         id="schedule-c-miles"
                         label="Annual Business Miles"
@@ -489,24 +534,17 @@ export function ScheduleCTab({
                         onChange={(e) => setBusinessMiles(Math.max(0, parseFloat(e.target.value) || 0))}
                         className="text-xs font-mono tabular-nums"
                       />
-                      <div className="flex flex-col gap-1.5">
-                        <label
-                          htmlFor="schedule-c-mileage-year"
-                          className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest pl-1 cursor-pointer"
-                        >
-                          Tax Rate Year
-                        </label>
-                        <select
-                          id="schedule-c-mileage-year"
-                          value={selectedMileageRateYear}
-                          onChange={(e) => setSelectedMileageRateYear(Number(e.target.value))}
-                          className="w-full bg-zinc-950 border border-white/10 rounded-lg px-2.5 py-2 text-xs font-mono text-white focus:outline-none focus:border-blue-500 cursor-pointer"
-                        >
-                          <option value={2026}>2026 ($0.70/mi)</option>
-                          <option value={2025}>2025 ($0.70/mi)</option>
-                          <option value={2024}>2024 ($0.67/mi)</option>
-                        </select>
-                      </div>
+                      <Select
+                        id="schedule-c-mileage-year"
+                        label="Tax Rate Year"
+                        value={selectedMileageRateYear}
+                        onChange={(e) => setSelectedMileageRateYear(Number(e.target.value))}
+                        className="text-xs font-mono tabular-nums"
+                      >
+                        <option value={2026}>2026 ($0.70/mi)</option>
+                        <option value={2025}>2025 ($0.70/mi)</option>
+                        <option value={2024}>2024 ($0.67/mi)</option>
+                      </Select>
                     </div>
 
                     <div className="bg-zinc-950/60 border border-white/5 rounded-lg p-3 space-y-2 text-xs">

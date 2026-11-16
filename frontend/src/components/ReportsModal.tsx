@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { flushSync } from "react-dom";
 import {
   getProfitLoss,
   getScheduleCReport,
@@ -29,6 +30,7 @@ import {
   exportProfitLossCSV,
   exportScheduleCCSV,
   exportVendorSpendCSV,
+  getReportPresetOptions,
   type ReportPreset,
 } from "./reports/reportHelpers";
 import { ProfitLossTab } from "./reports/ProfitLossTab";
@@ -37,40 +39,61 @@ import { VendorSpendTab } from "./reports/VendorSpendTab";
 import { ARAgingTab } from "./reports/ARAgingTab";
 import { ScheduleCTab } from "./reports/ScheduleCTab";
 import { TrialBalanceTab } from "./reports/TrialBalanceTab";
+import { ReportPrintDocument } from "./reports/ReportPrintDocument";
+import DetailDrawer from "./DetailDrawer";
+import { useNavigationStack } from "../context/navigationStackContext";
 
 export type ReportTab = "pl" | "cash_flow" | "vendor_spend" | "ar_aging" | "schedule_c" | "trial_balance";
 
 interface ReportsModalProps {
   isOpen?: boolean;
+  suspended?: boolean;
   onClose: () => void;
   initialStartDate?: string;
   initialEndDate?: string;
   onViewUncategorized?: () => void;
   onOpenInvoiceDetail?: (invoiceId: number) => void;
+  onCreateRule?: (data: { name: string; descriptionKeyword: string; categoryAccountId?: number | null }) => void;
   initialTab?: ReportTab;
+  companyName?: string;
+  booksClosedDate?: string;
 }
-
-const PRESET_OPTIONS: { id: ReportPreset; label: string }[] = [
-  { id: "this_month", label: "This Month" },
-  { id: "last_month", label: "Last Month" },
-  { id: "ytd", label: "Year to Date (YTD)" },
-  { id: "full_year", label: "Full Year" },
-];
 
 const TAX_YEAR_OPTIONS = [2027, 2026, 2025, 2024, 2023];
 
 export default function ReportsModal({
   isOpen = true,
+  suspended = false,
   onClose,
   initialStartDate,
   initialEndDate,
   onViewUncategorized,
-  onOpenInvoiceDetail,
+  onOpenInvoiceDetail: _onOpenInvoiceDetail,
+  onCreateRule,
   initialTab = "pl",
+  companyName = "Unnamed Company",
+  booksClosedDate = "",
 }: ReportsModalProps) {
+  const nav = useNavigationStack();
+  const [inspectingInvoiceId, setInspectingInvoiceId] = useState<number | null>(null);
+
+  const handleOpenInvoiceDetail = (id: number) => {
+    setInspectingInvoiceId(id);
+    nav.push("drawer", { drawerType: "invoice", id });
+  };
+  const presetOptions = useMemo(
+    () => getReportPresetOptions(new Date(), booksClosedDate),
+    [booksClosedDate]
+  );
+  const defaultFullYearRange = computePresetRange("full_year");
   const [activeTab, setActiveTab] = useState<ReportTab>(initialTab);
-  const [startDate, setStartDate] = useState(initialStartDate || "");
-  const [endDate, setEndDate] = useState(initialEndDate || "");
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [startDate, setStartDate] = useState(
+    initialStartDate || (initialEndDate ? "1900-01-01" : defaultFullYearRange.start)
+  );
+  const [endDate, setEndDate] = useState(
+    initialEndDate || (initialStartDate ? toLocalISODate(new Date()) : defaultFullYearRange.end)
+  );
   const [asOfDate, setAsOfDate] = useState<string>(toLocalISODate(new Date()));
   const [dsoWindow, setDsoWindow] = useState<number>(90);
   const [taxYear, setTaxYear] = useState<number>(new Date().getFullYear());
@@ -184,6 +207,26 @@ export default function ReportsModal({
     };
   }, []);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const onBeforePrint = () => {
+      flushSync(() => {
+        setIsPrinting(true);
+      });
+    };
+    const onAfterPrint = () => {
+      flushSync(() => {
+        setIsPrinting(false);
+      });
+    };
+    window.addEventListener("beforeprint", onBeforePrint);
+    window.addEventListener("afterprint", onAfterPrint);
+    return () => {
+      window.removeEventListener("beforeprint", onBeforePrint);
+      window.removeEventListener("afterprint", onAfterPrint);
+    };
+  }, [isOpen]);
+
   const loadTabForParams = useCallback(
     (
       tab: ReportTab,
@@ -219,8 +262,9 @@ export default function ReportsModal({
 
   const applyPreset = useCallback(
     (preset: ReportPreset) => {
+      setIsPrinting(false);
       setActivePreset(preset);
-      const { start, end } = computePresetRange(preset);
+      const { start, end } = computePresetRange(preset, new Date(), booksClosedDate);
       setStartDate(start);
       setEndDate(end);
 
@@ -231,7 +275,7 @@ export default function ReportsModal({
 
       loadTabForParams(activeTab, start, end, asOfDate, dsoWindow, taxYear);
     },
-    [activeTab, asOfDate, dsoWindow, loadTabForParams, taxYear]
+    [activeTab, asOfDate, booksClosedDate, dsoWindow, loadTabForParams, taxYear]
   );
 
   useEffect(() => {
@@ -244,11 +288,11 @@ export default function ReportsModal({
       closeTimerRef.current = null;
     }
     if (initializedOpenRef.current) return;
-    initializedOpenRef.current = true;
 
     let active = true;
     queueMicrotask(() => {
       if (!active) return;
+      initializedOpenRef.current = true;
       const start = initialStartDate || (initialEndDate ? "1900-01-01" : computePresetRange("full_year").start);
       const end = initialEndDate || (initialStartDate ? toLocalISODate(new Date()) : computePresetRange("full_year").end);
       setActiveTab(initialTab);
@@ -270,6 +314,7 @@ export default function ReportsModal({
   }, [isOpen, initialStartDate, initialEndDate, initialTab, loadTabForParams]);
 
   const handleTabChange = (tab: ReportTab) => {
+    setIsPrinting(false);
     setActiveTab(tab);
     switch (tab) {
       case "pl":
@@ -333,6 +378,9 @@ export default function ReportsModal({
 
   const handleClose = () => {
     onClose();
+    if (nav.isOpen("reports")) {
+      nav.pop();
+    }
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
     }
@@ -357,6 +405,9 @@ export default function ReportsModal({
   };
 
   const handlePrint = () => {
+    flushSync(() => {
+      setIsPrinting(true);
+    });
     window.print();
   };
 
@@ -464,10 +515,18 @@ export default function ReportsModal({
   );
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title={titleContent} maxWidth="5xl" headerClassName="print:hidden">
-      <div className="flex flex-col gap-4 sm:gap-5 min-w-0">
-        <div className="sticky -top-5 sm:-top-6 -mt-5 sm:-mt-6 -mx-5 sm:-mx-6 px-3 sm:px-6 py-2 sm:py-2.5 bg-zinc-900/95 backdrop-blur-md z-30 border-b border-white/10 flex items-center justify-between gap-2 shadow-md overflow-x-auto no-scrollbar scroll-smooth print:static print:bg-transparent print:p-0 print:border-none print:m-0 min-w-0">
-          <div role="tablist" aria-label="Financial reports" className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+    <>
+      <Modal
+        isOpen={isOpen}
+        suspended={suspended || Boolean(inspectingInvoiceId) || nav.isSuspended("reports")}
+        onClose={handleClose}
+        title={titleContent}
+        maxWidth="5xl"
+        headerClassName="print:hidden"
+      >
+      <div className="print:hidden flex flex-col gap-4 sm:gap-5 min-w-0">
+        <div className="sticky -top-5 sm:-top-6 -mt-5 sm:-mt-6 -mx-5 sm:-mx-6 px-3 sm:px-6 py-2 sm:py-2.5 bg-zinc-900/95 backdrop-blur-md z-30 border-b border-white/10 flex items-center justify-between gap-2 shadow-md min-w-0">
+          <div role="tablist" aria-label="Financial reports" className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar scroll-smooth min-w-0">
             <button
               type="button"
               role="tab"
@@ -582,51 +641,34 @@ export default function ReportsModal({
               </span>
             </button>
           </div>
-
-          {activeTab === "schedule_c" && (
-            <div className="flex items-center gap-2 shrink-0">
-              <label htmlFor="schedule-c-tax-year" className="text-xs text-zinc-400 font-medium">
-                Tax Year:
-              </label>
-              <select
-                id="schedule-c-tax-year"
-                name="taxYear"
-                value={taxYear}
-                onChange={(e) => {
-                  const y = Number(e.target.value);
-                  setTaxYear(y);
-                  void loadScheduleC(y);
-                }}
-                className="bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-1 text-xs font-bold text-white focus:outline-none focus:border-amber-500 cursor-pointer"
-              >
-                {TAX_YEAR_OPTIONS.map((y) => (
-                  <option key={y} value={y}>
-                    {y}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
         </div>
 
         {(activeTab === "pl" || activeTab === "cash_flow" || activeTab === "vendor_spend" || activeTab === "trial_balance") && (
-          <div className="flex flex-col gap-2.5 surface-glass p-3 sm:p-3.5 rounded-xl border border-white/5 print:hidden">
+          <div className="relative z-30 flex flex-col gap-2.5 surface-glass p-3 sm:p-3.5 rounded-xl border border-white/5 print:hidden">
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mr-1">
                 Quick Presets:
               </span>
-              {PRESET_OPTIONS.map((p) => (
+              {presetOptions.map((p) => (
                 <button
                   key={p.id}
                   type="button"
                   onClick={() => applyPreset(p.id)}
-                  className={`px-2.5 py-0.5 rounded-lg text-xs font-medium transition-colors border cursor-pointer touch-glow-emerald ${
+                  className={`px-2.5 py-1 rounded-lg text-left transition-colors border cursor-pointer touch-glow-emerald flex flex-col gap-0.5 ${
                     activePreset === p.id
-                      ? "bg-white/20 text-white border-white/30 font-semibold"
-                      : "bg-white/5 text-zinc-400 border-white/10 hover:text-white hover:bg-white/10"
+                      ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40 font-semibold glow-emerald"
+                      : "bg-white/5 text-zinc-300 border-white/10 hover:text-white hover:bg-white/10"
                   }`}
                 >
-                  {p.label}
+                  <span className="text-xs font-semibold leading-tight">{p.label}</span>
+                  <span
+                    aria-hidden="true"
+                    className={`text-[10px] font-mono tabular-nums leading-tight ${
+                      activePreset === p.id ? "text-emerald-400/90" : "text-zinc-400"
+                    }`}
+                  >
+                    {p.rangeLabel}
+                  </span>
                 </button>
               ))}
             </div>
@@ -706,7 +748,7 @@ export default function ReportsModal({
             report={report}
             isLoading={isLoading}
             onViewUncategorized={onViewUncategorized}
-            onClose={onClose}
+            onClose={handleClose}
           />
         )}
 
@@ -726,10 +768,14 @@ export default function ReportsModal({
             dsoWindow={dsoWindow}
             onAsOfDateChange={setAsOfDate}
             onDsoWindowChange={setDsoWindow}
-            onRecalculate={() => void loadARAging(asOfDate, dsoWindow)}
+            onRecalculate={() => {
+              setIsPrinting(false);
+              void loadARAging(asOfDate, dsoWindow);
+            }}
             onExportCSV={exportARAgingCSV}
             onPrint={handlePrint}
-            onOpenInvoiceDetail={onOpenInvoiceDetail}
+            onOpenInvoiceDetail={handleOpenInvoiceDetail}
+            onClose={handleClose}
           />
         )}
 
@@ -738,13 +784,19 @@ export default function ReportsModal({
             report={scheduleCReport}
             isLoading={isTaxLoading}
             taxYear={taxYear}
+            taxYearOptions={TAX_YEAR_OPTIONS}
+            onTaxYearChange={(y) => {
+              setIsPrinting(false);
+              setTaxYear(y);
+              void loadScheduleC(y);
+            }}
             expandedLines={expandedLines}
             onToggleLineExpand={toggleLineExpand}
             onDownloadTaxPack={handleDownloadTaxPack}
             onExportCSV={exportScheduleCCSV}
             onPrint={handlePrint}
             onViewUncategorized={onViewUncategorized}
-            onClose={onClose}
+            onClose={handleClose}
           />
         )}
 
@@ -754,10 +806,43 @@ export default function ReportsModal({
             isLoading={isTrialBalanceLoading}
             typeFilter={tbTypeFilter}
             onTypeFilterChange={setTbTypeFilter}
-            onExportCSV={exportTrialBalanceCSV}
           />
         )}
       </div>
+
+      {isPrinting && (
+        <ReportPrintDocument
+          activeTab={activeTab}
+          companyName={companyName}
+          startDate={startDate}
+          endDate={endDate}
+          asOfDate={asOfDate}
+          dsoWindow={dsoWindow}
+          taxYear={taxYear}
+          tbTypeFilter={tbTypeFilter}
+          plReport={report}
+          cashFlowReport={cashFlowReport}
+          vendorSpendReport={vendorSpendReport}
+          arAgingReport={arAgingReport}
+          scheduleCReport={scheduleCReport}
+          trialBalanceReport={trialBalanceReport}
+        />
+      )}
     </Modal>
+
+    {inspectingInvoiceId !== null && (
+      <DetailDrawer
+        type="invoice"
+        id={inspectingInvoiceId}
+        onClose={() => {
+          setInspectingInvoiceId(null);
+          if (nav.isTop("drawer")) {
+            nav.pop();
+          }
+        }}
+        onCreateRule={onCreateRule}
+      />
+    )}
+  </>
   );
 }

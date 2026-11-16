@@ -8,11 +8,12 @@ import {
   computeTargetReopenDate,
   getBannerConfig,
   getErrorMessage,
+  isItemDateClosed,
   resolveAllocationIssue,
   upsertReviewRow,
   type ReviewRow,
 } from "@/components/review/reviewHelpers";
-import type { BankTransaction, ChartAccount, Expense } from "@/types/models";
+import type { BankTransaction, ChartAccount, Expense, Invoice } from "@/types/models";
 import * as api from "@/services/api";
 
 const liveListeners: Array<{ events: string[]; cb: () => void }> = [];
@@ -426,14 +427,14 @@ describe("ReviewModal", () => {
     await user.click(screen.getByRole("button", { name: /Bulk category/i }));
     await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: /5010.*Software/ }));
     await user.click(screen.getByRole("button", { name: "Apply" }));
-    expect(mockedApi.batchCategorizeItems).toHaveBeenCalledWith([1], [], 50);
+    expect(mockedApi.batchCategorizeItems).toHaveBeenCalledWith([1], [], 50, []);
     expect(await screen.findByRole("status")).toHaveTextContent("Categorized 1 item");
 
     // Allow Selected -> modal confirmation
     await user.click(screen.getByRole("button", { name: /Allow Selected \(1\)/i }));
     expect(screen.getByText("2025-02-28")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Confirm & Reopen Books/i }));
-    expect(mockedApi.resolveReviewItems).toHaveBeenCalledWith("allow", [1], []);
+    expect(mockedApi.resolveReviewItems).toHaveBeenCalledWith("allow", [1], [], []);
     expect(await screen.findByRole("status")).toHaveTextContent(
       /reopened back to 2025-02-28.*2 subsequent pending item\(s\)/i
     );
@@ -443,7 +444,7 @@ describe("ReviewModal", () => {
     await user.click(screen.getByLabelText("Select Stripe Payout"));
     fireEvent.keyDown(window, { key: "w" });
     await waitFor(() => {
-      expect(mockedApi.resolveReviewItems).toHaveBeenCalledWith("ignore_warnings", [2], []);
+      expect(mockedApi.resolveReviewItems).toHaveBeenCalledWith("ignore_warnings", [2], [], []);
     });
 
     // Keyboard 'x' opens Exclude modal
@@ -545,7 +546,7 @@ describe("ReviewModal", () => {
     // Deselect Open -> Send locked item to Review Queue
     await user.click(screen.getByLabelText("Select Open Excluded"));
     await user.click(screen.getByRole("button", { name: "Send to Review Queue" }));
-    expect(mockedApi.resolveReviewItems).toHaveBeenCalledWith("pending", [11], []);
+    expect(mockedApi.resolveReviewItems).toHaveBeenCalledWith("pending", [11], [], []);
 
     // Switch selection to Open Excluded -> Restore Selected
     await user.click(screen.getByLabelText("Select Locked Excluded"));
@@ -559,7 +560,7 @@ describe("ReviewModal", () => {
     expect(screen.getByText("UNDER-ALLOCATED")).toBeInTheDocument();
     await user.click(screen.getByLabelText("Select Silenced Bank Tx"));
     await user.click(screen.getByRole("button", { name: "Restore Warnings" }));
-    expect(mockedApi.resolveReviewItems).toHaveBeenCalledWith("restore_warnings", [21], []);
+    expect(mockedApi.resolveReviewItems).toHaveBeenCalledWith("restore_warnings", [21], [], []);
 
     // DELETED tab
     await user.click(screen.getByRole("tab", { name: /Deleted Items/i }));
@@ -598,7 +599,7 @@ describe("ReviewModal", () => {
     );
     mockedApi.getReviewQueue.mockResolvedValue({
       status: "ok",
-      booksClosedDate: "2025-03-01",
+      booksClosedDate: "2025-03-31",
       transactions: manyTxs,
       expenses: [],
     });
@@ -640,5 +641,143 @@ describe("ReviewModal", () => {
     const deleteDialog = screen.getByRole("dialog", { name: /Move Items to Deleted Items/i });
     await user.click(within(deleteDialog).getByRole("button", { name: /Delete Selected/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Soft delete error");
+  });
+
+  it("renders and manages invoices across Review Queue tabs, handles badges, filtering, and bulk operations", async () => {
+    const user = userEvent.setup();
+
+    const sampleInvoices: Invoice[] = [
+      {
+        id: 101,
+        invoiceNumber: "INV-2026-001",
+        clientName: "Acme Corp",
+        clientEmail: "acme@example.com",
+        clientAddress: "123 Main St",
+        issueDate: "2026-11-01T00:00:00Z",
+        dueDate: "2026-11-15T00:00:00Z",
+        items: "[]",
+        subtotal: 1000,
+        taxRate: 0,
+        taxAmount: 0,
+        totalAmount: 1000,
+        balanceDue: 1000,
+        notes: "Net 30 terms",
+        paymentTerms: "Net 30",
+        status: "OVERDUE",
+        createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
+        reviewStatus: "APPROVED",
+      },
+      {
+        id: 102,
+        invoiceNumber: "INV-2026-002",
+        clientName: "Beta LLC",
+        clientEmail: "beta@example.com",
+        clientAddress: "456 Oak St",
+        issueDate: "2026-11-10T00:00:00Z",
+        dueDate: "2026-12-10T00:00:00Z",
+        items: "[]",
+        subtotal: 500,
+        taxRate: 0,
+        taxAmount: 0,
+        totalAmount: 500,
+        balanceDue: 500,
+        notes: "Due in 30 days",
+        paymentTerms: "Net 30",
+        status: "SENT",
+        createdAt: "2026-11-10T00:00:00Z",
+        updatedAt: "2026-11-10T00:00:00Z",
+        reviewStatus: "APPROVED",
+      },
+    ];
+
+    mockedApi.getReviewQueue.mockResolvedValue({
+      status: "success",
+      transactions: [],
+      expenses: [],
+      invoices: sampleInvoices,
+      booksClosedDate: "2025-01-01",
+    });
+
+    await renderOpenModal("PENDING");
+
+    // Invoices should render with Invoice tag, title, and badges
+    expect(await screen.findByText(/INV-2026-001 – Acme Corp/)).toBeInTheDocument();
+    expect(screen.getByText(/INV-2026-002 – Beta LLC/)).toBeInTheDocument();
+
+    const invoiceTags = screen.getAllByText("Invoice");
+    expect(invoiceTags.length).toBe(2);
+
+    expect(screen.getByText("OVERDUE")).toBeInTheDocument();
+    expect(screen.getByText("UNPAID")).toBeInTheDocument();
+
+    // Verify positive receivable amount formatting
+    expect(screen.getByText("+$1,000.00")).toBeInTheDocument();
+    expect(screen.getByText("+$500.00")).toBeInTheDocument();
+
+    // Filter by Item Type -> Invoices
+    await user.click(screen.getByRole("button", { name: /Sort & Filter/i }));
+    await user.click(screen.getByRole("button", { name: "Item Type" }));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: "Invoices" }));
+    expect(screen.getByText(/INV-2026-001 – Acme Corp/)).toBeInTheDocument();
+
+    // Filter by Issue -> Overdue Invoices
+    await user.click(screen.getByRole("button", { name: "Issue / Status" }));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: "Overdue Invoices" }));
+    expect(screen.getByText(/INV-2026-001 – Acme Corp/)).toBeInTheDocument();
+    expect(screen.queryByText(/INV-2026-002 – Beta LLC/)).not.toBeInTheDocument();
+
+    // Reset filters
+    await user.click(screen.getByRole("button", { name: /Reset to default/i }));
+    expect(screen.getByText(/INV-2026-002 – Beta LLC/)).toBeInTheDocument();
+
+    // Select invoice and open drawer
+    await user.click(screen.getByLabelText("Select INV-2026-001 – Acme Corp"));
+    expect(screen.getByText(/1 selected/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open in Drawer" }));
+    expect(screen.getByTestId("mock-detail-drawer")).toHaveTextContent("Drawer invoice:101");
+    await user.click(screen.getByRole("button", { name: "Close Drawer" }));
+
+    // Bulk categorize invoice
+    await user.click(screen.getByRole("button", { name: /Bulk category/i }));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: /5010.*Software/ }));
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    expect(mockedApi.batchCategorizeItems).toHaveBeenCalledWith([], [], 50, [101]);
+
+    // Soft delete invoice
+    await user.click(screen.getByRole("button", { name: /Delete Selected \(1\)/i }));
+    const deleteDialog = screen.getByRole("dialog", { name: /Move Items to Deleted Items/i });
+    await user.click(within(deleteDialog).getByRole("button", { name: /Delete Selected/i }));
+    expect(mockedApi.deleteItemsBulk).toHaveBeenCalledWith([{ type: "invoice", id: 101 }]);
+  });
+
+  it("does not label open-period PENDING missing-data expenses as CLOSED PERIOD", async () => {
+    expect(isItemDateClosed("2025-03-05", "2025-03-05T12:00:00Z")).toBe(true);
+    expect(isItemDateClosed("2025-03-05", "2025-03-06T00:00:00Z")).toBe(false);
+    expect(isItemDateClosed("", "2025-03-05")).toBe(false);
+
+    mockedApi.getReviewQueue.mockResolvedValue({
+      status: "success",
+      booksClosedDate: "2025-03-05",
+      transactions: [],
+      expenses: [
+        makeExp({
+          id: 777,
+          timestamp: "2025-03-15",
+          vendor: "Receipt 777",
+          description: "[MISSING AMOUNT - AI could not read receipt total]",
+          amount: 0,
+          reviewStatus: "PENDING",
+          allocationStatus: "UNLINKED",
+        }),
+      ],
+      invoices: [],
+    });
+    mockedApi.getFlaggedItems.mockResolvedValue({ transactions: [], expenses: [] });
+
+    await renderOpenModal("PENDING");
+    expect(screen.getByText(/Receipt 777/)).toBeInTheDocument();
+    expect(screen.queryByText("CLOSED PERIOD")).not.toBeInTheDocument();
+    expect(screen.getByText("UNLINKED")).toBeInTheDocument();
   });
 });

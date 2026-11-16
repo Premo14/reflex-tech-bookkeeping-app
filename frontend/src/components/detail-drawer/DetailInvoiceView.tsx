@@ -6,6 +6,7 @@ import { Tooltip } from "../ui/Tooltip";
 import { SuggestedMatchesList } from "../SuggestedMatchesList";
 import { formatDate, formatPaymentTerms } from "../../utils/dateUtils";
 import { formatCurrency, formatCents, toCents } from "../../utils/formatCurrency";
+import type { AllowConfirmState } from "./types";
 
 export interface DetailInvoiceViewProps {
   invoice: Invoice;
@@ -26,6 +27,12 @@ export interface DetailInvoiceViewProps {
   onDeleteInvoice: (invoice: Invoice) => void;
   onEditInvoice?: (invoice: Invoice) => void;
   onPrintInvoice?: (invoice: Invoice) => void;
+  isClosed?: boolean;
+  itemAwaitingReview?: boolean;
+  isDateInClosedPeriod?: boolean;
+  onRestoreInvoiceWarnings?: (invoiceId: number) => void;
+  onAllowInvoiceClosed?: (target: AllowConfirmState) => void;
+  onCardAction?: (action: "EXCLUDE" | "IGNORE", targetType: "invoice", targetId: number) => void;
 }
 
 function parseInvoiceItems(rawItems: Invoice["items"]): InvoiceLineItem[] {
@@ -76,6 +83,12 @@ export function DetailInvoiceView({
   onDeleteInvoice,
   onEditInvoice,
   onPrintInvoice,
+  isClosed = false,
+  itemAwaitingReview = false,
+  isDateInClosedPeriod = false,
+  onRestoreInvoiceWarnings,
+  onAllowInvoiceClosed,
+  onCardAction,
 }: DetailInvoiceViewProps) {
   const items = parseInvoiceItems(invoice.items);
   const isPaid = invoice.status === "PAID";
@@ -91,10 +104,49 @@ export function DetailInvoiceView({
   const paymentTermsLabel = invoice.paymentTerms || "Net 30";
   const formattedTerms = formatPaymentTerms(paymentTermsLabel);
 
+  const isPendingClosed =
+    (invoice.reviewStatus === "PENDING" && isDateInClosedPeriod) || itemAwaitingReview;
+  const warnings: string[] = [];
+  if (isPendingClosed) {
+    warnings.push("This invoice is pending review for a closed period.");
+  }
+  if (invoice.status === "OVERDUE") {
+    warnings.push("This invoice is past due date.");
+  }
+  if (!hasTx && !isPaid) {
+    warnings.push("This invoice is unpaid and unlinked to a customer deposit.");
+  }
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5 items-stretch relative">
       {/* LEFT COLUMN: INVOICE DETAILS */}
       <div className="surface-glass glow-border-indigo rounded-xl p-4 sm:p-5 shadow-lg flex flex-col space-y-4">
+        {invoice.reviewStatus === "WARNINGS_IGNORED" ? (
+          <div className="bg-blue-500/10 border border-blue-500/20 text-blue-300 p-2.5 rounded-xl text-xs flex items-center justify-between italic">
+            <span>Warnings have been ignored for this invoice.</span>
+            {onRestoreInvoiceWarnings && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onRestoreInvoiceWarnings(invoice.id)}
+                className="text-blue-200 hover:text-white px-2.5 py-0.5 h-auto text-xs not-italic bg-blue-500/20 hover:bg-blue-500/40 rounded touch-glow-blue"
+              >
+                Undo
+              </Button>
+            )}
+          </div>
+        ) : (
+          warnings.length > 0 && (
+            <div className="bg-orange-500/10 border border-orange-500/20 text-orange-400 p-2.5 rounded-xl text-xs">
+              <ul className="list-disc pl-4 space-y-1">
+                {warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )
+        )}
+
         <div className="flex justify-between items-start border-b border-zinc-800 pb-3 gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -125,7 +177,7 @@ export function DetailInvoiceView({
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 pb-1">
-          {onEditInvoice && (
+          {onEditInvoice && !isClosed && (
             <Button variant="secondary" size="sm" onClick={() => onEditInvoice(invoice)} className="text-xs">
               Edit Invoice
             </Button>
@@ -140,14 +192,64 @@ export function DetailInvoiceView({
               Print / PDF
             </Button>
           )}
-          <Button
-            variant="danger"
-            size="sm"
-            onClick={() => onDeleteInvoice(invoice)}
-            className="text-xs ml-auto touch-glow-red"
-          >
-            Delete
-          </Button>
+          {isPendingClosed && onAllowInvoiceClosed && (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() =>
+                onAllowInvoiceClosed({
+                  type: "invoice",
+                  id: invoice.id,
+                  date: invoice.issueDate || invoice.createdAt || "",
+                })
+              }
+              className="text-xs touch-glow-emerald"
+            >
+              Allow Item
+            </Button>
+          )}
+          {onCardAction && !isClosed && invoice.reviewStatus !== "IGNORED" && (
+            <>
+              {invoice.reviewStatus !== "WARNINGS_IGNORED" &&
+                (warnings.length > 0 ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-orange-400 hover:bg-orange-500/10 touch-glow-amber"
+                    onClick={() => onCardAction("IGNORE", "invoice", invoice.id)}
+                  >
+                    Ignore Warnings
+                  </Button>
+                ) : (
+                  <Tooltip content="There are no issues with this item">
+                    <span className="inline-block cursor-not-allowed">
+                      <Button variant="ghost" size="sm" disabled className="text-xs text-zinc-400 pointer-events-none">
+                        Ignore Warnings
+                      </Button>
+                    </span>
+                  </Tooltip>
+                ))}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs text-red-400 hover:bg-red-500/10 touch-glow-red"
+                onClick={() => onCardAction("EXCLUDE", "invoice", invoice.id)}
+              >
+                Exclude...
+              </Button>
+            </>
+          )}
+          {!isClosed && (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => onDeleteInvoice(invoice)}
+              className="text-xs ml-auto touch-glow-red"
+              title="Move to Deleted Items (30-day retention)"
+            >
+              Delete
+            </Button>
+          )}
         </div>
 
         <div className="grid grid-cols-3 gap-3 text-xs p-3 bg-zinc-900/60 rounded-xl border border-white/5">

@@ -822,3 +822,66 @@ func TestSetPaths_EmptyEnv(t *testing.T) {
 		t.Errorf("setPaths(\"\") hostPath = %q, want %q", hostPath, "./document-data")
 	}
 }
+
+func TestDetectHostHomeDir_And_HostFSMount(t *testing.T) {
+	origRoot := hostFSRoot
+	defer func() { hostFSRoot = origRoot }()
+
+	tmp := t.TempDir()
+	hostFSRoot = tmp
+
+	// Create /Users/Shared, /Users/.localized, and /Users/alice
+	_ = os.MkdirAll(filepath.Join(tmp, "Users", "Shared"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmp, "Users", ".localized"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmp, "Users", "alice"), 0755)
+
+	if got := DetectHostHomeDir(); got != "/Users/alice" {
+		t.Errorf("DetectHostHomeDir() = %q, want /Users/alice", got)
+	}
+
+	// ResolveHostToContainer when hostFSRoot exists as a directory
+	if got := ResolveHostToContainer("/Users/alice/document-data"); got != filepath.Join(tmp, "Users/alice/document-data") {
+		t.Errorf("ResolveHostToContainer with hostFSRoot = %q", got)
+	}
+}
+
+func TestSafeMove_EXDEVFallbackAndSameFile(t *testing.T) {
+	origRename := renameFn
+	defer func() { renameFn = origRename }()
+
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "src.txt")
+	dst := filepath.Join(tmp, "sub", "dst.txt")
+	_ = os.WriteFile(src, []byte("hello-exdev"), 0644)
+
+	// 1. Same src & dst is no-op
+	if err := SafeMove(src, src); err != nil {
+		t.Fatalf("SafeMove(src, src) failed: %v", err)
+	}
+
+	// 2. Simulate cross-device EXDEV on rename -> falls back to copyFile + chmod + remove
+	renameFn = func(oldpath, newpath string) error {
+		return syscall.EXDEV
+	}
+	if err := SafeMove(src, dst); err != nil {
+		t.Fatalf("SafeMove EXDEV fallback failed: %v", err)
+	}
+	data, err := os.ReadFile(dst)
+	if err != nil || string(data) != "hello-exdev" {
+		t.Errorf("SafeMove dst read = %q, err = %v", string(data), err)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("expected src to be removed after EXDEV fallback")
+	}
+
+	// 3. moveDirectory SameFile via symlink
+	realDir := filepath.Join(tmp, "realdir")
+	_ = os.MkdirAll(realDir, 0755)
+	symDir := filepath.Join(tmp, "symdir")
+	if err := os.Symlink(realDir, symDir); err == nil {
+		if err := moveDirectory(realDir, symDir); err != nil {
+			t.Errorf("moveDirectory via symlink SameFile returned error: %v", err)
+		}
+	}
+}
+

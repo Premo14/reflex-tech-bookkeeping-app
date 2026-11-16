@@ -34,7 +34,11 @@ export function CashFlowTab({ report, isLoading }: CashFlowTabProps) {
           <p className="text-sm">Calculating liquid cash flow trajectory...</p>
         </div>
       ) : report ? (
-        <div className="space-y-4">
+        <div
+          className={`space-y-4 transition-opacity duration-200 ${
+            isLoading ? "opacity-50 pointer-events-none" : ""
+          }`}
+        >
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
             <div className="surface-glass border border-white/10 rounded-xl p-3 sm:p-3.5">
               <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
@@ -102,11 +106,11 @@ export function CashFlowTab({ report, isLoading }: CashFlowTabProps) {
                 </p>
               </div>
               <span className="text-[11px] font-mono tabular-nums text-zinc-400">
-                {report.periods.length} months tracked
+                {(report.periods ?? []).length} months tracked
               </span>
             </div>
 
-            {report.periods.length === 0 ? (
+            {(report.periods ?? []).length === 0 ? (
               <div className="py-6 text-center text-zinc-400 text-xs">
                 No cash transactions recorded within this date range.
               </div>
@@ -124,7 +128,7 @@ export function CashFlowTab({ report, isLoading }: CashFlowTabProps) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
-                    {report.periods.map((p) => {
+                    {(report.periods ?? []).map((p) => {
                       const isPositive = p.netCashFlow >= 0;
                       return (
                         <tr key={p.period} className="hover:bg-white/5 transition-colors">

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -52,102 +53,106 @@ func processFile(filePath string) error {
 		return fmt.Errorf("file extension %s not allowed", fileExt)
 	}
 
-	// Generate hash
-	fileHash, err := HashFile(filePath)
-	if err != nil {
-		return err
-	}
-
-	// If it's a receipt, check if hash already exists on an active (non-deleted) expense
-	if !constants.IsAllowedBankStatementExt(fileExt) {
-		var existing models.Receipt
-		if err := db.DB.Joins("JOIN expenses ON expenses.id = receipts.expense_id").
-			Where("receipts.file_hash = ? AND COALESCE(expenses.review_status, '') != 'DELETED'", fileHash).
-			First(&existing).Error; err == nil {
-			// Found duplicate
-			os.Remove(filePath)
-			log.Printf("Duplicate file upload detected (hash: %s). Rejected.", fileHash)
-			return nil
-		}
-	}
-
-	// If it's a HEIC, we know the final extension will be .png
-	finalExt := fileExt
-	if fileExt == ".heic" {
-		finalExt = ".png"
-	}
-
-	// If ext is bank statement, save to processed and route to parser (.ofx/.qfx/.qbo)
+	// If ext is bank statement, hash raw file, move to processed, and route to parser (.ofx/.qfx/.qbo)
 	if constants.IsAllowedBankStatementExt(fileExt) {
-		tempPath := filepath.Join(constants.GetProcessedPath(), fmt.Sprintf("%d%s", time.Now().UnixNano(), finalExt))
+		tempPath := filepath.Join(constants.GetProcessedPath(), fmt.Sprintf("%d%s", time.Now().UnixNano(), fileExt))
 		if err := constants.SafeMove(filePath, tempPath); err != nil {
 			return err
 		}
 		_ = os.Chmod(tempPath, 0644) // Restrict permissions (owner rw, world readable only)
 		ParseOfx(tempPath)
-	} else { // otherwise it is a receipt
-		// Save to the Database first to get the auto-increment ID
-		receipt := models.Receipt{
-			DocumentURI: "",
-			FileExt:     finalExt,
-			FileHash:    fileHash,
-		}
-		// Save to Postgres
-		if err := db.DB.Create(&receipt).Error; err != nil {
+		return nil
+	}
+
+	// Receipt path: normalize HEIC to PNG BEFORE hashing so duplicate detection matches browser uploads.
+	finalExt := fileExt
+	sourcePath := filePath
+	var tempConvertedPNG string
+	if fileExt == ".heic" {
+		finalExt = ".png"
+		tempConvertedPNG = filepath.Join(constants.GetProcessedPath(), fmt.Sprintf("tmp_heic_%d.png", time.Now().UnixNano()))
+		if err := ConvertHeicToPng(filePath, tempConvertedPNG); err != nil {
+			_ = os.Remove(tempConvertedPNG)
 			return err
 		}
+		sourcePath = tempConvertedPNG
+	}
 
-		processedPath := filepath.Join(constants.GetProcessedPath(), fmt.Sprintf("%d%s", receipt.ID, finalExt))
-
-		// Handle the File System operations
-		if fileExt == ".heic" {
-			// Convert the HEIC directly into the processed folder
-			if err := ConvertHeicToPng(filePath, processedPath); err != nil {
-				db.DB.Delete(&receipt)
-				return err
-			}
-			// Conversion worked, delete original from inbox
-			os.Remove(filePath)
-		} else {
-			// It's a PDF, PNG, JPG, etc. Move it to the processed folder
-			if err := constants.SafeMove(filePath, processedPath); err != nil {
-				db.DB.Delete(&receipt)
-				return err
-			}
+	// Compute SHA-256 of the final stored artifact bytes for deduplication.
+	fileHash, err := HashFile(sourcePath)
+	if err != nil {
+		if tempConvertedPNG != "" {
+			_ = os.Remove(tempConvertedPNG)
 		}
-		_ = os.Chmod(processedPath, 0644) // Restrict permissions (owner rw, world readable only)
+		return err
+	}
 
-		receipt.DocumentURI = processedPath
-		db.DB.Save(&receipt)
-
-		err := sendReceiptToScript(processedPath, &receipt)
-		if err != nil {
-			reviewStatus := "APPROVED"
-			if IsDateInClosedPeriod(time.Now().UTC()) {
-				reviewStatus = "PENDING"
-			}
-			log.Printf("⚠️ sendReceiptToScript failed (%v). Creating fallback expense with ReviewStatus=%s for manual review.\n", err, reviewStatus)
-			fallbackExpense := models.Expense{
-				Timestamp:        time.Now().UTC(),
-				Vendor:           fmt.Sprintf("Receipt %d", receipt.ID),
-				Description:      "Receipt uploaded; AI extraction unavailable. Please enter details manually.",
-				Amount:           models.NewMoney(0),
-				TaxAmount:        models.NewMoney(0),
-				CurrencyCode:     "USD",
-				Tender:           "card",
-				ChartAccountID:   nil,
-				IsManual:         false,
-				AllocationStatus: "UNLINKED",
-				ReviewStatus:     reviewStatus,
-			}
-			if createErr := db.DB.Create(&fallbackExpense).Error; createErr == nil {
-				receipt.ExpenseID = &fallbackExpense.ID
-				db.DB.Save(&receipt)
-			}
-		} else {
-			log.Println("Successfully processed and sent receipt to remote server")
+	// Check if hash already exists on an active (non-deleted) expense.
+	var existing models.Receipt
+	if err := db.DB.Joins("JOIN expenses ON expenses.id = receipts.expense_id").
+		Where("receipts.file_hash = ? AND COALESCE(expenses.review_status, '') != 'DELETED'", fileHash).
+		First(&existing).Error; err == nil {
+		if tempConvertedPNG != "" {
+			_ = os.Remove(tempConvertedPNG)
 		}
+		_ = os.Remove(filePath)
+		log.Printf("Duplicate file upload detected (hash: %s). Rejected.", fileHash)
+		return nil
+	}
 
+	// Create Receipt record first to obtain its auto-increment ID for final naming.
+	receipt := models.Receipt{
+		DocumentURI: "",
+		FileExt:     finalExt,
+		FileHash:    fileHash,
+	}
+	if err := db.DB.Create(&receipt).Error; err != nil {
+		if tempConvertedPNG != "" {
+			_ = os.Remove(tempConvertedPNG)
+		}
+		return err
+	}
+
+	processedPath := filepath.Join(constants.GetProcessedPath(), fmt.Sprintf("%d%s", receipt.ID, finalExt))
+	if tempConvertedPNG != "" {
+		if err := constants.SafeMove(tempConvertedPNG, processedPath); err != nil {
+			_ = os.Remove(tempConvertedPNG)
+			db.DB.Delete(&receipt)
+			return err
+		}
+		_ = os.Remove(filePath)
+	} else {
+		if err := constants.SafeMove(filePath, processedPath); err != nil {
+			db.DB.Delete(&receipt)
+			return err
+		}
+	}
+	_ = os.Chmod(processedPath, 0644) // Restrict permissions (owner rw, world readable only)
+
+	receipt.DocumentURI = processedPath
+	db.DB.Save(&receipt)
+
+	if err := sendReceiptToScript(processedPath, &receipt); err != nil {
+		log.Printf("⚠️ sendReceiptToScript failed (%v). Creating fallback expense with ReviewStatus=PENDING for manual review.\n", err)
+		fallbackExpense := models.Expense{
+			Timestamp:        time.Now().UTC(),
+			Vendor:           fmt.Sprintf("Receipt %d", receipt.ID),
+			Description:      "Receipt uploaded; AI extraction unavailable. Please enter details manually.",
+			Amount:           models.NewMoney(0),
+			TaxAmount:        models.NewMoney(0),
+			CurrencyCode:     "USD",
+			Tender:           "card",
+			ChartAccountID:   nil,
+			IsManual:         false,
+			AllocationStatus: "UNLINKED",
+			ReviewStatus:     "PENDING",
+		}
+		if createErr := db.DB.Create(&fallbackExpense).Error; createErr == nil {
+			receipt.ExpenseID = &fallbackExpense.ID
+			db.DB.Save(&receipt)
+		}
+	} else {
+		log.Println("Successfully processed and sent receipt to remote server")
 	}
 
 	return nil
@@ -181,11 +186,12 @@ func BuildReceiptPrompt(accounts []models.ChartAccount) string {
 	return fmt.Sprintf(`Extract receipt details and return ONLY a single compact JSON object (no markdown, no explanation):
 {"timestamp":"YYYY-MM-DDTHH:MM:SSZ","vendor":"","description":"","amount":0.00,"taxAmount":0.00,"currencyCode":"USD","tender":"CARD","chartAccountId":null}
 Rules:
-- timestamp: Receipt date in RFC3339 (use T00:00:00Z if no time, "" if no date).
-- vendor: Merchant name only.
+- timestamp: Receipt date in RFC3339 (use T00:00:00Z if no time, "" if no date is visible). NEVER invent or guess a date.
+- vendor: Merchant/business name only (never the street address, phone, URL, or store #).
 - description: Short 3-6 word summary.
-- amount: Total paid (positive number).
+- amount: Final grand total paid (including tax and tip, NOT subtotal or change due), positive number with no symbol (0 if unreadable).
 - taxAmount: Tax paid (0 if none).
+- currencyCode: 3-letter ISO currency code (e.g. USD, CAD, EUR; default USD).
 - tender: CARD, CASH, CHECK, TRANSFER, PAYPAL, VENMO, ZELLE, or OTHER.
 - chartAccountId: Best matching integer ID from [%s], or null.`, categoriesList)
 }
@@ -234,10 +240,20 @@ func ParseExtractedAmount(val interface{}) float64 {
 		return math.Abs(float64(v))
 	case string:
 		clean := strings.TrimSpace(v)
-		clean = strings.ReplaceAll(clean, "$", "")
-		clean = strings.ReplaceAll(clean, "€", "")
-		clean = strings.ReplaceAll(clean, "£", "")
-		clean = strings.ReplaceAll(clean, ",", "")
+		for _, sym := range []string{"$", "€", "£", ","} {
+			clean = strings.ReplaceAll(clean, sym, "")
+		}
+		// Strip trailing or leading currency codes (e.g. "USD 10.00", "10.00 USD")
+		upper := strings.ToUpper(clean)
+		for _, code := range []string{"USD", "CAD", "EUR", "GBP", "AUD", "CHF", "MXN"} {
+			if strings.HasPrefix(upper, code) {
+				clean = strings.TrimSpace(clean[len(code):])
+				upper = strings.ToUpper(clean)
+			} else if strings.HasSuffix(upper, code) {
+				clean = strings.TrimSpace(clean[:len(clean)-len(code)])
+				upper = strings.ToUpper(clean)
+			}
+		}
 		var f float64
 		if _, err := fmt.Sscanf(clean, "%f", &f); err == nil {
 			return math.Abs(f)
@@ -246,12 +262,12 @@ func ParseExtractedAmount(val interface{}) float64 {
 	return 0
 }
 
-// ParseExtractedTimestamp attempts multiple standard date and datetime formats.
-// If unparseable or empty, it returns the current time in UTC to avoid period closing bugs with 0001-01-01.
-func ParseExtractedTimestamp(raw string) time.Time {
+// ParseExtractedTimestampStrict attempts multiple standard date and datetime formats,
+// returning the parsed UTC time and whether parsing succeeded (false when empty or unparseable).
+func ParseExtractedTimestampStrict(raw string) (time.Time, bool) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return time.Now().UTC()
+		return time.Now().UTC(), false
 	}
 
 	formats := []string{
@@ -270,16 +286,30 @@ func ParseExtractedTimestamp(raw string) time.Time {
 		"01/02/06",
 		"1/2/06",
 		"2006/01/02",
+		"01-02-2006",
+		"1-2-2006",
+		"Jan 2, 2006",
+		"Jan 2 2006",
+		"January 2, 2006",
+		"02-Jan-2006",
+		"2-Jan-2006",
 	}
 
 	for _, layout := range formats {
 		if t, err := time.Parse(layout, trimmed); err == nil {
-			return t.UTC()
+			return t.UTC(), true
 		}
 	}
 
 	log.Printf("⚠️ Could not parse extracted timestamp '%s', defaulting to current time UTC\n", raw)
-	return time.Now().UTC()
+	return time.Now().UTC(), false
+}
+
+// ParseExtractedTimestamp attempts multiple standard date and datetime formats.
+// If unparseable or empty, it returns the current time in UTC to avoid period closing bugs with 0001-01-01.
+func ParseExtractedTimestamp(raw string) time.Time {
+	t, _ := ParseExtractedTimestampStrict(raw)
+	return t
 }
 
 // ParseExtractedChartAccountID parses chartAccountId from float64, int, or string representations.
@@ -353,6 +383,15 @@ func ValidateExtractedCategory(accountID *uint) *uint {
 	return accountID
 }
 
+type nonRetryableHTTPError struct {
+	status int
+	body   string
+}
+
+func (e nonRetryableHTTPError) Error() string {
+	return fmt.Sprintf("AI script rejected upload with status %d: %s", e.status, e.body)
+}
+
 /*
 sends the file path of the saved receipt to a CI/CD pipeline
 */
@@ -413,6 +452,12 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 		if err == nil && len(respBody) > 0 {
 			break
 		}
+		if err != nil {
+			var nonRetry nonRetryableHTTPError
+			if errors.As(err, &nonRetry) {
+				return err
+			}
+		}
 		if err == nil {
 			err = fmt.Errorf("AI script returned empty response")
 		}
@@ -443,16 +488,14 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 
 	finalAmount := ParseExtractedAmount(raw.Amount)
 	taxAmount := ParseExtractedAmount(raw.TaxAmount)
-	parsedTime := ParseExtractedTimestamp(raw.Timestamp)
+	parsedTime, dateValid := ParseExtractedTimestampStrict(raw.Timestamp)
 
-	// Flag expenses with missing dates or zero amounts so they aren't silently booked.
-	// When amount is 0 or the timestamp was not found (empty string in AI response),
-	// append a warning to the description and set ReviewStatus = PENDING.
+	// Flag expenses with missing/unparseable dates or zero amounts so they aren't silently booked.
 	warningFlags := []string{}
 	if finalAmount == 0 {
 		warningFlags = append(warningFlags, "[MISSING AMOUNT - AI could not read receipt total]")
 	}
-	if raw.Timestamp == "" {
+	if !dateValid {
 		warningFlags = append(warningFlags, "[MISSING DATE - AI could not read receipt date]")
 	}
 
@@ -475,13 +518,13 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 
 	normTender := NormalizeTender(raw.Tender)
 	initialAllocation := "UNLINKED"
-	if IsCashTender(normTender) {
+	if IsCashTender(normTender) && len(warningFlags) == 0 {
 		initialAllocation = "BALANCED"
 	}
 
 	desc := strings.TrimSpace(raw.Description)
 	if len(warningFlags) > 0 {
-		desc = desc + " " + strings.Join(warningFlags, "; ")
+		desc = strings.TrimSpace(desc + " " + strings.Join(warningFlags, "; "))
 	}
 
 	newExpense := models.Expense{
@@ -497,6 +540,9 @@ func sendReceiptToScript(filePath string, receipt *models.Receipt) error {
 		AllocationStatus: initialAllocation,
 		ReviewStatus:     reviewStatus,
 	}
+
+	// Auto-evaluate bank rules against extracted receipt payee, description & amount
+	ApplyBankRulesToExpense(&newExpense, db.DB)
 
 	// Save the brand new Expense to your Postgres database
 	if err := db.DB.Create(&newExpense).Error; err != nil {
@@ -537,6 +583,9 @@ func uploadWithTimeout(client *http.Client, url string, body []byte, contentType
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode >= http.StatusBadRequest && resp.StatusCode < http.StatusInternalServerError && resp.StatusCode != http.StatusTooManyRequests {
+			return nil, nonRetryableHTTPError{status: resp.StatusCode, body: string(bodyBytes)}
+		}
 		return nil, fmt.Errorf("AI script failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 

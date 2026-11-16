@@ -57,7 +57,9 @@ export function ProfitLossTab({
               Profit and Loss Statement
             </h3>
             <p className="text-xs text-zinc-400 print:text-zinc-600 mt-1.5 font-medium font-mono tabular-nums">
-              {formatDateMMDDYYYY(report.startDate)} – {formatDateMMDDYYYY(report.endDate)}
+              {report.startDate || report.endDate
+                ? `${formatDateMMDDYYYY(report.startDate) || "Beginning"} – ${formatDateMMDDYYYY(report.endDate) || "Present"}`
+                : "All Time (Open Books)"}
             </p>
           </div>
 
@@ -66,7 +68,7 @@ export function ProfitLossTab({
               Revenue
             </h4>
             <div className="space-y-0.5">
-              {report.revenue.map((line) => (
+              {(report.revenue ?? []).map((line) => (
                 <div
                   key={line.accountCode}
                   className="flex justify-between items-center gap-3 py-1.5 border-b border-white/5 print:border-zinc-200 min-w-0 text-xs"
@@ -82,7 +84,7 @@ export function ProfitLossTab({
                   </span>
                 </div>
               ))}
-              {report.revenue.length === 0 && (
+              {(report.revenue ?? []).length === 0 && (
                 <div className="text-xs text-zinc-400 py-2 italic">No revenue recorded</div>
               )}
             </div>
@@ -99,7 +101,7 @@ export function ProfitLossTab({
               Operating Expenses
             </h4>
             <div className="space-y-0.5">
-              {report.expenses.map((line) => (
+              {(report.expenses ?? []).map((line) => (
                 <div
                   key={line.accountCode}
                   className="flex justify-between items-center gap-3 py-1.5 border-b border-white/5 print:border-zinc-200 min-w-0 text-xs"
@@ -115,7 +117,7 @@ export function ProfitLossTab({
                   </span>
                 </div>
               ))}
-              {report.expenses.length === 0 && (
+              {(report.expenses ?? []).length === 0 && (
                 <div className="text-xs text-zinc-400 py-2 italic">No expenses recorded</div>
               )}
             </div>

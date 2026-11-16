@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -90,9 +91,15 @@ func TestBuildReceiptPrompt(t *testing.T) {
 		{3, "Meals"},
 	}
 
-	chartAccounts := make([]struct{ ID uint; Name string }, len(accounts))
+	chartAccounts := make([]struct {
+		ID   uint
+		Name string
+	}, len(accounts))
 	for i, a := range accounts {
-		chartAccounts[i] = struct{ ID uint; Name string }{a.ID, a.Name}
+		chartAccounts[i] = struct {
+			ID   uint
+			Name string
+		}{a.ID, a.Name}
 	}
 
 	prompt := buildReceiptPromptForTest(chartAccounts)
@@ -108,7 +115,10 @@ func TestBuildReceiptPrompt(t *testing.T) {
 }
 
 // buildReceiptPromptForTest mirrors BuildReceiptPrompt logic for testing
-func buildReceiptPromptForTest(accounts []struct{ ID uint; Name string }) string {
+func buildReceiptPromptForTest(accounts []struct {
+	ID   uint
+	Name string
+}) string {
 	var catStrings []string
 	for _, acc := range accounts {
 		catStrings = append(catStrings, fmt.Sprintf("%d:%s", acc.ID, acc.Name))
@@ -364,6 +374,7 @@ func TestParseExtractedChartAccountID_AdditionalCases(t *testing.T) {
 	}
 
 }
+
 // ============================================================
 // ParseExtractedTimestamp — additional formats
 // ============================================================
@@ -688,6 +699,7 @@ func TestDebounceEvent_TimerResets(t *testing.T) {
 
 	t.Log("debounceEvent completed without panic")
 }
+
 // isFileStability — rapid size change simulation
 // ============================================================
 
@@ -713,10 +725,9 @@ func TestIsFileStability_RapidWrite(t *testing.T) {
 func TestCreateDirsIfNotExists(t *testing.T) {
 	// CreateDirsIfNotExists uses constants.GetInboxPath() which requires
 	// constants to be initialized. We can't easily mock this without
-	// interface changes, so we verify the function exists.
-	var fn func() error
-	fn = CreateDirsIfNotExists
-	if fn == nil {
-		t.Error("CreateDirsIfNotExists should not be nil")
+	// interface changes, so we verify the function is callable via reflection.
+	v := reflect.ValueOf(CreateDirsIfNotExists)
+	if !v.IsValid() || v.IsNil() || v.Kind() != reflect.Func {
+		t.Error("CreateDirsIfNotExists should be a valid non-nil function")
 	}
 }

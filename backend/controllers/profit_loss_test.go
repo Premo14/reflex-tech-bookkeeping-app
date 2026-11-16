@@ -207,3 +207,17 @@ func TestBuildProfitLossData_OffsettingDebits(t *testing.T) {
 		t.Fatalf("expected netted total 25000, got %d", report.Expenses[0].Total.Cents)
 	}
 }
+
+// TestBuildProfitLossData_EmptySlicesNonNil verifies that empty revenue/expenses slices are non-nil for JSON [] serialization.
+func TestBuildProfitLossData_EmptySlicesNonNil(t *testing.T) {
+	report := BuildProfitLossData(PLBuilderInput{
+		StartDate: "2026-01-01",
+		EndDate:   "2026-01-31",
+	})
+	if report.Revenue == nil {
+		t.Fatal("expected non-nil Revenue slice when empty")
+	}
+	if report.Expenses == nil {
+		t.Fatal("expected non-nil Expenses slice when empty")
+	}
+}

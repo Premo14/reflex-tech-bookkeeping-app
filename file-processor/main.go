@@ -19,20 +19,11 @@ import (
 
 	"github.com/disintegration/imaging"
 	"github.com/valyala/fasthttp"
+	_ "golang.org/x/image/webp"
 )
 
 // OllamaRequest is the JSON body sent to Ollama's /api/generate endpoint.
 type OllamaRequest struct {
-	Model  string   `json:"model"`
-	Prompt string   `json:"prompt"`
-	Images []string `json:"images,omitempty"`
-	Stream bool     `json:"stream"`
-	Format string   `json:"format,omitempty"`
-	Options any      `json:"options,omitempty"`
-}
-
-// OllamaVisionMultiRequest extends OllamaRequest for multi-image vision calls with supplemental OCR text.
-type OllamaVisionMultiRequest struct {
 	Model   string   `json:"model"`
 	Prompt  string   `json:"prompt"`
 	Images  []string `json:"images,omitempty"`
@@ -43,10 +34,9 @@ type OllamaVisionMultiRequest struct {
 
 // upload limits protect against OOM and malicious uploads.
 const (
-	maxUploadSize   = 20 << 20 // 20 MB — generous for PDF receipts, tight enough to block abuse
-	maxBase64Size   = 12 << 20 // ~12 MB base64 payload cap before encoding (before 4/3 expansion)
-	allowedPDFMIME  = "application/pdf"
-	allowedImgMIME  = "image/jpeg"
+	maxUploadSize     = 20 << 20 // 20 MB — generous for PDF receipts, tight enough to block abuse
+	allowedPDFMIME    = "application/pdf"
+	allowedImgMIME    = "image/jpeg"
 	allowedImgAltMIME = "image/png"
 )
 
@@ -106,15 +96,16 @@ func validateUpload(size int64, mime string) error {
 	}
 	normalized := strings.ToLower(strings.TrimSpace(strings.Split(mime, ";")[0]))
 	switch normalized {
-	case allowedPDFMIME, allowedImgMIME, allowedImgAltMIME, "image/webp", "image/bmp", "image/tiff", "image/heic":
+	case allowedPDFMIME, allowedImgMIME, allowedImgAltMIME, "image/webp", "image/bmp", "image/tiff":
 		return nil
+	case "image/heic":
+		return fmt.Errorf("unsupported MIME type: %q (HEIC images must be converted to PNG or JPEG before processing)", mime)
 	default:
-		return fmt.Errorf("unsupported MIME type: %q (expected PDF or JPEG/PNG/WEBP/BMP/TIFF/HEIC image)", mime)
+		return fmt.Errorf("unsupported MIME type: %q (expected PDF or JPEG/PNG/WEBP/BMP/TIFF image)", mime)
 	}
 }
 
-const defaultTextPrompt = `You are a receipt data extractor. The following is raw OCR text extracted from a receipt.
-Extract the expense details and return ONLY a valid JSON object with no explanation or markdown, matching this exact schema:
+const receiptPromptSchemaAndRules = `Return ONLY a valid JSON object with no explanation or markdown, matching this exact schema:
 {
   "timestamp": "",
   "vendor": "",
@@ -126,39 +117,21 @@ Extract the expense details and return ONLY a valid JSON object with no explanat
   "chartAccountId": null
 }
 Rules:
-- timestamp must be RFC3339 format (e.g. 2026-07-15T14:30:00Z). Use midnight UTC if no time is visible. Leave as "" if no date is found. NEVER invent a date.
-- amount must be the TOTAL paid as a positive number with no currency symbol.
+- timestamp must be RFC3339 format (e.g. 2026-07-15T14:30:00Z). Use midnight UTC if no time is visible. Leave as "" if no date is found. NEVER invent or guess a date.
+- amount must be the final grand total paid (including tax and tip, NOT subtotal or change due) as a positive number with no currency symbol.
 - taxAmount must be the total tax paid, as a number. Leave as 0 if not found.
-- currencyCode must be the 3-letter currency code (e.g. USD, CAD, EUR). Default to USD if none is found.
+- currencyCode must be the 3-letter ISO currency code (e.g. USD, CAD, EUR). Default to USD if none is found.
 - tender is the payment method: CARD, CASH, CHECK, TRANSFER, PAYPAL, VENMO, ZELLE, OTHER.
-- chartAccountId should be null unless an active category ID is provided.
-- vendor should be the store/business name (not the address).
-- Leave vendor, description, or tender as empty strings if they cannot be determined.
-- Leave amount as 0 if it cannot be determined.
-`
-
-const defaultVisionPrompt = `You are a receipt data extractor. Look at this receipt image carefully and extract the expense details.
-Return ONLY a valid JSON object with no explanation or markdown, matching this exact schema:
-{
-  "timestamp": "",
-  "vendor": "",
-  "description": "",
-  "amount": 0.00,
-  "taxAmount": 0.00,
-  "currencyCode": "USD",
-  "tender": "CARD",
-  "chartAccountId": null
-}
-Rules:
-- timestamp must be RFC3339 format (e.g. 2026-07-15T14:30:00Z). Use midnight UTC if no time is visible. Leave as "" if no date is found. NEVER invent a date.
-- amount must be the final total paid as a positive number with no currency symbol.
-- taxAmount must be the total tax paid, as a number. Leave as 0 if not found.
-- currencyCode must be the 3-letter currency code (e.g. USD, CAD, EUR). Default to USD if none is found.
-- tender is the payment method: CARD, CASH, CHECK, TRANSFER, PAYPAL, VENMO, ZELLE, OTHER.
-- chartAccountId should be null unless an active category ID is provided.
-- vendor should be the store/business name (not the address).
+- chartAccountId should be null unless an active category ID list is provided.
+- vendor must be the merchant/business name only (never the street address, phone number, URL, or store #).
 - Leave vendor, description, or tender as empty strings if they cannot be determined.
 - Leave amount as 0 if it cannot be determined.`
+
+const defaultTextPrompt = "You are a receipt data extractor. The following is raw OCR text extracted from a receipt.\nExtract the expense details.\n" + receiptPromptSchemaAndRules
+
+const defaultVisionPrompt = "You are a receipt data extractor. Look at this receipt image carefully and extract the expense details.\n" + receiptPromptSchemaAndRules
+
+const defaultPDFVisionPrompt = "You are a receipt data extractor. Look at these receipt PDF pages carefully and extract the expense details.\n" + receiptPromptSchemaAndRules
 
 func main() {
 	srv := &fasthttp.Server{
@@ -170,19 +143,30 @@ func main() {
 	log.Fatal(srv.ListenAndServe(":8081"))
 }
 
-func ollamaURL() string {
-	host := os.Getenv("OLLAMA_HOST")
+func ollamaBaseURL() string {
+	host := strings.TrimSpace(os.Getenv("OLLAMA_HOST"))
 	if host == "" {
 		host = "127.0.0.1:11434"
 	}
 	if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
 		host = "http://" + host
 	}
-	return host + "/api/generate"
+	return strings.TrimRight(host, "/")
 }
 
+func ollamaURL() string {
+	return ollamaBaseURL() + "/api/generate"
+}
+
+const (
+	maxOCRRunes     = 4000
+	ocrHeadRunes    = 1500
+	ocrTailRunes    = 2495
+	ocrTruncMarker  = "\n...\n"
+)
+
 // compactOCRText collapses redundant whitespace and blank lines to minimize token count
-// and keep total prompt tokens within a single 512-token llama.cpp batch.
+// while preserving UTF-8 rune boundaries and both receipt headers (vendor/date) and footers (totals/tax/tender).
 func compactOCRText(raw string) string {
 	var lines []string
 	for _, line := range strings.Split(raw, "\n") {
@@ -192,10 +176,20 @@ func compactOCRText(raw string) string {
 		}
 	}
 	res := strings.Join(lines, "\n")
-	if len(res) > 4000 {
-		res = res[:4000]
+	runes := []rune(res)
+	if len(runes) <= maxOCRRunes {
+		return res
 	}
-	return res
+	if len(lines) <= 1 {
+		return string(runes[:maxOCRRunes])
+	}
+	head := string(runes[:ocrHeadRunes])
+	tailStart := len(runes) - ocrTailRunes
+	if tailStart < ocrHeadRunes {
+		tailStart = ocrHeadRunes
+	}
+	tail := string(runes[tailStart:])
+	return strings.TrimSpace(head) + ocrTruncMarker + strings.TrimSpace(tail)
 }
 
 // isShortAlphanumeric counts letters and digits in s to detect garbled/empty OCR output.
@@ -243,49 +237,24 @@ func pageSuffix(path string) int {
 	return 0
 }
 
-// callOllamaVisionMulti sends a prompt with multiple images to a vision model (e.g. qwen2.5vl:3b).
-func callOllamaVisionMulti(req OllamaVisionMultiRequest) (string, error) {
-	jsonBytes, err := json.Marshal(req)
-	if err != nil {
-		return "", fmt.Errorf("json marshal: %w", err)
-	}
+var ollamaHTTPClient = &fasthttp.Client{
+	ReadTimeout:  5 * time.Minute,
+	WriteTimeout: 30 * time.Second,
+}
 
-	reqBody := fasthttp.AcquireRequest()
-	defer fasthttp.ReleaseRequest(reqBody)
-	reqBody.SetRequestURI(ollamaURL())
-	reqBody.Header.SetMethod(fasthttp.MethodPost)
-	reqBody.Header.SetContentType("application/json")
-	reqBody.SetBody(jsonBytes)
+var trailingCommaRe = regexp.MustCompile(`,\s*([\}\]])`)
 
-	resp := fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseResponse(resp)
-
-	client := &fasthttp.Client{
-		ReadTimeout:  5 * time.Minute,
-		WriteTimeout: 30 * time.Second,
+// defaultOllamaOptions ensures deterministic JSON generation with adequate context capacity.
+func defaultOllamaOptions() map[string]any {
+	return map[string]any{
+		"temperature": 0.0,
+		"num_ctx":     4096,
 	}
-	if err := client.Do(reqBody, resp); err != nil {
-		return "", fmt.Errorf("ollama vision request: %w", err)
-	}
-	if resp.StatusCode() != fasthttp.StatusOK {
-		return "", fmt.Errorf("ollama vision status %d: %s", resp.StatusCode(), string(resp.Body()))
-	}
-
-	var ollamaResp struct {
-		Response string `json:"response"`
-	}
-	if err := json.Unmarshal(resp.Body(), &ollamaResp); err != nil {
-		return "", fmt.Errorf("parse vision envelope: %w", err)
-	}
-	if strings.TrimSpace(ollamaResp.Response) == "" {
-		return "", fmt.Errorf("empty vision response from model")
-	}
-	return ollamaResp.Response, nil
 }
 
 // injectOCRContext appends Tesseract OCR text alongside the image when sending to a vision model,
 // so blurry dates/totals are caught accurately even if the image is slightly degraded.
-func injectOCRContext(imagePrompt string, b64Image string, ocrText string) string {
+func injectOCRContext(imagePrompt string, ocrText string) string {
 	if ocrText == "" {
 		return imagePrompt
 	}
@@ -360,19 +329,93 @@ func isolateOutermostJSON(s string) string {
 	return ""
 }
 
-// repairJSON attempts basic JSON fixes: trailing commas, single quotes to double quotes.
+// repairJSON converts Python-style single-quoted keys/values into valid JSON
+// without corrupting apostrophes inside strings, then strips trailing commas.
 func repairJSON(s string) string {
-	s = strings.ReplaceAll(s, "'", "\"")
-	// Fix trailing commas before } or ]
-	trailingCommaRe := regexp.MustCompile(`,\s*([\}\]])`)
+	runes := []rune(s)
+	var out strings.Builder
+	out.Grow(len(s))
+
+	inDouble := false
+	inSingle := false
+
+	nextNonSpaceIsDelimiter := func(start int) bool {
+		for j := start; j < len(runes); j++ {
+			switch runes[j] {
+			case ' ', '\t', '\r', '\n':
+				continue
+			case ':', ',', '}', ']':
+				return true
+			default:
+				return false
+			}
+		}
+		return true
+	}
+
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if inDouble {
+			out.WriteRune(r)
+			if r == '\\' && i+1 < len(runes) {
+				i++
+				out.WriteRune(runes[i])
+			} else if r == '"' {
+				inDouble = false
+			}
+			continue
+		}
+		if inSingle {
+			if r == '\\' && i+1 < len(runes) {
+				next := runes[i+1]
+				i++
+				if next == '\'' {
+					out.WriteRune('\'')
+				} else {
+					out.WriteRune('\\')
+					out.WriteRune(next)
+				}
+				continue
+			}
+			if r == '\'' {
+				if nextNonSpaceIsDelimiter(i + 1) {
+					out.WriteRune('"')
+					inSingle = false
+				} else {
+					// Embedded apostrophe inside a single-quoted value (e.g., 'Joe's Diner').
+					out.WriteRune('\'')
+				}
+				continue
+			}
+			if r == '"' {
+				out.WriteString(`\"`)
+				continue
+			}
+			out.WriteRune(r)
+			continue
+		}
+
+		switch r {
+		case '"':
+			inDouble = true
+			out.WriteRune(r)
+		case '\'':
+			inSingle = true
+			out.WriteRune('"')
+		default:
+			out.WriteRune(r)
+		}
+	}
+
+	res := out.String()
 	for {
-		fixed := trailingCommaRe.ReplaceAllString(s, "$1")
-		if fixed == s {
+		fixed := trailingCommaRe.ReplaceAllString(res, "$1")
+		if fixed == res {
 			break
 		}
-		s = fixed
+		res = fixed
 	}
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(res)
 }
 
 // jsonValid checks if s is valid JSON and contains all expected keys.
@@ -402,8 +445,7 @@ func runTesseract(imagePath string) (string, error) {
 }
 
 // resizeImage resizes an image preserving legible detail for receipt OCR.
-// Tall thermal receipts need wider width than 1200px to keep tiny print readable.
-// This function scales by width and caps height at a safe pixel limit.
+// Tall thermal receipts scale up to 800px width (capped at 2400px height) so tiny print remains readable.
 func resizeImage(inputPath, outputPath string) error {
 	// Open and fix EXIF orientation
 	img, err := imaging.Open(inputPath, imaging.AutoOrientation(true))
@@ -482,9 +524,12 @@ func convertPDFToImages(pdfPath, baseFileName string) ([]string, error) {
 	return pages, nil
 }
 
-// callOllama sends a prompt to Ollama's API with structured output (JSON mode)
-// and low temperature to prevent markdown commentary or hallucination.
+// callOllama sends a prompt (with optional Images) to Ollama's /api/generate endpoint
+// using the shared fasthttp client and JSON structured output mode.
 func callOllama(reqBody OllamaRequest) (string, error) {
+	if reqBody.Options == nil {
+		reqBody.Options = defaultOllamaOptions()
+	}
 	jsonBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("json marshal: %w", err)
@@ -500,11 +545,7 @@ func callOllama(reqBody OllamaRequest) (string, error) {
 	resp := fasthttp.AcquireResponse()
 	defer fasthttp.ReleaseResponse(resp)
 
-	client := &fasthttp.Client{
-		ReadTimeout:  5 * time.Minute,
-		WriteTimeout: 30 * time.Second,
-	}
-	if err := client.Do(req, resp); err != nil {
+	if err := ollamaHTTPClient.Do(req, resp); err != nil {
 		return "", fmt.Errorf("ollama request: %w", err)
 	}
 	if resp.StatusCode() != fasthttp.StatusOK {
@@ -521,6 +562,18 @@ func callOllama(reqBody OllamaRequest) (string, error) {
 		return "", fmt.Errorf("empty response from model. Raw: %s", string(resp.Body()))
 	}
 	return ollamaResp.Response, nil
+}
+
+func writeValidatedAIResponse(ctx *fasthttp.RequestCtx, response, label string) {
+	validJSON, err := ValidateOllamaJSON(response)
+	if err != nil {
+		log.Printf("⚠️ %s model returned invalid JSON: %v", label, err)
+		ctx.Error(fmt.Sprintf("%s model returned invalid JSON — please review the receipt manually", label), fasthttp.StatusInternalServerError)
+		return
+	}
+
+	ctx.SetContentType("application/json")
+	ctx.WriteString(validJSON)
 }
 
 func process(ctx *fasthttp.RequestCtx) {
@@ -578,23 +631,39 @@ func process(ctx *fasthttp.RequestCtx) {
 				return
 			}
 
-			// Sort pages numerically so -1.png, -2.png, -10.png are in order
+			// Sort pages numerically so -1.png, -2.png, -10.png are in order.
 			sortNumericSuffix(pages)
+			defer func() {
+				for _, p := range pages {
+					_ = os.Remove(p)
+				}
+			}()
 
-			// Render a few pages as resized images for the vision model
+			// Render up to maxVisionPages as resized JPEGs and extract supplemental Tesseract OCR.
 			var images []string
+			var ocrChunks []string
 			const maxVisionPages = 3 // Cap to stay within token budget
 			for i, p := range pages {
 				if i >= maxVisionPages {
 					break
 				}
+				if text, ocrErr := runTesseract(p); ocrErr == nil {
+					if trimmed := strings.TrimSpace(text); trimmed != "" {
+						ocrChunks = append(ocrChunks, trimmed)
+					}
+				}
 				resized := baseFileName + fmt.Sprintf("-p%d.jpg", i)
 				defer os.Remove(resized)
-				if err := resizeImage(p, resized); err == nil {
-					data, _ := os.ReadFile(resized)
-					images = append(images, base64.StdEncoding.EncodeToString(data))
+				if err := resizeImage(p, resized); err != nil {
+					log.Printf("⚠️ PDF page %d resize failed: %v", i+1, err)
+					continue
 				}
-				os.Remove(p)
+				data, readErr := os.ReadFile(resized)
+				if readErr != nil {
+					log.Printf("⚠️ PDF page %d read failed: %v", i+1, readErr)
+					continue
+				}
+				images = append(images, base64.StdEncoding.EncodeToString(data))
 			}
 
 			if len(images) == 0 {
@@ -604,46 +673,34 @@ func process(ctx *fasthttp.RequestCtx) {
 
 			visionPrompt := userPrompt
 			if visionPrompt == "" {
-				visionPrompt = "You are a receipt data extractor. Look at these receipt PDF pages carefully and extract the expense details.\nReturn ONLY a valid JSON object with no explanation or markdown:\n{\n  \"timestamp\": \"\",\n  \"vendor\": \"\",\n  \"description\": \"\",\n  \"amount\": 0.00,\n  \"taxAmount\": 0.00,\n  \"currencyCode\": \"USD\",\n  \"tender\": \"CARD\",\n  \"chartAccountId\": null\n}\nRules:\n- timestamp must be RFC3339 format. Leave as \"\" if no date is found. NEVER invent a date.\n- amount must be the final total paid as a positive number.\n- vendor should be the store/business name.\n- Leave amount as 0 if it cannot be determined."
+				visionPrompt = defaultPDFVisionPrompt
 			}
 
-			// Append garbled pdftotext output as context; images are sent strictly via Images[].
-			if extracted != "" {
-				visionPrompt = visionPrompt + "\n\nRaw pdftotext output (may be garbled for scanned PDFs, rely on visual inspection):\n" + extracted
+			supplementalOCR := compactOCRText(strings.Join(ocrChunks, "\n"))
+			if supplementalOCR != "" {
+				visionPrompt = injectOCRContext(visionPrompt, supplementalOCR)
+			} else if extracted != "" {
+				visionPrompt = visionPrompt + "\n\nRaw pdftotext output (may be incomplete for scanned PDFs, rely on visual inspection):\n" + extracted
 			}
 
-			response, err := callOllamaVisionMulti(OllamaVisionMultiRequest{
+			response, err := callOllama(OllamaRequest{
 				Model:   "qwen2.5vl:3b",
 				Prompt:  visionPrompt,
 				Images:  images,
 				Stream:  false,
 				Format:  "json",
-				Options: map[string]any{"temperature": 0.0},
+				Options: defaultOllamaOptions(),
 			})
 			if err != nil {
 				ctx.Error(fmt.Sprintf("Ollama vision model error: %v", err), fasthttp.StatusInternalServerError)
 				return
 			}
 
-			// Validate and normalize JSON before returning
-			validJSON, err := ValidateOllamaJSON(response)
-			if err != nil {
-				log.Printf("⚠️ Vision model returned invalid JSON: %v", err)
-				ctx.Error("Vision model returned invalid JSON — please review the receipt manually", fasthttp.StatusInternalServerError)
-				return
-			}
-
-			ctx.SetContentType("application/json")
-			ctx.WriteString(validJSON)
+			writeValidatedAIResponse(ctx, response, "Vision")
 			return
 		}
 
 		// pdftotext produced sufficient text — use text model (llama3.1:8b)
-		if extracted == "" {
-			ctx.Error("Tesseract could not extract text from PDF", fasthttp.StatusInternalServerError)
-			return
-		}
-
 		prompt := userPrompt
 		if prompt == "" {
 			prompt = defaultTextPrompt
@@ -651,27 +708,18 @@ func process(ctx *fasthttp.RequestCtx) {
 		prompt = prompt + "\n\nRaw OCR text extracted from document:\n" + extracted
 
 		response, err := callOllama(OllamaRequest{
-			Model:  "llama3.1:8b",
-			Prompt: prompt,
-			Stream: false,
-			Format: "json",
-			Options: map[string]any{"temperature": 0.0},
+			Model:   "llama3.1:8b",
+			Prompt:  prompt,
+			Stream:  false,
+			Format:  "json",
+			Options: defaultOllamaOptions(),
 		})
 		if err != nil {
 			ctx.Error(fmt.Sprintf("Ollama text model error: %v", err), fasthttp.StatusInternalServerError)
 			return
 		}
 
-		// Validate and normalize JSON before returning
-		validJSON, err := ValidateOllamaJSON(response)
-		if err != nil {
-			log.Printf("⚠️ Text model returned invalid JSON: %v", err)
-			ctx.Error("Text model returned invalid JSON — please review the receipt manually", fasthttp.StatusInternalServerError)
-			return
-		}
-
-		ctx.SetContentType("application/json")
-		ctx.WriteString(validJSON)
+		writeValidatedAIResponse(ctx, response, "Text")
 		return
 
 	} else {
@@ -710,47 +758,77 @@ func process(ctx *fasthttp.RequestCtx) {
 		}
 
 		// Inject Tesseract OCR as supplemental context alongside the image
-		prompt = injectOCRContext(prompt, b64, ocrText)
+		prompt = injectOCRContext(prompt, ocrText)
 
 		response, err := callOllama(OllamaRequest{
-			Model:  "qwen2.5vl:3b",
-			Prompt: prompt,
-			Images: []string{b64},
-			Stream: false,
-			Format: "json",
-			Options: map[string]any{"temperature": 0.0},
+			Model:   "qwen2.5vl:3b",
+			Prompt:  prompt,
+			Images:  []string{b64},
+			Stream:  false,
+			Format:  "json",
+			Options: defaultOllamaOptions(),
 		})
 		if err != nil {
 			ctx.Error(fmt.Sprintf("Ollama vision model error: %v", err), fasthttp.StatusInternalServerError)
 			return
 		}
 
-		// Validate and normalize JSON before returning
-		validJSON, err := ValidateOllamaJSON(response)
-		if err != nil {
-			log.Printf("⚠️ Vision model returned invalid JSON: %v", err)
-			ctx.Error("Vision model returned invalid JSON — please review the receipt manually", fasthttp.StatusInternalServerError)
-			return
-		}
-
-		ctx.SetContentType("application/json")
-		ctx.WriteString(validJSON)
+		writeValidatedAIResponse(ctx, response, "Vision")
 		return
 	}
 }
 
+var ollamaHealthClient = &fasthttp.Client{
+	ReadTimeout:  2 * time.Second,
+	WriteTimeout: 2 * time.Second,
+}
+
+func checkOllamaReachable() bool {
+	req := fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(req)
+	req.SetRequestURI(ollamaBaseURL() + "/api/tags")
+	req.Header.SetMethod(fasthttp.MethodGet)
+
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+
+	if err := ollamaHealthClient.DoTimeout(req, resp, 2*time.Second); err != nil {
+		return false
+	}
+	return resp.StatusCode() == fasthttp.StatusOK
+}
+
 func health(ctx *fasthttp.RequestCtx) {
-	// Verify Tesseract is available and working
-	cmd := execCmd("tesseract", "--version")
-	if err := cmd.Run(); err != nil {
-		log.Printf("Health check failed: tesseract error: %v", err)
-		ctx.Error(fmt.Sprintf("Service unhealthy: tesseract failed: %v", err), fasthttp.StatusInternalServerError)
-		return
+	requiredTools := []struct {
+		name string
+		arg  string
+	}{
+		{"tesseract", "--version"},
+		{"pdftoppm", "-v"},
+		{"pdftotext", "-v"},
+	}
+	for _, tool := range requiredTools {
+		if err := execCmd(tool.name, tool.arg).Run(); err != nil {
+			log.Printf("Health check failed: %s error: %v", tool.name, err)
+			ctx.Error(fmt.Sprintf("Service unhealthy: %s failed: %v", tool.name, err), fasthttp.StatusInternalServerError)
+			return
+		}
 	}
 
+	ollamaUp := checkOllamaReachable()
+	payload, _ := json.Marshal(map[string]any{
+		"status":          "ok",
+		"message":         "file-processor is healthy",
+		"ollamaReachable": ollamaUp,
+		"tools": map[string]string{
+			"tesseract": "ok",
+			"pdftoppm":  "ok",
+			"pdftotext": "ok",
+		},
+	})
 	ctx.SetContentType("application/json")
 	ctx.SetStatusCode(fasthttp.StatusOK)
-	ctx.WriteString(`{"status": "ok", "message": "file-processor is healthy"}`)
+	ctx.Write(payload)
 }
 
 func routeHandler(ctx *fasthttp.RequestCtx) {

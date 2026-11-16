@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"reflex-tech-bookkeeping-app-api/constants"
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/events"
 	"reflex-tech-bookkeeping-app-api/models"
@@ -459,6 +460,13 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 		_, _ = fTxs.Write(txBuf.Bytes())
 	}
 
+	// --- 2b. Trial_Balance.csv ---
+	if tbReport, tbErr := BuildTrialBalanceData(startDate, endDate); tbErr == nil {
+		if fTB, createErr := zw.Create(fmt.Sprintf("Trial_Balance_%d.csv", report.Year)); createErr == nil {
+			_, _ = fTB.Write(formatTrialBalanceCSV(tbReport))
+		}
+	}
+
 	// --- 3. Organized Receipts Directory ---
 	manifestBuf := new(bytes.Buffer)
 	manifestBuf.WriteString(fmt.Sprintf("REFLEX TECH BOOKKEEPING — TAX PACK RECEIPTS MANIFEST (%d)\n", report.Year))
@@ -546,18 +554,7 @@ func ExportTaxPackZip(c fiber.Ctx) error {
 	return c.Send(zipBuf.Bytes())
 }
 
-// ExportTrialBalanceCSV exports the Trial Balance report as a formatted CSV for accountants and tax preparers.
-func ExportTrialBalanceCSV(c fiber.Ctx) error {
-	startDate := c.Query("startDate")
-	endDate := c.Query("endDate")
-
-	report, err := BuildTrialBalanceData(startDate, endDate)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to compile trial balance: " + err.Error(),
-		})
-	}
-
+func formatTrialBalanceCSV(report *TrialBalanceReportData) []byte {
 	buf := new(bytes.Buffer)
 	buf.WriteString("\xEF\xBB\xBF") // UTF-8 BOM
 	writer := csv.NewWriter(buf)
@@ -617,11 +614,25 @@ func ExportTrialBalanceCSV(c fiber.Ctx) error {
 	_ = writer.Write([]string{"Status", balanceStatus, "", "", ""})
 
 	writer.Flush()
+	return buf.Bytes()
+}
+
+// ExportTrialBalanceCSV exports the Trial Balance report as a formatted CSV for accountants and tax preparers.
+func ExportTrialBalanceCSV(c fiber.Ctx) error {
+	startDate := c.Query("startDate")
+	endDate := c.Query("endDate")
+
+	report, err := BuildTrialBalanceData(startDate, endDate)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to compile trial balance: " + err.Error(),
+		})
+	}
 
 	filename := fmt.Sprintf("Trial_Balance_%s.csv", time.Now().Format("2006-01-02"))
 	c.Set("Content-Type", "text/csv; charset=utf-8")
 	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	return c.Send(buf.Bytes())
+	return c.Send(formatTrialBalanceCSV(report))
 }
 
 // ExportSystemBackupJSON exports a complete, self-contained JSON backup of the entire company bookkeeping system.
@@ -636,6 +647,7 @@ func ExportSystemBackupJSON(c fiber.Ctx) error {
 	var invoices []models.Invoice
 	var rules []models.BankRule
 	var auditLogs []models.ItemAuditLog
+	var periodAuditLogs []models.PeriodAuditLog
 
 	if db.DB != nil {
 		db.DB.Find(&settings)
@@ -648,10 +660,11 @@ func ExportSystemBackupJSON(c fiber.Ctx) error {
 		db.DB.Order("id ASC").Find(&invoices)
 		db.DB.Order("priority ASC").Find(&rules)
 		db.DB.Order("id ASC").Find(&auditLogs)
+		db.DB.Order("id ASC").Find(&periodAuditLogs)
 	}
 
 	backupData := fiber.Map{
-		"version":    "1.1.0",
+		"version":    "1.2.0",
 		"format":     "reflex_tech_bookkeeping_full_backup",
 		"company":    "Reflex Technologies LLC (Utica, NY)",
 		"exportedAt": time.Now().UTC().Format(time.RFC3339),
@@ -666,6 +679,7 @@ func ExportSystemBackupJSON(c fiber.Ctx) error {
 			"invoices":            len(invoices),
 			"bankRules":           len(rules),
 			"auditLogs":           len(auditLogs),
+			"periodAuditLogs":     len(periodAuditLogs),
 		},
 		"data": fiber.Map{
 			"settings":            settings,
@@ -678,6 +692,7 @@ func ExportSystemBackupJSON(c fiber.Ctx) error {
 			"invoices":            invoices,
 			"bankRules":           rules,
 			"auditLogs":           auditLogs,
+			"periodAuditLogs":     periodAuditLogs,
 		},
 	}
 
@@ -710,7 +725,77 @@ type SystemBackupRestorePayload struct {
 		Invoices            []models.Invoice                `json:"invoices"`
 		BankRules           []models.BankRule               `json:"bankRules"`
 		AuditLogs           []models.ItemAuditLog           `json:"auditLogs"`
+		PeriodAuditLogs     []models.PeriodAuditLog         `json:"periodAuditLogs"`
 	} `json:"data"`
+}
+
+func remapOptionalUint(ptr *uint, idMap map[uint]uint) *uint {
+	if ptr == nil || *ptr == 0 {
+		return ptr
+	}
+	if mapped, ok := idMap[*ptr]; ok {
+		v := mapped
+		return &v
+	}
+	v := *ptr
+	return &v
+}
+
+func remapUintValue(id uint, idMap map[uint]uint) uint {
+	if id == 0 {
+		return 0
+	}
+	if mapped, ok := idMap[id]; ok {
+		return mapped
+	}
+	return id
+}
+
+func rebaseRestoredDocURI(uri string) string {
+	trimmed := strings.TrimSpace(uri)
+	if trimmed == "" || strings.HasPrefix(trimmed, "demo://") {
+		return uri
+	}
+	processedRoot := filepath.Clean(constants.GetProcessedPath())
+	if processedRoot == "" || processedRoot == "." {
+		return uri
+	}
+	slashed := filepath.ToSlash(trimmed)
+	if idx := strings.LastIndex(slashed, "/processed/"); idx != -1 {
+		rel := strings.TrimLeft(slashed[idx+len("/processed/"):], "/")
+		if rel != "" && !strings.Contains(rel, "..") {
+			return filepath.Join(processedRoot, filepath.FromSlash(rel))
+		}
+	}
+	return uri
+}
+
+func resetPostgresSequences(tx *gorm.DB) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	tables := []string{
+		"chart_accounts",
+		"bank_rules",
+		"bank_statements",
+		"invoices",
+		"bank_transactions",
+		"expenses",
+		"receipts",
+		"item_audit_logs",
+		"period_audit_logs",
+		"expense_bank_transactions",
+	}
+	for _, tbl := range tables {
+		if !tx.Migrator().HasTable(tbl) {
+			continue
+		}
+		sql := fmt.Sprintf("SELECT setval(pg_get_serial_sequence('%s', 'id'), COALESCE((SELECT MAX(id) FROM %s), 1), true)", tbl, tbl)
+		if err := tx.Exec(sql).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RestoreSystemBackupJSON restores the bookkeeping system state from a verified backup JSON file.
@@ -762,6 +847,12 @@ func RestoreSystemBackupJSON(c fiber.Ctx) error {
 	}
 
 	err = db.DB.Transaction(func(tx *gorm.DB) error {
+		accIDMap := make(map[uint]uint, len(payload.Data.ChartAccounts))
+		stmtIDMap := make(map[uint]uint, len(payload.Data.Statements))
+		txIDMap := make(map[uint]uint, len(payload.Data.Transactions))
+		expIDMap := make(map[uint]uint, len(payload.Data.Expenses))
+		invIDMap := make(map[uint]uint, len(payload.Data.Invoices))
+
 		// 1. Restore AppSettings
 		for _, s := range payload.Data.Settings {
 			if s.Key != "" {
@@ -771,105 +862,198 @@ func RestoreSystemBackupJSON(c fiber.Ctx) error {
 			}
 		}
 
-		// 2. Restore ChartAccounts
+		// 2. Restore ChartAccounts (preserve/remap old IDs and repair ParentID after all accounts exist)
+		type pendingParent struct {
+			newID       uint
+			oldParentID uint
+		}
+		var pendingParents []pendingParent
 		for _, a := range payload.Data.ChartAccounts {
-			if a.Code != "" {
-				var existing models.ChartAccount
-				if res := tx.Where("code = ?", a.Code).First(&existing); res.Error == nil {
-					if err := tx.Model(&existing).Updates(map[string]interface{}{
-						"name":            a.Name,
-						"type":            a.Type,
-						"description":     a.Description,
-						"schedule_c_line": a.ScheduleCLine,
-						"active":          a.Active,
-						"is_default":      a.IsDefault,
-					}).Error; err != nil {
-						return err
-					}
-				} else {
-					if err := tx.Create(&a).Error; err != nil {
-						return err
-					}
+			if a.Code == "" {
+				continue
+			}
+			oldID := a.ID
+			var oldParent uint
+			if a.ParentID != nil {
+				oldParent = *a.ParentID
+			}
+			a.ParentID = nil
+
+			var existing models.ChartAccount
+			if res := tx.Where("code = ?", a.Code).First(&existing); res.Error == nil {
+				if err := tx.Model(&existing).Updates(map[string]interface{}{
+					"name":            a.Name,
+					"type":            a.Type,
+					"description":     a.Description,
+					"schedule_c_line": a.ScheduleCLine,
+					"active":          a.Active,
+					"is_default":      a.IsDefault,
+					"ofx_account_id":  a.OfxAccountID,
+				}).Error; err != nil {
+					return err
+				}
+				if oldID != 0 {
+					accIDMap[oldID] = existing.ID
+				}
+				if oldParent != 0 {
+					pendingParents = append(pendingParents, pendingParent{newID: existing.ID, oldParentID: oldParent})
+				}
+			} else {
+				if a.ID != 0 && tx.Where("id = ?", a.ID).First(&models.ChartAccount{}).Error == nil {
+					a.ID = 0
+				}
+				if err := tx.Create(&a).Error; err != nil {
+					return err
+				}
+				if oldID != 0 {
+					accIDMap[oldID] = a.ID
+				}
+				if oldParent != 0 {
+					pendingParents = append(pendingParents, pendingParent{newID: a.ID, oldParentID: oldParent})
+				}
+			}
+		}
+		for _, pp := range pendingParents {
+			newParentID := remapUintValue(pp.oldParentID, accIDMap)
+			if newParentID != 0 && newParentID != pp.newID {
+				if err := tx.Model(&models.ChartAccount{}).Where("id = ?", pp.newID).Update("parent_id", newParentID).Error; err != nil {
+					return err
 				}
 			}
 		}
 
-		// 3. Restore BankRules
+		// 3. Restore BankRules (remap CategoryAccountID and match by Name or ID)
 		for _, r := range payload.Data.BankRules {
+			r.CategoryAccountID = remapOptionalUint(r.CategoryAccountID, accIDMap)
 			var existing models.BankRule
-			if r.ID != 0 && tx.Where("id = ?", r.ID).First(&existing).Error == nil {
+			if r.Name != "" && tx.Where("name = ?", r.Name).First(&existing).Error == nil {
+				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&r).Error; err != nil {
+					return err
+				}
+			} else if r.ID != 0 && tx.Where("id = ?", r.ID).First(&existing).Error == nil {
 				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&r).Error; err != nil {
 					return err
 				}
 			} else {
+				if r.ID != 0 && tx.Where("id = ?", r.ID).First(&models.BankRule{}).Error == nil {
+					r.ID = 0
+				}
 				if err := tx.Create(&r).Error; err != nil {
 					return err
 				}
 			}
 		}
 
-		// 4. Restore Invoices
-		for _, inv := range payload.Data.Invoices {
-			var existing models.Invoice
-			if inv.InvoiceNumber != "" && tx.Where("invoice_number = ?", inv.InvoiceNumber).First(&existing).Error == nil {
-				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&inv).Error; err != nil {
-					return err
-				}
-			} else {
-				if err := tx.Create(&inv).Error; err != nil {
-					return err
-				}
-			}
-		}
-
-		// 5. Restore Bank Statements
+		// 4. Restore Bank Statements (remap ChartAccountID & rebase DocumentURI)
 		for _, stmt := range payload.Data.Statements {
+			oldID := stmt.ID
+			stmt.ChartAccountID = remapOptionalUint(stmt.ChartAccountID, accIDMap)
+			stmt.DocumentURI = rebaseRestoredDocURI(stmt.DocumentURI)
 			var existing models.BankStatement
 			if stmt.ID != 0 && tx.Where("id = ?", stmt.ID).First(&existing).Error == nil {
 				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&stmt).Error; err != nil {
 					return err
 				}
+				if oldID != 0 {
+					stmtIDMap[oldID] = existing.ID
+				}
 			} else {
 				if err := tx.Create(&stmt).Error; err != nil {
 					return err
 				}
+				if oldID != 0 {
+					stmtIDMap[oldID] = stmt.ID
+				}
 			}
 		}
 
-		// 6. Restore Bank Transactions
+		// 5. Restore Bank Transactions before Invoices so Invoice.BankTransactionID remaps cleanly
 		for _, bt := range payload.Data.Transactions {
+			oldID := bt.ID
+			bt.ChartAccountID = remapOptionalUint(bt.ChartAccountID, accIDMap)
+			bt.CategoryAccountID = remapOptionalUint(bt.CategoryAccountID, accIDMap)
+			bt.BankStatementID = remapOptionalUint(bt.BankStatementID, stmtIDMap)
 			var existing models.BankTransaction
 			if bt.FITID != "" && tx.Where("fit_id = ?", bt.FITID).First(&existing).Error == nil {
 				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&bt).Error; err != nil {
 					return err
 				}
+				if oldID != 0 {
+					txIDMap[oldID] = existing.ID
+				}
 			} else if bt.ID != 0 && tx.Where("id = ?", bt.ID).First(&existing).Error == nil {
 				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&bt).Error; err != nil {
 					return err
 				}
+				if oldID != 0 {
+					txIDMap[oldID] = existing.ID
+				}
 			} else {
+				if bt.ID != 0 && tx.Where("id = ?", bt.ID).First(&models.BankTransaction{}).Error == nil {
+					bt.ID = 0
+				}
 				if err := tx.Create(&bt).Error; err != nil {
 					return err
+				}
+				if oldID != 0 {
+					txIDMap[oldID] = bt.ID
 				}
 			}
 		}
 
-		// 7. Restore Expenses
+		// 6. Restore Invoices (remap CategoryAccountID and BankTransactionID)
+		for _, inv := range payload.Data.Invoices {
+			oldID := inv.ID
+			inv.CategoryAccountID = remapOptionalUint(inv.CategoryAccountID, accIDMap)
+			inv.BankTransactionID = remapOptionalUint(inv.BankTransactionID, txIDMap)
+			var existing models.Invoice
+			if inv.InvoiceNumber != "" && tx.Where("invoice_number = ?", inv.InvoiceNumber).First(&existing).Error == nil {
+				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&inv).Error; err != nil {
+					return err
+				}
+				if oldID != 0 {
+					invIDMap[oldID] = existing.ID
+				}
+			} else {
+				if inv.ID != 0 && tx.Where("id = ?", inv.ID).First(&models.Invoice{}).Error == nil {
+					inv.ID = 0
+				}
+				if err := tx.Create(&inv).Error; err != nil {
+					return err
+				}
+				if oldID != 0 {
+					invIDMap[oldID] = inv.ID
+				}
+			}
+		}
+
+		// 7. Restore Expenses (remap ChartAccountID and InvoiceID)
 		for _, exp := range payload.Data.Expenses {
+			oldID := exp.ID
+			exp.ChartAccountID = remapOptionalUint(exp.ChartAccountID, accIDMap)
+			exp.InvoiceID = remapOptionalUint(exp.InvoiceID, invIDMap)
 			var existing models.Expense
 			if exp.ID != 0 && tx.Where("id = ?", exp.ID).First(&existing).Error == nil {
 				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&exp).Error; err != nil {
 					return err
 				}
+				if oldID != 0 {
+					expIDMap[oldID] = existing.ID
+				}
 			} else {
 				if err := tx.Create(&exp).Error; err != nil {
 					return err
 				}
+				if oldID != 0 {
+					expIDMap[oldID] = exp.ID
+				}
 			}
 		}
 
-		// 8. Restore Receipts
+		// 8. Restore Receipts (remap ExpenseID & rebase DocumentURI)
 		for _, rec := range payload.Data.Receipts {
+			rec.ExpenseID = remapOptionalUint(rec.ExpenseID, expIDMap)
+			rec.DocumentURI = rebaseRestoredDocURI(rec.DocumentURI)
 			var existing models.Receipt
 			if rec.ID != 0 && tx.Where("id = ?", rec.ID).First(&existing).Error == nil {
 				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&rec).Error; err != nil {
@@ -882,8 +1066,13 @@ func RestoreSystemBackupJSON(c fiber.Ctx) error {
 			}
 		}
 
-		// 9. Restore Reconciliation Links
+		// 9. Restore Reconciliation Links (remap ExpenseID & BankTransactionID)
 		for _, l := range payload.Data.ReconciliationLinks {
+			l.ExpenseID = remapUintValue(l.ExpenseID, expIDMap)
+			l.BankTransactionID = remapUintValue(l.BankTransactionID, txIDMap)
+			if l.ExpenseID == 0 || l.BankTransactionID == 0 {
+				continue
+			}
 			var existing models.ExpenseBankTransaction
 			if tx.Where("expense_id = ? AND bank_transaction_id = ?", l.ExpenseID, l.BankTransactionID).First(&existing).Error == nil {
 				if err := tx.Model(&existing).Updates(map[string]interface{}{"status": l.Status}).Error; err != nil {
@@ -896,8 +1085,16 @@ func RestoreSystemBackupJSON(c fiber.Ctx) error {
 			}
 		}
 
-		// 10. Restore Audit Logs
+		// 10. Restore Item Audit Logs (remap ItemID per ItemType)
 		for _, al := range payload.Data.AuditLogs {
+			switch al.ItemType {
+			case "transaction":
+				al.ItemID = remapUintValue(al.ItemID, txIDMap)
+			case "expense":
+				al.ItemID = remapUintValue(al.ItemID, expIDMap)
+			case "invoice":
+				al.ItemID = remapUintValue(al.ItemID, invIDMap)
+			}
 			var existing models.ItemAuditLog
 			if al.ID != 0 && tx.Where("id = ?", al.ID).First(&existing).Error == nil {
 				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&al).Error; err != nil {
@@ -908,6 +1105,25 @@ func RestoreSystemBackupJSON(c fiber.Ctx) error {
 					return err
 				}
 			}
+		}
+
+		// 11. Restore Period Audit Logs
+		for _, pal := range payload.Data.PeriodAuditLogs {
+			var existing models.PeriodAuditLog
+			if pal.ID != 0 && tx.Where("id = ?", pal.ID).First(&existing).Error == nil {
+				if err := tx.Model(&existing).Select("*").Omit("id", "created_at").Updates(&pal).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Create(&pal).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		// 12. Reset PostgreSQL SERIAL sequences after explicit-ID inserts
+		if err := resetPostgresSequences(tx); err != nil {
+			return err
 		}
 
 		return nil
@@ -941,6 +1157,7 @@ func RestoreSystemBackupJSON(c fiber.Ctx) error {
 			"invoices":            len(payload.Data.Invoices),
 			"bankRules":           len(payload.Data.BankRules),
 			"auditLogs":           len(payload.Data.AuditLogs),
+			"periodAuditLogs":     len(payload.Data.PeriodAuditLogs),
 		},
 	})
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Modal } from "./ui/Modal";
 import { Button } from "./ui/Button";
 import { Badge, type BadgeVariant } from "./ui/Badge";
@@ -33,12 +33,81 @@ import { formatCurrency, fromCents, toCents } from "../utils/formatCurrency";
 
 interface InvoicingModalProps {
   isOpen: boolean;
+  suspended?: boolean;
   onClose: () => void;
   onInvoicesUpdated?: () => void;
   /** When set, opens the invoice preview or editor for this invoice once loaded. */
   initialInvoiceId?: number;
   initialMode?: "inspect" | "edit" | "print";
   companyName?: string;
+}
+
+export type InvoiceSortField = "invoiceNumber" | "clientName" | "date" | "amount" | "status";
+export type SortDirection = "asc" | "desc";
+
+interface SortableHeaderProps {
+  label: string;
+  field: InvoiceSortField;
+  activeField: InvoiceSortField;
+  direction: SortDirection;
+  onSort: (field: InvoiceSortField) => void;
+  align?: "left" | "right";
+  className?: string;
+}
+
+function SortableHeader({
+  label,
+  field,
+  activeField,
+  direction,
+  onSort,
+  align = "left",
+  className = "",
+}: SortableHeaderProps) {
+  const isActive = activeField === field;
+  const nextDir = isActive
+    ? direction === "asc"
+      ? "desc"
+      : "asc"
+    : field === "date" || field === "amount"
+    ? "desc"
+    : "asc";
+  const ariaSort = isActive ? (direction === "asc" ? "ascending" : "descending") : "none";
+
+  return (
+    <th
+      scope="col"
+      aria-sort={ariaSort}
+      className={`py-3 px-3.5 select-none ${align === "right" ? "text-right" : "text-left"} ${className}`}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(field)}
+        className={`group inline-flex items-center gap-1 cursor-pointer font-bold uppercase tracking-wider text-[10px] transition-colors focus:outline-none focus-visible:text-white ${
+          align === "right" ? "ml-auto" : ""
+        } ${isActive ? "text-amber-300" : "text-zinc-400 hover:text-zinc-200"}`}
+        title={`Sort by ${label} (${nextDir === "asc" ? "ascending" : "descending"})`}
+      >
+        <span>{label}</span>
+        {isActive && (
+          <span
+            className="inline-flex items-center justify-center shrink-0 w-2.5 h-2.5 ml-1 text-amber-400"
+            aria-hidden="true"
+          >
+            {direction === "asc" ? (
+              <svg className="w-2.5 h-2.5" viewBox="0 0 10 6" fill="currentColor">
+                <path d="M5 0L10 6H0L5 0Z" />
+              </svg>
+            ) : (
+              <svg className="w-2.5 h-2.5" viewBox="0 0 10 6" fill="currentColor">
+                <path d="M5 6L0 0H10L5 6Z" />
+              </svg>
+            )}
+          </span>
+        )}
+      </button>
+    </th>
+  );
 }
 
 function getStatusBadgeProps(st: string): { variant: BadgeVariant; glow?: boolean; label: string } {
@@ -64,6 +133,7 @@ function getErrMessage(err: unknown, fallback: string): string {
 
 export default function InvoicingModal({
   isOpen,
+  suspended = false,
   onClose,
   onInvoicesUpdated,
   initialInvoiceId,
@@ -78,6 +148,149 @@ export default function InvoicingModal({
   const [isLoading, setIsLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
+  const [sortField, setSortField] = useState<InvoiceSortField>("date");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [asOfNow] = useState(() => Date.now());
+
+  const handleSort = (field: InvoiceSortField) => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      if (field === "date" || field === "amount") {
+        setSortDirection("desc");
+      } else {
+        setSortDirection("asc");
+      }
+    }
+  };
+
+  const sortedInvoices = useMemo(() => {
+    return [...invoices].sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case "invoiceNumber": {
+          const numA = a.invoiceNumber || `INV-${a.id}`;
+          const numB = b.invoiceNumber || `INV-${b.id}`;
+          cmp = numA.localeCompare(numB, undefined, { numeric: true, sensitivity: "base" });
+          break;
+        }
+        case "clientName": {
+          const nameA = a.clientName || "";
+          const nameB = b.clientName || "";
+          cmp = nameA.localeCompare(nameB, undefined, { sensitivity: "base" });
+          break;
+        }
+        case "date": {
+          const dateA = new Date(a.issueDate || a.createdAt).getTime() || 0;
+          const dateB = new Date(b.issueDate || b.createdAt).getTime() || 0;
+          cmp = dateA - dateB;
+          if (cmp === 0) {
+            const dueA = new Date(a.dueDate || 0).getTime() || 0;
+            const dueB = new Date(b.dueDate || 0).getTime() || 0;
+            cmp = dueA - dueB;
+          }
+          break;
+        }
+        case "amount": {
+          cmp = toCents(a.totalAmount) - toCents(b.totalAmount);
+          break;
+        }
+        case "status": {
+          const stA = a.status || "";
+          const stB = b.status || "";
+          cmp = stA.localeCompare(stB, undefined, { sensitivity: "base" });
+          break;
+        }
+      }
+      if (cmp === 0) {
+        cmp = b.id - a.id;
+      }
+      return sortDirection === "asc" ? cmp : -cmp;
+    });
+  }, [invoices, sortField, sortDirection]);
+
+  const handleExportCSV = () => {
+    if (sortedInvoices.length === 0) return;
+
+    const escapeCsvValue = (val: string | number | undefined | null): string => {
+      if (val === undefined || val === null) return '""';
+      let str = String(val);
+      if (/^[=+\-@\t\r]/.test(str)) {
+        str = `'${str}`;
+      }
+      return `"${str.replace(/"/g, '""')}"`;
+    };
+
+    const headers = [
+      "Invoice #",
+      "Client Name",
+      "Client Email",
+      "Client Address",
+      "Issue Date",
+      "Due Date",
+      "Payment Terms",
+      "Subtotal ($)",
+      "Tax Rate (%)",
+      "Tax Amount ($)",
+      "Total Amount ($)",
+      "Amount Paid ($)",
+      "Balance Due ($)",
+      "Status",
+      "Paid Date",
+      "Linked Transaction",
+      "Category Account",
+      "Notes",
+    ];
+
+    const rows = sortedInvoices.map((inv) => {
+      const linkedTx = inv.bankTransaction;
+      const isCash = Boolean(
+        linkedTx &&
+          ((linkedTx.isManual && linkedTx.fitId?.startsWith("CASH-INV-")) ||
+            linkedTx.chartAccount?.code === "1030" ||
+            linkedTx.description?.startsWith("Cash Payment —"))
+      );
+      const linkedDesc = linkedTx
+        ? isCash
+          ? "Cash Payment (1030)"
+          : linkedTx.description
+        : "";
+
+      return [
+        escapeCsvValue(inv.invoiceNumber),
+        escapeCsvValue(inv.clientName),
+        escapeCsvValue(inv.clientEmail || ""),
+        escapeCsvValue(inv.clientAddress || ""),
+        escapeCsvValue(inv.issueDate ? inv.issueDate.split("T")[0] : ""),
+        escapeCsvValue(inv.dueDate ? inv.dueDate.split("T")[0] : ""),
+        escapeCsvValue(inv.paymentTerms || "Net 30"),
+        escapeCsvValue(inv.subtotal ? inv.subtotal.toFixed(2) : "0.00"),
+        escapeCsvValue(inv.taxRate || 0),
+        escapeCsvValue(inv.taxAmount ? inv.taxAmount.toFixed(2) : "0.00"),
+        escapeCsvValue(inv.totalAmount ? inv.totalAmount.toFixed(2) : "0.00"),
+        escapeCsvValue(inv.amountPaid ? inv.amountPaid.toFixed(2) : "0.00"),
+        escapeCsvValue(inv.balanceDue ? inv.balanceDue.toFixed(2) : "0.00"),
+        escapeCsvValue(inv.status),
+        escapeCsvValue(inv.paidDate ? inv.paidDate.split("T")[0] : ""),
+        escapeCsvValue(linkedDesc),
+        escapeCsvValue(inv.categoryAccount?.name || "Consulting Revenue"),
+        escapeCsvValue(inv.notes || ""),
+      ].join(",");
+    });
+
+    const csvContent = [headers.join(","), ...rows].join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const timestamp = new Date().toISOString().split("T")[0];
+    link.href = url;
+    link.setAttribute("download", `invoices-export-${timestamp}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   // Editor State
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -446,7 +659,7 @@ export default function InvoicingModal({
         onClose={onClose}
         title="Invoices & Client Receivables"
         maxWidth="4xl"
-        suspended={Boolean(isEditorOpen || matchingInvoice || previewInvoice || inspectingInvoiceId !== null)}
+        suspended={suspended || Boolean(isEditorOpen || matchingInvoice || previewInvoice || inspectingInvoiceId !== null)}
       >
         <div className="space-y-6 text-sm">
           {/* TOP RECEIVABLES KPI CARDS */}
@@ -494,7 +707,7 @@ export default function InvoicingModal({
             </div>
           )}
 
-          {/* ACTION BAR: FILTERS, SEARCH, NEW INVOICE */}
+          {/* ACTION BAR: FILTERS, SEARCH, CSV EXPORT, NEW INVOICE */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1 border-t border-white/5">
             <div className="flex items-center gap-1.5 flex-wrap" role="group" aria-label="Invoice status filters">
               {[
@@ -503,24 +716,40 @@ export default function InvoicingModal({
                 { id: "PAID", label: "Paid" },
                 { id: "OVERDUE", label: "Overdue" },
                 { id: "DRAFT", label: "Draft" },
-              ].map((f) => (
-                <button
-                  key={f.id}
-                  type="button"
-                  aria-pressed={statusFilter === f.id}
-                  onClick={() => setStatusFilter(f.id)}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${
-                    statusFilter === f.id
-                      ? "bg-amber-500/20 text-amber-300 border-amber-500/40 glow-amber"
-                      : "bg-white/5 text-zinc-400 border-white/10 hover:text-white hover:bg-white/10"
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
+              ].map((f) => {
+                const count = summary?.statusCounts?.[f.id];
+                return (
+                  <button
+                    key={f.id}
+                    type="button"
+                    aria-label={f.label}
+                    aria-pressed={statusFilter === f.id}
+                    onClick={() => setStatusFilter(f.id)}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer border flex items-center gap-1.5 ${
+                      statusFilter === f.id
+                        ? "bg-amber-500/20 text-amber-300 border-amber-500/40 glow-amber"
+                        : "bg-white/5 text-zinc-400 border-white/10 hover:text-white hover:bg-white/10"
+                    }`}
+                  >
+                    <span>{f.label}</span>
+                    {count !== undefined && count > 0 && (
+                      <span
+                        aria-hidden="true"
+                        className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                          statusFilter === f.id
+                            ? "bg-amber-400/20 text-amber-200 font-bold"
+                            : "bg-white/10 text-zinc-400"
+                        }`}
+                      >
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <div className="relative">
                 <label htmlFor="invoice-search" className="sr-only">
                   Search client or invoice number
@@ -544,6 +773,32 @@ export default function InvoicingModal({
                   </button>
                 )}
               </div>
+
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={handleExportCSV}
+                disabled={sortedInvoices.length === 0}
+                className="text-xs border-white/10 hover:border-white/20 text-zinc-300 hover:text-white"
+                title="Export currently filtered invoices to CSV"
+              >
+                <svg
+                  aria-hidden="true"
+                  className="w-3.5 h-3.5 mr-1"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                  />
+                </svg>
+                Export CSV
+              </Button>
 
               <Button
                 type="button"
@@ -584,16 +839,49 @@ export default function InvoicingModal({
                 <table className="w-full text-left text-xs">
                   <thead className="bg-black/50 text-[10px] font-bold uppercase tracking-wider text-zinc-400 border-b border-white/10">
                     <tr>
-                      <th className="py-3 px-3.5">Invoice #</th>
-                      <th className="py-3 px-3.5">Client</th>
-                      <th className="py-3 px-3.5">Issue / Due</th>
-                      <th className="py-3 px-3.5 text-right">Amount</th>
-                      <th className="py-3 px-3.5">Status</th>
-                      <th className="py-3 px-3.5 text-right">Actions</th>
+                      <SortableHeader
+                        label="Invoice #"
+                        field="invoiceNumber"
+                        activeField={sortField}
+                        direction={sortDirection}
+                        onSort={handleSort}
+                      />
+                      <SortableHeader
+                        label="Client"
+                        field="clientName"
+                        activeField={sortField}
+                        direction={sortDirection}
+                        onSort={handleSort}
+                      />
+                      <SortableHeader
+                        label="Issue / Due"
+                        field="date"
+                        activeField={sortField}
+                        direction={sortDirection}
+                        onSort={handleSort}
+                      />
+                      <SortableHeader
+                        label="Amount"
+                        field="amount"
+                        activeField={sortField}
+                        direction={sortDirection}
+                        onSort={handleSort}
+                        align="right"
+                      />
+                      <SortableHeader
+                        label="Status"
+                        field="status"
+                        activeField={sortField}
+                        direction={sortDirection}
+                        onSort={handleSort}
+                      />
+                      <th scope="col" className="py-3 px-3.5 text-right font-bold uppercase tracking-wider text-[10px] text-zinc-400">
+                        Actions
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
-                    {invoices.map((inv) => {
+                    {sortedInvoices.map((inv) => {
                       const linkedTx = inv.bankTransaction;
                       const isCash = Boolean(
                         linkedTx &&
@@ -602,10 +890,28 @@ export default function InvoicingModal({
                             linkedTx.description?.startsWith("Cash Payment —"))
                       );
                       const badgeProps = getStatusBadgeProps(inv.status);
+                      const paidCents = toCents(inv.amountPaid);
+                      const totalCents = toCents(inv.totalAmount);
                       const balanceDueCents =
                         inv.balanceDue !== undefined
                           ? toCents(inv.balanceDue)
-                          : Math.max(0, toCents(inv.totalAmount) - toCents(inv.amountPaid));
+                          : Math.max(0, totalCents - paidCents);
+
+                      // Overdue computation
+                      const isOverdue =
+                        (inv.status === "OVERDUE" ||
+                          (inv.dueDate && new Date(inv.dueDate).getTime() < asOfNow)) &&
+                        inv.status !== "PAID" &&
+                        inv.status !== "VOID";
+                      const daysOverdue = inv.dueDate
+                        ? Math.max(
+                            0,
+                            Math.floor(
+                              (asOfNow - new Date(inv.dueDate).getTime()) /
+                                (1000 * 60 * 60 * 24)
+                            )
+                          )
+                        : 0;
 
                       return (
                         <tr
@@ -627,14 +933,25 @@ export default function InvoicingModal({
                             )}
                           </td>
                           <td className="py-3 px-3.5 text-zinc-400">
-                            <span>{formatDate(inv.issueDate)}</span>
-                            <span className="text-[10px] text-zinc-400 block">
-                              Due: {formatDate(inv.dueDate)}
-                            </span>
+                            <span className="text-zinc-300">Issued: {formatDate(inv.issueDate)}</span>
+                            {isOverdue ? (
+                              <span className="text-[10px] text-red-400 font-semibold block mt-0.5">
+                                Due: {formatDate(inv.dueDate)} {daysOverdue > 0 ? `(${daysOverdue}d overdue)` : "(Overdue today)"}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-zinc-400 block mt-0.5">
+                                Due: {formatDate(inv.dueDate)}
+                              </span>
+                            )}
+                            {inv.paymentTerms && (
+                              <span className="text-[9px] uppercase tracking-wider text-zinc-500 font-medium block mt-0.5">
+                                {inv.paymentTerms}
+                              </span>
+                            )}
                           </td>
                           <td className="py-3 px-3.5 font-mono tabular-nums font-bold text-right text-white">
                             <div>{formatCurrency(inv.totalAmount)}</div>
-                            {inv.status === "PARTIALLY_PAID" && (
+                            {paidCents > 0 && inv.status !== "PAID" && (
                               <div className="text-[10px] text-amber-400 font-normal">
                                 Bal: {formatCurrency(fromCents(balanceDueCents))}
                               </div>
@@ -655,11 +972,11 @@ export default function InvoicingModal({
                               <span className="text-[10px] text-emerald-400 block mt-0.5">
                                 ✓ {formatDate(inv.paidDate)}
                               </span>
-                            ) : inv.status === "PARTIALLY_PAID" && inv.amountPaid ? (
+                            ) : paidCents > 0 && inv.status !== "PAID" ? (
                               <span className="text-[10px] font-mono tabular-nums text-amber-400/80 block mt-0.5">
                                 Paid: {formatCurrency(inv.amountPaid)}
                               </span>
-                            ) : inv.status !== "VOID" ? (
+                            ) : inv.status !== "VOID" && inv.status !== "DRAFT" ? (
                               <span className="text-[10px] text-zinc-400 block mt-0.5">
                                 Unlinked
                               </span>
@@ -717,20 +1034,46 @@ export default function InvoicingModal({
                                 type="button"
                                 aria-label={`Edit invoice ${inv.invoiceNumber}`}
                                 onClick={() => handleOpenEdit(inv)}
-                                className="p-1 text-zinc-400 hover:text-white rounded touch-glow-emerald cursor-pointer transition-colors"
-                                title="Edit"
+                                className="p-1.5 text-zinc-400 hover:text-white hover:bg-white/10 rounded-lg touch-glow-emerald cursor-pointer transition-colors"
+                                title="Edit invoice"
                               >
-                                ✎
+                                <svg
+                                  aria-hidden="true"
+                                  className="w-3.5 h-3.5"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={1.75}
+                                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                                  />
+                                </svg>
                               </button>
 
                               <button
                                 type="button"
                                 aria-label={`Delete invoice ${inv.invoiceNumber}`}
                                 onClick={() => handleDelete(inv)}
-                                className="p-1 text-zinc-400 hover:text-red-400 rounded touch-glow-red cursor-pointer transition-colors"
-                                title="Delete"
+                                className="p-1.5 text-zinc-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg touch-glow-red cursor-pointer transition-colors"
+                                title="Delete invoice"
                               >
-                                ✕
+                                <svg
+                                  aria-hidden="true"
+                                  className="w-3.5 h-3.5"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={1.75}
+                                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                  />
+                                </svg>
                               </button>
                             </div>
                           </td>

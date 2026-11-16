@@ -74,7 +74,7 @@ var fsTestPossible = func() bool {
 }()
 
 // -------------------------------------------------------------------
-// S07D — parseCsv.go: ParseCsvStatement integration
+// parseCsv.go: ParseCsvStatement integration
 // -------------------------------------------------------------------
 
 func TestParseCsvStatement_HeaderDetection(t *testing.T) {
@@ -444,7 +444,7 @@ func TestParseCsvStatement_DateOnlyHeader(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — parseOfx.go: integration tests
+// parseOfx.go: integration tests
 // -------------------------------------------------------------------
 
 func TestParseOfx_AccountIDNil(t *testing.T) {
@@ -462,7 +462,7 @@ func TestParseOfx_NoStatement(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — processer.go: processFile, sendReceiptToScript (fs-dependent)
+// processer.go: processFile, sendReceiptToScript (fs-dependent)
 // -------------------------------------------------------------------
 
 func TestSendReceiptToScript_Retry(t *testing.T) {
@@ -971,7 +971,7 @@ func TestBuildReceiptPrompt_WithAccounts(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — watcher.go: integration tests
+// watcher.go: integration tests
 // -------------------------------------------------------------------
 
 func TestProcessExistingFiles_NonExistentDir(t *testing.T) {
@@ -1126,7 +1126,7 @@ func TestUploadWithTimeout_FailureStatus(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — parseOfx.go: resolveOrCreateChartAccount deep tests
+// parseOfx.go: resolveOrCreateChartAccount deep tests
 // -------------------------------------------------------------------
 
 func TestResolveOrCreateChartAccount_DirectMatch(t *testing.T) {
@@ -1372,7 +1372,7 @@ func TestIsDefaultDescription_Empty(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — processer.go: CleanAIJSON edge cases
+// processer.go: CleanAIJSON edge cases
 // -------------------------------------------------------------------
 
 func TestCleanAIJSON_MultipleBraces(t *testing.T) {
@@ -1420,7 +1420,7 @@ func TestCleanAIJSON_BareJSON(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — parseCsv.go: cleanCSVAmount edge cases
+// parseCsv.go: cleanCSVAmount edge cases
 // -------------------------------------------------------------------
 
 func TestCleanCSVAmount_AccountingNegatives(t *testing.T) {
@@ -1448,7 +1448,7 @@ func TestCleanCSVAmount_AccountingNegatives(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — parseCsv.go: GenerateCSVFitID edge cases
+// parseCsv.go: GenerateCSVFitID edge cases
 // -------------------------------------------------------------------
 
 func TestGenerateCSVFitID_SameDayMultiple(t *testing.T) {
@@ -1470,7 +1470,7 @@ func TestGenerateCSVFitID_NegativeAmount(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — parseCsv.go: parseCSVDate edge cases
+// parseCsv.go: parseCSVDate edge cases
 // -------------------------------------------------------------------
 
 func TestParseCSVDate_RFC3339Prefix(t *testing.T) {
@@ -1514,7 +1514,7 @@ func TestParseCSVDate_TwoDigitYear(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — parseOfx.go: buildOfxDescription (no duplicates)
+// parseOfx.go: buildOfxDescription (no duplicates)
 // -------------------------------------------------------------------
 
 func TestBuildOfxDescription_Combined(t *testing.T) {
@@ -1544,7 +1544,7 @@ func TestBuildOfxDescription_Combined(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — parseOfx.go: broadcast test
+// parseOfx.go: broadcast test
 // -------------------------------------------------------------------
 
 func TestResolveOrCreateChartAccount_BroadcastOnCreate(t *testing.T) {
@@ -1574,7 +1574,7 @@ func TestResolveOrCreateChartAccount_BroadcastOnCreate(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — parseOfx.go: ProcessExistingFiles (watcher) no-op
+// parseOfx.go: ProcessExistingFiles (watcher) no-op
 // -------------------------------------------------------------------
 
 func TestProcessFile_OfxSafeMove(t *testing.T) {
@@ -1593,7 +1593,7 @@ func TestProcessFile_OfxSafeMove(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — ParseExtractedAmount edge cases
+// ParseExtractedAmount edge cases
 // -------------------------------------------------------------------
 
 func TestParseExtractedAmount_InvalidTypes(t *testing.T) {
@@ -1609,7 +1609,7 @@ func TestParseExtractedAmount_InvalidTypes(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// S07D — ConvertHeicToPng: invalid output dir
+// ConvertHeicToPng: invalid output dir
 // -------------------------------------------------------------------
 
 func TestConvertHeicToPng_InvalidOutputDir(t *testing.T) {

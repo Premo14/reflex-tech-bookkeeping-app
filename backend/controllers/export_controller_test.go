@@ -248,7 +248,7 @@ func TestExportTaxPackZipWithReceiptsManifestAndTraversalGuard(t *testing.T) {
 	expectedSum := sha256.Sum256(safeContent)
 	expectedHex := hex.EncodeToString(expectedSum[:])
 
-	var foundSummary, foundTxCSV, foundManifest, foundReceipt bool
+	var foundSummary, foundTxCSV, foundTBCSV, foundManifest, foundReceipt bool
 	for _, f := range zr.File {
 		rc, _ := f.Open()
 		content, _ := io.ReadAll(rc)
@@ -263,6 +263,11 @@ func TestExportTaxPackZipWithReceiptsManifestAndTraversalGuard(t *testing.T) {
 			}
 		case strings.HasPrefix(f.Name, "All_Transactions_"):
 			foundTxCSV = true
+		case strings.HasPrefix(f.Name, "Trial_Balance_"):
+			foundTBCSV = true
+			if !strings.Contains(s, "BALANCED: Debits = Credits") {
+				t.Fatalf("expected balanced Trial Balance CSV in tax pack: %s", s)
+			}
 		case f.Name == "Receipts/README_MANIFEST.txt":
 			foundManifest = true
 			if !strings.Contains(s, "sha256: "+expectedHex) || !strings.Contains(s, "[SKIPPED - INVALID PATH]") || !strings.Contains(s, "[MISSING]") {
@@ -279,8 +284,8 @@ func TestExportTaxPackZipWithReceiptsManifestAndTraversalGuard(t *testing.T) {
 		}
 	}
 
-	if !foundSummary || !foundTxCSV || !foundManifest || !foundReceipt {
-		t.Fatalf("missing expected zip entries: summary=%v tx=%v manifest=%v receipt=%v", foundSummary, foundTxCSV, foundManifest, foundReceipt)
+	if !foundSummary || !foundTxCSV || !foundTBCSV || !foundManifest || !foundReceipt {
+		t.Fatalf("missing expected zip entries: summary=%v tx=%v tb=%v manifest=%v receipt=%v", foundSummary, foundTxCSV, foundTBCSV, foundManifest, foundReceipt)
 	}
 }
 

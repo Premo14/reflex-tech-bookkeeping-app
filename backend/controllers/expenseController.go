@@ -148,6 +148,9 @@ func CreateExpense(c fiber.Ctx) error {
 		ReviewStatus:     "APPROVED",
 	}
 
+	// Auto-evaluate bank rules for category, vendor normalization, and notes
+	utils.ApplyBankRulesToExpense(&expense, db.DB)
+
 	if err := db.DB.Create(&expense).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create expense"})
 	}
@@ -211,9 +214,9 @@ func GetExpenses(c fiber.Ctx) error {
 	case "UNLINKED":
 		query = query.Where(notCashClause).Where("allocation_status IS NULL OR allocation_status = '' OR allocation_status = 'UNLINKED'")
 	case "BALANCED":
-		query = query.Where("allocation_status = 'BALANCED' OR LOWER(COALESCE(tender, '')) = 'cash'")
-	case "PARTIALLY_ALLOCATED":
-		query = query.Where("allocation_status = 'PARTIALLY_ALLOCATED'")
+		query = query.Where("allocation_status = 'BALANCED' OR " + isCashClause)
+	case "PARTIALLY_ALLOCATED", "PARTIAL":
+		query = query.Where("allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL')")
 	case "OVER_ALLOCATED":
 		query = query.Where("allocation_status = 'OVER_ALLOCATED'")
 	case "UNCATEGORIZED":
@@ -249,8 +252,8 @@ func GetExpenses(c fiber.Ctx) error {
 		WHEN COALESCE(review_status, '') IN ('WARNINGS_IGNORED', 'IGNORED') THEN 5
 		WHEN COALESCE(allocation_status, 'UNLINKED') = 'UNLINKED' AND has_suggestions = true THEN 0
 		WHEN allocation_status = 'OVER_ALLOCATED' THEN 1
-		WHEN allocation_status = 'PARTIALLY_ALLOCATED' THEN 2
-		WHEN LOWER(COALESCE(tender, '')) != 'cash' AND COALESCE(allocation_status, 'UNLINKED') = 'UNLINKED' THEN 3
+		WHEN allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL') THEN 2
+		WHEN ` + notCashClause + ` AND COALESCE(allocation_status, 'UNLINKED') = 'UNLINKED' THEN 3
 		ELSE 4
 	END ASC, ` + secondaryOrder
 
@@ -390,6 +393,11 @@ func UpdateExpense(c fiber.Ctx) error {
 		}
 	}
 
+	effectiveAmtCents := expense.Amount.Abs().Cents
+	if input.Amount != nil {
+		effectiveAmtCents = input.Amount.Abs().Cents
+	}
+	effectiveTimestamp := expense.Timestamp
 	if input.Timestamp != nil && *input.Timestamp != "" {
 		var newDate time.Time
 		if t, err := time.Parse(time.RFC3339, *input.Timestamp); err == nil {
@@ -405,7 +413,13 @@ func UpdateExpense(c fiber.Ctx) error {
 				})
 			}
 			updates["timestamp"] = newDate
+			effectiveTimestamp = newDate
 		}
+	}
+
+	// Promote open-period PENDING missing-data receipts once edited with a valid non-zero amount.
+	if expense.ReviewStatus == "PENDING" && !utils.IsDateInClosedPeriod(effectiveTimestamp) && effectiveAmtCents > 0 {
+		updates["review_status"] = "APPROVED"
 	}
 
 	if err := db.DB.Model(&expense).Updates(updates).Error; err != nil {

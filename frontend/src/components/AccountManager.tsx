@@ -17,6 +17,7 @@ import {
 
 interface AccountManagerProps {
   isOpen: boolean;
+  suspended?: boolean;
   onClose: () => void;
   accounts: ChartAccount[];
   refreshAccounts: () => void;
@@ -34,7 +35,7 @@ interface AccountFormData {
   isDefault?: boolean;
 }
 
-export default function AccountManager({ isOpen, onClose, accounts, refreshAccounts }: AccountManagerProps) {
+export default function AccountManager({ isOpen, suspended = false, onClose, accounts, refreshAccounts }: AccountManagerProps) {
   const { confirm } = useConfirm();
   const [isCreating, setIsCreating] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -291,6 +292,7 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
   return (
     <Modal 
       isOpen={isOpen} 
+      suspended={suspended}
       onClose={onClose} 
       title={<div className="flex items-center gap-2"><svg className="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>Chart of Accounts</div>}
       maxWidth="4xl"
@@ -592,6 +594,11 @@ export default function AccountManager({ isOpen, onClose, accounts, refreshAccou
                           {opt.label}
                         </option>
                       ))}
+                      {formData.scheduleCLine && !SCHEDULE_C_OPTIONS.some(opt => opt.value === formData.scheduleCLine) && (
+                        <option value={formData.scheduleCLine}>
+                          {formData.scheduleCLine}
+                        </option>
+                      )}
                     </Select>
                     <p className="text-[10px] text-zinc-500 mt-0.5">
                       Links this account directly to Form 1040 Schedule C for 1-click tax prep & export.

@@ -381,6 +381,107 @@ describe("DetailInvoiceView", () => {
     );
     expect(screen.getByText("No candidate bank deposits found")).toBeInTheDocument();
   });
+
+  it("handles invoice warning alerts, Ignore Warnings, Undo restore warnings, Exclude, and closed-period Allow Item", async () => {
+    const user = userEvent.setup();
+    const handlers = {
+      ...baseHandlers(),
+      onRestoreInvoiceWarnings: vi.fn(),
+      onAllowInvoiceClosed: vi.fn(),
+      onCardAction: vi.fn(),
+    };
+
+    const overdueUnlinkedInv = makeInvoice({
+      id: 42,
+      invoiceNumber: "INV-2026-042",
+      status: "OVERDUE",
+    });
+
+    const { rerender } = render(
+      <DetailInvoiceView
+        invoice={overdueUnlinkedInv}
+        invoiceCandidates={[]}
+        isMatchingInvoice={false}
+        isLinkingInvoice={false}
+        showCashPayPanel={false}
+        cashPayDate="2026-06-20"
+        cashPayNotes=""
+        isRecordingCashPay={false}
+        {...handlers}
+      />
+    );
+
+    // Displays warnings
+    expect(screen.getByText("This invoice is past due date.")).toBeInTheDocument();
+    expect(screen.getByText("This invoice is unpaid and unlinked to a customer deposit.")).toBeInTheDocument();
+
+    // Ignore Warnings button is enabled
+    const ignoreBtn = screen.getByRole("button", { name: "Ignore Warnings" });
+    await user.click(ignoreBtn);
+    expect(handlers.onCardAction).toHaveBeenCalledWith("IGNORE", "invoice", 42);
+
+    // Exclude button
+    const excludeBtn = screen.getByRole("button", { name: "Exclude..." });
+    await user.click(excludeBtn);
+    expect(handlers.onCardAction).toHaveBeenCalledWith("EXCLUDE", "invoice", 42);
+
+    // Rerender as WARNINGS_IGNORED
+    const warningsIgnoredInv = makeInvoice({
+      id: 42,
+      invoiceNumber: "INV-2026-042",
+      status: "OVERDUE",
+      reviewStatus: "WARNINGS_IGNORED",
+    });
+    rerender(
+      <DetailInvoiceView
+        invoice={warningsIgnoredInv}
+        invoiceCandidates={[]}
+        isMatchingInvoice={false}
+        isLinkingInvoice={false}
+        showCashPayPanel={false}
+        cashPayDate="2026-06-20"
+        cashPayNotes=""
+        isRecordingCashPay={false}
+        {...handlers}
+      />
+    );
+    expect(screen.getByText("Warnings have been ignored for this invoice.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(handlers.onRestoreInvoiceWarnings).toHaveBeenCalledWith(42);
+
+    // Rerender as PENDING in closed period
+    const closedPendingInv = makeInvoice({
+      id: 43,
+      invoiceNumber: "INV-2026-043",
+      status: "SENT",
+      reviewStatus: "PENDING",
+      issueDate: "2025-12-15",
+    });
+    rerender(
+      <DetailInvoiceView
+        invoice={closedPendingInv}
+        invoiceCandidates={[]}
+        isMatchingInvoice={false}
+        isLinkingInvoice={false}
+        showCashPayPanel={false}
+        cashPayDate="2026-06-20"
+        cashPayNotes=""
+        isRecordingCashPay={false}
+        isClosed={true}
+        itemAwaitingReview={true}
+        isDateInClosedPeriod={true}
+        {...handlers}
+      />
+    );
+    expect(screen.getByText("This invoice is pending review for a closed period.")).toBeInTheDocument();
+    const allowBtn = screen.getByRole("button", { name: "Allow Item" });
+    await user.click(allowBtn);
+    expect(handlers.onAllowInvoiceClosed).toHaveBeenCalledWith({
+      type: "invoice",
+      id: 43,
+      date: "2025-12-15",
+    });
+  });
 });
 
 describe("DetailLinkPicker", () => {

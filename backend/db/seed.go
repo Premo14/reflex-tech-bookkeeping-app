@@ -123,7 +123,235 @@ type defaultBankRuleEntry struct {
 }
 
 var defaultBankRules = []defaultBankRuleEntry{
-	// ── 1. Fast Food, Coffee & Casual Dining (5090 Meals & Entertainment) ─────
+	// ── 1. Tools, Hardware, Building Supplies & Maintenance (5060 / 5040) ────
+	{Name: "The Home Depot", RenamedVendor: "The Home Depot", AccountCode: "5060", Keywords: []string{"home depot", "homedepot", "homedepot.com", "thd store", "the home depot", "thd #"}},
+	{Name: "Lowe's", RenamedVendor: "Lowe's", AccountCode: "5060", Keywords: []string{"lowes", "lowe's", "lowes.com", "lowes #"}},
+	{Name: "Menards", RenamedVendor: "Menards", AccountCode: "5060", Keywords: []string{"menards", "menards.com", "menard"}},
+	{Name: "Ace Hardware", RenamedVendor: "Ace Hardware", AccountCode: "5060", Keywords: []string{"ace hardware", "ace hdwe", "acehardware.com"}},
+	{Name: "Harbor Freight Tools", RenamedVendor: "Harbor Freight Tools", AccountCode: "5060", Keywords: []string{"harbor freight", "harbor freight tools", "harborfreight.com", "hft store"}},
+	{Name: "Tractor Supply", RenamedVendor: "Tractor Supply", AccountCode: "5060", Keywords: []string{"tractor supply", "tsc store", "tractorsupply.com"}},
+	{Name: "Grainger", RenamedVendor: "Grainger", AccountCode: "5060", Keywords: []string{"grainger", "w.w. grainger", "ww grainger", "grainger.com"}},
+	{Name: "McMaster-Carr", RenamedVendor: "McMaster-Carr", AccountCode: "5060", Keywords: []string{"mcmaster", "mcmaster-carr", "mcmaster carr", "mcmaster.com"}},
+	{Name: "Fastenal", RenamedVendor: "Fastenal", AccountCode: "5060", Keywords: []string{"fastenal", "fastenal company", "fastenal.com"}},
+	{Name: "Northern Tool + Equipment", RenamedVendor: "Northern Tool", AccountCode: "5060", Keywords: []string{"northern tool", "northern tool + equipment", "northerntool.com"}},
+	{Name: "MSC Industrial Supply", RenamedVendor: "MSC Industrial", AccountCode: "5060", Keywords: []string{"msc industrial", "msc direct", "mscdirect.com", "sid tool"}},
+	{Name: "Ferguson Enterprises", RenamedVendor: "Ferguson", AccountCode: "5060", Keywords: []string{"ferguson", "ferguson enterprises", "ferguson plumbing", "ferguson.com"}},
+	{Name: "ABC Supply Co.", RenamedVendor: "ABC Supply", AccountCode: "5060", Keywords: []string{"abc supply", "abc supply co", "abcsupply.com"}},
+	{Name: "Sherwin-Williams", RenamedVendor: "Sherwin-Williams", AccountCode: "5060", Keywords: []string{"sherwin-williams", "sherwin williams", "sherwin-will"}},
+	{Name: "Rockler Woodworking", RenamedVendor: "Rockler", AccountCode: "5060", Keywords: []string{"rockler", "rockler woodworking", "rockler.com"}},
+	{Name: "Woodcraft", RenamedVendor: "Woodcraft", AccountCode: "5060", Keywords: []string{"woodcraft", "woodcraft supply", "woodcraft.com"}},
+	{Name: "Global Industrial", RenamedVendor: "Global Industrial", AccountCode: "5060", Keywords: []string{"global industrial", "globalequipment", "systemax"}},
+	{Name: "Build.com", RenamedVendor: "Build.com", AccountCode: "5060", Keywords: []string{"build.com", "build with ferguson"}},
+
+	// ── 2. Major Retailers, Supercenters & Wholesale Clubs (5060 Supplies) ────
+	{Name: "Walmart", RenamedVendor: "Walmart", AccountCode: "5060", Keywords: []string{"wal-mart", "walmart", "wm supercenter", "wmt store", "wmt.com", "walmart.com", "wal-mart #"}},
+	{Name: "Target", RenamedVendor: "Target", AccountCode: "5060", Keywords: []string{"target.com", "target t-", "tgt store", "target corp", "target", "target super"}},
+	{Name: "Costco", RenamedVendor: "Costco", AccountCode: "5060", Keywords: []string{"costco whse", "costco wholesale", "costco.com", "costco", "costco gas"}},
+	{Name: "Sam's Club", RenamedVendor: "Sam's Club", AccountCode: "5060", Keywords: []string{"sam's club", "sams club", "samsclub", "samsclub.com", "sam's club #"}},
+	{Name: "BJ's Wholesale Club", RenamedVendor: "BJ's Wholesale Club", AccountCode: "5060", Keywords: []string{"bj's wholesale", "bjs wholesale", "bjs club", "bjs.com"}},
+	{Name: "Walgreens", RenamedVendor: "Walgreens", AccountCode: "5060", Keywords: []string{"walgreens", "walgreen", "walgreen co"}},
+	{Name: "CVS Pharmacy", RenamedVendor: "CVS", AccountCode: "5060", Keywords: []string{"cvs/pharmacy", "cvs pharmacy", "cvs", "cvs store"}},
+	{Name: "Dollar General", RenamedVendor: "Dollar General", AccountCode: "5060", Keywords: []string{"dollar general", "dg retail", "dollar-general"}},
+	{Name: "Dollar Tree", RenamedVendor: "Dollar Tree", AccountCode: "5060", Keywords: []string{"dollar tree", "family dollar", "dollartree.com"}},
+	{Name: "Kroger", RenamedVendor: "Kroger", AccountCode: "5060", Keywords: []string{"kroger"}},
+	{Name: "ALDI", RenamedVendor: "ALDI", AccountCode: "5060", Keywords: []string{"aldi"}},
+	{Name: "Trader Joe's", RenamedVendor: "Trader Joe's", AccountCode: "5060", Keywords: []string{"trader joe's", "trader joes"}},
+	{Name: "Whole Foods", RenamedVendor: "Whole Foods", AccountCode: "5060", Keywords: []string{"whole foods", "wholefoods"}},
+	{Name: "Publix", RenamedVendor: "Publix", AccountCode: "5060", Keywords: []string{"publix"}},
+	{Name: "Wegmans", RenamedVendor: "Wegmans", AccountCode: "5060", Keywords: []string{"wegmans"}},
+	{Name: "H-E-B", RenamedVendor: "H-E-B", AccountCode: "5060", Keywords: []string{"h-e-b", "heb grocery"}},
+	{Name: "Meijer", RenamedVendor: "Meijer", AccountCode: "5060", Keywords: []string{"meijer"}},
+
+	// ── 3. Office Supplies, Packaging, Shipping & Electronics (5050 Office) ───
+	{Name: "Amazon", RenamedVendor: "Amazon", AccountCode: "5050", Keywords: []string{"amzn", "amazon.com", "amazon prime", "amazon mktp", "amazon retail", "amzn mktp"}},
+	{Name: "Staples", RenamedVendor: "Staples", AccountCode: "5050", Keywords: []string{"staples", "staples.com", "staples direct", "staples store"}},
+	{Name: "Office Depot", RenamedVendor: "Office Depot", AccountCode: "5050", Keywords: []string{"office depot", "officedepot", "officemax", "office max", "officedepot.com"}},
+	{Name: "Uline", RenamedVendor: "Uline", AccountCode: "5050", Keywords: []string{"uline", "uline shipping", "uline.com", "uline corp"}},
+	{Name: "USPS Postage", RenamedVendor: "USPS", AccountCode: "5050", Keywords: []string{"usps", "us postal service", "post office", "usps.com", "stamps post"}},
+	{Name: "FedEx Shipping", RenamedVendor: "FedEx", AccountCode: "5050", Keywords: []string{"fedex", "fedex freight", "federal express", "fedex ground", "fedex express", "fedex.com"}},
+	{Name: "The UPS Store", RenamedVendor: "The UPS Store", AccountCode: "5050", Keywords: []string{"ups store", "the ups store", "united parcel svc", "ups freight", "ups shipping", "ups.com"}},
+	{Name: "DHL Express", RenamedVendor: "DHL Express", AccountCode: "5050", Keywords: []string{"dhl express", "dhl supply", "dhl.com", "dhl parcel"}},
+	{Name: "Pirate Ship", RenamedVendor: "Pirate Ship", AccountCode: "5050", Keywords: []string{"pirate ship", "pirateship", "pirateship.com"}},
+	{Name: "Stamps.com", RenamedVendor: "Stamps.com", AccountCode: "5050", Keywords: []string{"stamps.com"}},
+	{Name: "ShipStation", RenamedVendor: "ShipStation", AccountCode: "5050", Keywords: []string{"shipstation", "shipstation.com"}},
+	{Name: "Pitney Bowes", RenamedVendor: "Pitney Bowes", AccountCode: "5050", Keywords: []string{"pitney bowes", "pitneybowes"}},
+	{Name: "Best Buy", RenamedVendor: "Best Buy", AccountCode: "5050", Keywords: []string{"best buy", "bestbuy.com", "bby #", "best buy geek"}},
+	{Name: "B&H Photo Video", RenamedVendor: "B&H Photo Video", AccountCode: "5050", Keywords: []string{"b&h photo", "bh photo", "bhphotovideo", "b&h photo video"}},
+	{Name: "Micro Center", RenamedVendor: "Micro Center", AccountCode: "5050", Keywords: []string{"micro center", "microcenter", "microcenter.com"}},
+	{Name: "Newegg", RenamedVendor: "Newegg", AccountCode: "5050", Keywords: []string{"newegg", "newegg.com"}},
+	{Name: "CDW Direct", RenamedVendor: "CDW Direct", AccountCode: "5050", Keywords: []string{"cdw direct", "cdw.com", "cdw logistics"}},
+	{Name: "Dell Technologies", RenamedVendor: "Dell", AccountCode: "5050", Keywords: []string{"dell", "dell technologies", "dell.com"}},
+	{Name: "HP Inc", RenamedVendor: "HP", AccountCode: "5050", Keywords: []string{"hp inc", "hewlett-packard", "hp.com"}},
+	{Name: "Apple Retail", RenamedVendor: "Apple", AccountCode: "5050", Keywords: []string{"apple store", "apple retail"}},
+
+	// ── 4. Cloud Infrastructure, Developer Tools & SaaS (5210 Software) ───────
+	// Specific cloud services precede broader accounts
+	{Name: "Amazon Web Services (AWS)", RenamedVendor: "Amazon Web Services (AWS)", AccountCode: "5210", Keywords: []string{"aws.amazon", "amazon web services", "aws cloud", "aws charge", "aws*"}},
+	{Name: "Google Cloud Platform", RenamedVendor: "Google Cloud", AccountCode: "5210", Keywords: []string{"google cloud", "google*cloud", "gcp cloud", "g.co/cloud"}},
+	{Name: "Google Workspace", RenamedVendor: "Google Workspace", AccountCode: "5210", Keywords: []string{"google workspace", "google*workspace", "google services", "google storage", "gsuite", "google*gsuite"}},
+	{Name: "Microsoft Azure", RenamedVendor: "Microsoft Azure", AccountCode: "5210", Keywords: []string{"msft azure", "msft*azure", "microsoft azure", "azure cloud"}},
+	{Name: "Microsoft 365", RenamedVendor: "Microsoft", AccountCode: "5210", Keywords: []string{"microsoft 365", "microsoft*365", "msft office", "msft*office", "microsoft store", "microsoft payments"}},
+	{Name: "GitHub", RenamedVendor: "GitHub", AccountCode: "5210", Keywords: []string{"github", "github.com", "github inc"}},
+	{Name: "GitLab", RenamedVendor: "GitLab", AccountCode: "5210", Keywords: []string{"gitlab", "gitlab.com"}},
+	{Name: "Docker", RenamedVendor: "Docker", AccountCode: "5210", Keywords: []string{"docker", "docker inc", "docker.com"}},
+	{Name: "OpenAI ChatGPT", RenamedVendor: "OpenAI", AccountCode: "5210", Keywords: []string{"openai", "chatgpt subscription", "chatgpt", "openai*chatgpt"}},
+	{Name: "Anthropic Claude", RenamedVendor: "Anthropic", AccountCode: "5210", Keywords: []string{"anthropic", "claude.ai", "anthropic direct"}},
+	{Name: "Vercel", RenamedVendor: "Vercel", AccountCode: "5210", Keywords: []string{"vercel", "vercel inc", "vercel.com"}},
+	{Name: "Netlify", RenamedVendor: "Netlify", AccountCode: "5210", Keywords: []string{"netlify", "netlify inc"}},
+	{Name: "Cloudflare", RenamedVendor: "Cloudflare", AccountCode: "5210", Keywords: []string{"cloudflare", "cloudflare inc", "cloudflare.com"}},
+	{Name: "DigitalOcean", RenamedVendor: "DigitalOcean", AccountCode: "5210", Keywords: []string{"digitalocean", "digital ocean", "digitalocean.com"}},
+	{Name: "Heroku", RenamedVendor: "Heroku", AccountCode: "5210", Keywords: []string{"heroku", "salesforce heroku"}},
+	{Name: "Supabase", RenamedVendor: "Supabase", AccountCode: "5210", Keywords: []string{"supabase", "supabase inc"}},
+	{Name: "MongoDB Atlas", RenamedVendor: "MongoDB Atlas", AccountCode: "5210", Keywords: []string{"mongodb", "mongodb atlas", "mongodbatlas"}},
+	{Name: "Datadog", RenamedVendor: "Datadog", AccountCode: "5210", Keywords: []string{"datadog", "datadoghq"}},
+	{Name: "Sentry", RenamedVendor: "Sentry", AccountCode: "5210", Keywords: []string{"sentry.io", "functional software"}},
+	{Name: "Postman", RenamedVendor: "Postman", AccountCode: "5210", Keywords: []string{"postman", "postman inc"}},
+	{Name: "Slack", RenamedVendor: "Slack", AccountCode: "5210", Keywords: []string{"slack technologies", "slack.com", "slack"}},
+	{Name: "Zoom", RenamedVendor: "Zoom Video Communications", AccountCode: "5210", Keywords: []string{"zoom.us", "zoom video", "zoom communication"}},
+	{Name: "Atlassian", RenamedVendor: "Atlassian", AccountCode: "5210", Keywords: []string{"atlassian", "jira", "confluence", "trello"}},
+	{Name: "Notion", RenamedVendor: "Notion", AccountCode: "5210", Keywords: []string{"notion labs", "notion.so"}},
+	{Name: "Linear", RenamedVendor: "Linear", AccountCode: "5210", Keywords: []string{"linear.app", "linear orbit"}},
+	{Name: "Asana", RenamedVendor: "Asana", AccountCode: "5210", Keywords: []string{"asana", "asana.com"}},
+	{Name: "Monday.com", RenamedVendor: "Monday.com", AccountCode: "5210", Keywords: []string{"monday.com", "dapulse"}},
+	{Name: "Basecamp", RenamedVendor: "Basecamp", AccountCode: "5210", Keywords: []string{"basecamp", "37signals"}},
+	{Name: "Figma", RenamedVendor: "Figma", AccountCode: "5210", Keywords: []string{"figma", "figma.com"}},
+	{Name: "Adobe Creative Cloud", RenamedVendor: "Adobe", AccountCode: "5210", Keywords: []string{"adobe creative", "adobe*creative", "adobe systems", "adobe inc", "adobe.com"}},
+	{Name: "Canva", RenamedVendor: "Canva", AccountCode: "5210", Keywords: []string{"canva", "canva pty", "canva.com"}},
+	{Name: "Intuit QuickBooks", RenamedVendor: "Intuit QuickBooks", AccountCode: "5210", Keywords: []string{"quickbooks", "quickbooks online", "qbo", "intuit payroll", "intuit"}},
+	{Name: "FreshBooks", RenamedVendor: "FreshBooks", AccountCode: "5210", Keywords: []string{"freshbooks", "2ndsite"}},
+	{Name: "Xero", RenamedVendor: "Xero", AccountCode: "5210", Keywords: []string{"xero", "xero.com", "xero accounting"}},
+	{Name: "1Password", RenamedVendor: "1Password", AccountCode: "5210", Keywords: []string{"1password", "agilebits"}},
+	{Name: "Bitwarden", RenamedVendor: "Bitwarden", AccountCode: "5210", Keywords: []string{"bitwarden", "bitwarden inc"}},
+	{Name: "LastPass", RenamedVendor: "LastPass", AccountCode: "5210", Keywords: []string{"lastpass", "logmein"}},
+	{Name: "DocuSign", RenamedVendor: "DocuSign", AccountCode: "5210", Keywords: []string{"docusign", "docusign inc"}},
+	{Name: "PandaDoc", RenamedVendor: "PandaDoc", AccountCode: "5210", Keywords: []string{"pandadoc"}},
+	{Name: "Dropbox", RenamedVendor: "Dropbox", AccountCode: "5210", Keywords: []string{"dropbox", "dropbox.com"}},
+	{Name: "Box.com", RenamedVendor: "Box", AccountCode: "5210", Keywords: []string{"box inc", "box.com"}},
+	{Name: "HubSpot", RenamedVendor: "HubSpot", AccountCode: "5210", Keywords: []string{"hubspot", "hubspot inc"}},
+	{Name: "Salesforce", RenamedVendor: "Salesforce", AccountCode: "5210", Keywords: []string{"salesforce", "salesforce.com"}},
+	{Name: "Mailchimp", RenamedVendor: "Mailchimp", AccountCode: "5210", Keywords: []string{"mailchimp", "the rocket science group"}},
+	{Name: "Klaviyo", RenamedVendor: "Klaviyo", AccountCode: "5210", Keywords: []string{"klaviyo"}},
+	{Name: "Twilio", RenamedVendor: "Twilio", AccountCode: "5210", Keywords: []string{"twilio", "sendgrid"}},
+	{Name: "GoDaddy", RenamedVendor: "GoDaddy", AccountCode: "5210", Keywords: []string{"godaddy", "godaddy.com"}},
+	{Name: "Namecheap", RenamedVendor: "Namecheap", AccountCode: "5210", Keywords: []string{"namecheap", "name-cheap"}},
+	{Name: "Shopify", RenamedVendor: "Shopify", AccountCode: "5210", Keywords: []string{"shopify", "shopify fee"}},
+	{Name: "Squarespace", RenamedVendor: "Squarespace", AccountCode: "5210", Keywords: []string{"squarespace", "squarespace.com"}},
+	{Name: "Wix", RenamedVendor: "Wix", AccountCode: "5210", Keywords: []string{"wix.com", "wixcom"}},
+	{Name: "WordPress", RenamedVendor: "WordPress", AccountCode: "5210", Keywords: []string{"wordpress.com", "automattic"}},
+	{Name: "Loom", RenamedVendor: "Loom", AccountCode: "5210", Keywords: []string{"loom inc", "loom.com"}},
+	{Name: "Grammarly", RenamedVendor: "Grammarly", AccountCode: "5210", Keywords: []string{"grammarly"}},
+	{Name: "Apple Services", RenamedVendor: "Apple", AccountCode: "5210", Keywords: []string{"apple.com/bill", "itunes.com/bill", "apple developer"}},
+	{Name: "JetBrains", RenamedVendor: "JetBrains", AccountCode: "5210", Keywords: []string{"jetbrains", "jetbrains s.r.o."}},
+	{Name: "Zendesk", RenamedVendor: "Zendesk", AccountCode: "5210", Keywords: []string{"zendesk", "zendesk inc"}},
+
+	// ── 5. Telecom, Internet & Office Utilities (5030 Utilities) ──────────────
+	{Name: "Verizon", RenamedVendor: "Verizon", AccountCode: "5030", Keywords: []string{"verizon wireless", "vzw wireless", "verizon", "verizon business"}},
+	{Name: "AT&T", RenamedVendor: "AT&T", AccountCode: "5030", Keywords: []string{"att wireless", "att*wireless", "at&t", "att bill payment", "att direct"}},
+	{Name: "T-Mobile", RenamedVendor: "T-Mobile", AccountCode: "5030", Keywords: []string{"t-mobile", "tmobile", "t-mobile bill"}},
+	{Name: "Comcast Xfinity", RenamedVendor: "Comcast Xfinity", AccountCode: "5030", Keywords: []string{"comcast", "xfinity", "comcast business"}},
+	{Name: "Spectrum Internet", RenamedVendor: "Spectrum", AccountCode: "5030", Keywords: []string{"spectrum", "charter comm", "charter spectrum"}},
+	{Name: "Cox Communications", RenamedVendor: "Cox Communications", AccountCode: "5030", Keywords: []string{"cox comm", "cox cable", "cox business"}},
+	{Name: "National Grid", RenamedVendor: "National Grid", AccountCode: "5030", Keywords: []string{"national grid", "natgrid"}},
+	{Name: "Con Edison", RenamedVendor: "Con Edison", AccountCode: "5030", Keywords: []string{"con edison", "coned", "consolidated edison"}},
+	{Name: "Duke Energy", RenamedVendor: "Duke Energy", AccountCode: "5030", Keywords: []string{"duke energy", "duke power"}},
+	{Name: "PG&E", RenamedVendor: "PG&E", AccountCode: "5030", Keywords: []string{"pacific gas & electric", "pg&e", "pge bill"}},
+	{Name: "Florida Power & Light", RenamedVendor: "Florida Power & Light", AccountCode: "5030", Keywords: []string{"fpl", "florida power light"}},
+	{Name: "Southern California Edison", RenamedVendor: "Southern California Edison", AccountCode: "5030", Keywords: []string{"so cal edison", "sce bill"}},
+	{Name: "Waste Management", RenamedVendor: "Waste Management", AccountCode: "5030", Keywords: []string{"waste management", "wm corporate"}},
+	{Name: "Optimum", RenamedVendor: "Optimum", AccountCode: "5030", Keywords: []string{"optimum", "altice"}},
+	{Name: "CenturyLink", RenamedVendor: "CenturyLink", AccountCode: "5030", Keywords: []string{"centurylink", "lumen tech"}},
+
+	// ── 6. Vehicle Fuel, Auto Maintenance & Fleet (5510 Vehicle & Mileage) ────
+	{Name: "Shell Fuel", RenamedVendor: "Shell", AccountCode: "5510", Keywords: []string{"shell oil", "shell service", "shell food", "shell"}},
+	{Name: "ExxonMobil Fuel", RenamedVendor: "ExxonMobil", AccountCode: "5510", Keywords: []string{"exxon", "mobil", "exxonmobil"}},
+	{Name: "Chevron Fuel", RenamedVendor: "Chevron", AccountCode: "5510", Keywords: []string{"chevron", "texaco"}},
+	{Name: "BP Fuel", RenamedVendor: "BP", AccountCode: "5510", Keywords: []string{"bp gas", "bp oil", "bp connect"}},
+	{Name: "Sunoco Fuel", RenamedVendor: "Sunoco", AccountCode: "5510", Keywords: []string{"sunoco", "sunoco fuel"}},
+	{Name: "Speedway Fuel", RenamedVendor: "Speedway", AccountCode: "5510", Keywords: []string{"speedway"}},
+	{Name: "Wawa Fuel & Food", RenamedVendor: "Wawa", AccountCode: "5510", Keywords: []string{"wawa", "wawa store"}},
+	{Name: "Buc-ee's", RenamedVendor: "Buc-ee's", AccountCode: "5510", Keywords: []string{"buc-ee's", "bucees"}},
+	{Name: "Love's Travel Stops", RenamedVendor: "Love's Travel Stops", AccountCode: "5510", Keywords: []string{"love's travel", "loves travel", "love's country"}},
+	{Name: "Pilot Flying J", RenamedVendor: "Pilot Flying J", AccountCode: "5510", Keywords: []string{"pilot flying j", "pilot travel", "flying j"}},
+	{Name: "QuikTrip", RenamedVendor: "QuikTrip", AccountCode: "5510", Keywords: []string{"quiktrip", "qt #"}},
+	{Name: "Circle K", RenamedVendor: "Circle K", AccountCode: "5510", Keywords: []string{"circle k"}},
+	{Name: "7-Eleven", RenamedVendor: "7-Eleven", AccountCode: "5510", Keywords: []string{"7-eleven", "7 eleven", "seven eleven"}},
+	{Name: "Phillips 66", RenamedVendor: "Phillips 66", AccountCode: "5510", Keywords: []string{"phillips 66", "conoco"}},
+	{Name: "Marathon", RenamedVendor: "Marathon", AccountCode: "5510", Keywords: []string{"marathon petro", "marathon oil"}},
+	{Name: "Valero", RenamedVendor: "Valero", AccountCode: "5510", Keywords: []string{"valero"}},
+	{Name: "Casey's", RenamedVendor: "Casey's", AccountCode: "5510", Keywords: []string{"casey's general", "caseys"}},
+	{Name: "AutoZone", RenamedVendor: "AutoZone", AccountCode: "5510", Keywords: []string{"autozone", "autozone store"}},
+	{Name: "O'Reilly Auto Parts", RenamedVendor: "O'Reilly Auto Parts", AccountCode: "5510", Keywords: []string{"o'reilly auto", "oreilly auto", "o'reilly parts"}},
+	{Name: "Advance Auto Parts", RenamedVendor: "Advance Auto Parts", AccountCode: "5510", Keywords: []string{"advance auto parts", "advance auto", "carquest"}},
+	{Name: "NAPA Auto Parts", RenamedVendor: "NAPA Auto Parts", AccountCode: "5510", Keywords: []string{"napa auto parts", "napa auto"}},
+	{Name: "Valvoline", RenamedVendor: "Valvoline", AccountCode: "5510", Keywords: []string{"valvoline", "valvoline instant"}},
+	{Name: "Jiffy Lube", RenamedVendor: "Jiffy Lube", AccountCode: "5510", Keywords: []string{"jiffy lube"}},
+
+	// ── 7. Advertising & Digital Marketing (5310 Advertising) ─────────────────
+	{Name: "Google Ads", RenamedVendor: "Google Ads", AccountCode: "5310", Keywords: []string{"google ads", "google*ads", "google adwords"}},
+	{Name: "Meta Ads", RenamedVendor: "Meta Ads", AccountCode: "5310", Keywords: []string{"fb.me/ads", "facebook ads", "meta platforms", "meta ads"}},
+	{Name: "LinkedIn Marketing", RenamedVendor: "LinkedIn", AccountCode: "5310", Keywords: []string{"linkedin", "linkedin corp", "linkedin ads"}},
+	{Name: "X Ads", RenamedVendor: "X Ads", AccountCode: "5310", Keywords: []string{"twitter online ads", "x corp ads", "twitter ads"}},
+	{Name: "TikTok Ads", RenamedVendor: "TikTok Ads", AccountCode: "5310", Keywords: []string{"tiktok ads", "bytedance"}},
+	{Name: "Microsoft Advertising", RenamedVendor: "Microsoft Advertising", AccountCode: "5310", Keywords: []string{"msft bing ads", "bing ads", "microsoft advertising"}},
+	{Name: "Yelp Advertising", RenamedVendor: "Yelp Advertising", AccountCode: "5310", Keywords: []string{"yelp inc", "yelp advertise"}},
+	{Name: "Pinterest Ads", RenamedVendor: "Pinterest Ads", AccountCode: "5310", Keywords: []string{"pinterest ads"}},
+
+	// ── 8. Payroll, Legal & Professional Services (5020 Payroll / 5110 Legal) ─
+	{Name: "Gusto Payroll", RenamedVendor: "Gusto", AccountCode: "5020", Keywords: []string{"gusto", "gusto payroll", "zenpayroll"}},
+	{Name: "ADP Payroll", RenamedVendor: "ADP", AccountCode: "5020", Keywords: []string{"adp payroll", "adp direct deposit", "adp tax", "automatic data proc"}},
+	{Name: "Paychex", RenamedVendor: "Paychex", AccountCode: "5020", Keywords: []string{"paychex", "paychex payroll"}},
+	{Name: "Rippling", RenamedVendor: "Rippling", AccountCode: "5020", Keywords: []string{"rippling", "rippling payroll"}},
+	{Name: "Deel", RenamedVendor: "Deel", AccountCode: "5120", Keywords: []string{"letsdeel", "deel inc"}},
+	{Name: "LegalZoom", RenamedVendor: "LegalZoom", AccountCode: "5110", Keywords: []string{"legalzoom", "legal zoom"}},
+	{Name: "Rocket Lawyer", RenamedVendor: "Rocket Lawyer", AccountCode: "5110", Keywords: []string{"rocket lawyer", "rocketlawyer"}},
+
+	// ── 9. Payment Processing & Merchant Fees (5810) / Bank Fees (5910) ───────
+	{Name: "Stripe Fees", RenamedVendor: "Stripe", AccountCode: "5810", Keywords: []string{"stripe fee", "stripe payments", "stripe payout", "stripe inc"}},
+	{Name: "Square Processing Fees", RenamedVendor: "Square", AccountCode: "5810", Keywords: []string{"squareup", "square inc fee", "square fee", "sq *"}},
+	{Name: "PayPal Processing Fees", RenamedVendor: "PayPal", AccountCode: "5810", Keywords: []string{"paypal fee", "paypal partner"}},
+	{Name: "Toast", RenamedVendor: "Toast", AccountCode: "5810", Keywords: []string{"toast tab", "toast inc", "toast pos"}},
+	{Name: "Clover", RenamedVendor: "Clover", AccountCode: "5810", Keywords: []string{"clover network", "clover", "clover pos"}},
+	{Name: "Authorize.Net", RenamedVendor: "Authorize.Net", AccountCode: "5810", Keywords: []string{"authorize.net", "authnet"}},
+	{Name: "Chase Paymentech", RenamedVendor: "Chase Paymentech", AccountCode: "5810", Keywords: []string{"chase paymentech", "chase merchant"}},
+	{Name: "Bank of America Service Fee", RenamedVendor: "Bank of America", AccountCode: "5910", Keywords: []string{"bofa wire fee", "boa monthly fee", "bofa fee", "bofa service charge"}},
+	{Name: "Wells Fargo Service Fee", RenamedVendor: "Wells Fargo", AccountCode: "5910", Keywords: []string{"wells fargo fee", "wf monthly service", "wells service fee"}},
+	{Name: "JPMorgan Chase Fee", RenamedVendor: "JPMorgan Chase", AccountCode: "5910", Keywords: []string{"chase service fee", "jpmorgan chase fee", "chase wire fee"}},
+	{Name: "Citibank Service Fee", RenamedVendor: "Citibank", AccountCode: "5910", Keywords: []string{"citibank fee", "citi monthly service"}},
+
+	// ── 10. Travel, Airlines, Rideshare & Lodging (5410 Travel) ───────────────
+	{Name: "Uber Rides", RenamedVendor: "Uber", AccountCode: "5410", Keywords: []string{"uber trip", "uber*trip", "uber ride", "uber*ride"}},
+	{Name: "Lyft Rides", RenamedVendor: "Lyft", AccountCode: "5410", Keywords: []string{"lyft ride", "lyft*ride", "lyft trip"}},
+	{Name: "Delta Air Lines", RenamedVendor: "Delta Air Lines", AccountCode: "5410", Keywords: []string{"delta air", "delta.com", "delta airlines"}},
+	{Name: "United Airlines", RenamedVendor: "United Airlines", AccountCode: "5410", Keywords: []string{"united air", "united.com", "united airlines"}},
+	{Name: "American Airlines", RenamedVendor: "American Airlines", AccountCode: "5410", Keywords: []string{"american air", "aa.com", "american airlines"}},
+	{Name: "Southwest Airlines", RenamedVendor: "Southwest Airlines", AccountCode: "5410", Keywords: []string{"southwest air", "southwest airlines", "wn air"}},
+	{Name: "JetBlue", RenamedVendor: "JetBlue", AccountCode: "5410", Keywords: []string{"jetblue", "jetblue airways"}},
+	{Name: "Alaska Airlines", RenamedVendor: "Alaska Airlines", AccountCode: "5410", Keywords: []string{"alaska air", "alaska airlines"}},
+	{Name: "Enterprise Rent-A-Car", RenamedVendor: "Enterprise Rent-A-Car", AccountCode: "5410", Keywords: []string{"enterprise rent-a-car", "enterprise rent a car"}},
+	{Name: "Hertz", RenamedVendor: "Hertz", AccountCode: "5410", Keywords: []string{"hertz rent-a-car", "hertz toll", "hertz"}},
+	{Name: "Avis", RenamedVendor: "Avis", AccountCode: "5410", Keywords: []string{"avis rent a car", "avis.com"}},
+	{Name: "Budget Rent A Car", RenamedVendor: "Budget Rent A Car", AccountCode: "5410", Keywords: []string{"budget rent a car", "budget rent-a-car"}},
+	{Name: "National Car Rental", RenamedVendor: "National Car Rental", AccountCode: "5410", Keywords: []string{"national car rental"}},
+	{Name: "Amtrak", RenamedVendor: "Amtrak", AccountCode: "5410", Keywords: []string{"amtrak"}},
+	{Name: "Marriott", RenamedVendor: "Marriott", AccountCode: "5410", Keywords: []string{"marriott", "courtyard by marriott", "residence inn", "springhill suites"}},
+	{Name: "Hilton", RenamedVendor: "Hilton", AccountCode: "5410", Keywords: []string{"hilton", "hampton inn", "doubletree", "embassy suites", "garden inn"}},
+	{Name: "Hyatt", RenamedVendor: "Hyatt", AccountCode: "5410", Keywords: []string{"hyatt", "hyatt place", "hyatt regency"}},
+	{Name: "Holiday Inn", RenamedVendor: "Holiday Inn", AccountCode: "5410", Keywords: []string{"holiday inn", "ihg hotels", "crowne plaza"}},
+	{Name: "Best Western", RenamedVendor: "Best Western", AccountCode: "5410", Keywords: []string{"best western"}},
+	{Name: "Airbnb", RenamedVendor: "Airbnb", AccountCode: "5410", Keywords: []string{"airbnb", "airbnb inc"}},
+	{Name: "VRBO", RenamedVendor: "VRBO", AccountCode: "5410", Keywords: []string{"vrbo"}},
+
+	// ── 11. Business Insurance (5080 Insurance) ───────────────────────────────
+	{Name: "State Farm Insurance", RenamedVendor: "State Farm", AccountCode: "5080", Keywords: []string{"state farm", "state farm insurance"}},
+	{Name: "Progressive Insurance", RenamedVendor: "Progressive", AccountCode: "5080", Keywords: []string{"progressive ins", "progressive commercial"}},
+	{Name: "GEICO Insurance", RenamedVendor: "GEICO", AccountCode: "5080", Keywords: []string{"geico", "geico insurance"}},
+	{Name: "Travelers Insurance", RenamedVendor: "Travelers", AccountCode: "5080", Keywords: []string{"travelers insurance", "the travelers"}},
+	{Name: "The Hartford", RenamedVendor: "The Hartford", AccountCode: "5080", Keywords: []string{"the hartford", "hartford insurance"}},
+	{Name: "Hiscox Insurance", RenamedVendor: "Hiscox", AccountCode: "5080", Keywords: []string{"hiscox", "hiscox insurance"}},
+	{Name: "Next Insurance", RenamedVendor: "Next Insurance", AccountCode: "5080", Keywords: []string{"next insurance", "next insurance inc"}},
+
+	// ── 12. Meals & Dining (5090 Meals & Entertainment) ───────────────────────
+	// Placed at the end with lower evaluation priority than core business purchases
 	{Name: "McDonald's", RenamedVendor: "McDonald's", AccountCode: "5090", Keywords: []string{"mcdonald", "mcds", "mcd's", "mcdonalds"}},
 	{Name: "Starbucks", RenamedVendor: "Starbucks", AccountCode: "5090", Keywords: []string{"starbucks", "sbux"}},
 	{Name: "Dunkin'", RenamedVendor: "Dunkin'", AccountCode: "5090", Keywords: []string{"dunkin", "dnkn", "dunkin donuts"}},
@@ -153,182 +381,6 @@ var defaultBankRules = []defaultBankRuleEntry{
 	{Name: "Uber Eats", RenamedVendor: "Uber Eats", AccountCode: "5090", Keywords: []string{"uber eats", "ubereats"}},
 	{Name: "Grubhub", RenamedVendor: "Grubhub", AccountCode: "5090", Keywords: []string{"grubhub", "seamless"}},
 	{Name: "Instacart", RenamedVendor: "Instacart", AccountCode: "5090", Keywords: []string{"instacart"}},
-
-	// ── 2. Major Retailers, Supercenters & Wholesale (5060 Supplies / 5050 Office)
-	{Name: "Walmart", RenamedVendor: "Walmart", AccountCode: "5060", Keywords: []string{"wal-mart", "walmart", "wm supercenter", "wmt store", "wmt.com"}},
-	{Name: "Target", RenamedVendor: "Target", AccountCode: "5060", Keywords: []string{"target.com", "target t-", "tgt store", "target corp", "target"}},
-	{Name: "Costco", RenamedVendor: "Costco", AccountCode: "5060", Keywords: []string{"costco whse", "costco wholesale", "costco.com", "costco"}},
-	{Name: "Sam's Club", RenamedVendor: "Sam's Club", AccountCode: "5060", Keywords: []string{"sam's club", "sams club", "samsclub"}},
-	{Name: "BJ's Wholesale Club", RenamedVendor: "BJ's Wholesale Club", AccountCode: "5060", Keywords: []string{"bj's wholesale", "bjs wholesale"}},
-	{Name: "Walgreens", RenamedVendor: "Walgreens", AccountCode: "5060", Keywords: []string{"walgreens", "walgreen"}},
-	{Name: "CVS Pharmacy", RenamedVendor: "CVS", AccountCode: "5060", Keywords: []string{"cvs/pharmacy", "cvs pharmacy", "cvs"}},
-	{Name: "Kroger", RenamedVendor: "Kroger", AccountCode: "5060", Keywords: []string{"kroger"}},
-	{Name: "ALDI", RenamedVendor: "ALDI", AccountCode: "5060", Keywords: []string{"aldi"}},
-	{Name: "Trader Joe's", RenamedVendor: "Trader Joe's", AccountCode: "5060", Keywords: []string{"trader joe's", "trader joes"}},
-	{Name: "Whole Foods", RenamedVendor: "Whole Foods", AccountCode: "5060", Keywords: []string{"whole foods", "wholefoods"}},
-	{Name: "Publix", RenamedVendor: "Publix", AccountCode: "5060", Keywords: []string{"publix"}},
-	{Name: "Dollar General", RenamedVendor: "Dollar General", AccountCode: "5060", Keywords: []string{"dollar general", "dg retail"}},
-	{Name: "Dollar Tree", RenamedVendor: "Dollar Tree", AccountCode: "5060", Keywords: []string{"dollar tree"}},
-	{Name: "Wegmans", RenamedVendor: "Wegmans", AccountCode: "5060", Keywords: []string{"wegmans"}},
-	{Name: "H-E-B", RenamedVendor: "H-E-B", AccountCode: "5060", Keywords: []string{"h-e-b", "heb grocery"}},
-	{Name: "Meijer", RenamedVendor: "Meijer", AccountCode: "5060", Keywords: []string{"meijer"}},
-	{Name: "Amazon", RenamedVendor: "Amazon", AccountCode: "5050", Keywords: []string{"amzn", "amazon.com", "amazon prime", "amazon mktp", "amazon"}},
-	{Name: "Staples", RenamedVendor: "Staples", AccountCode: "5050", Keywords: []string{"staples", "staples.com", "staples direct"}},
-	{Name: "Office Depot", RenamedVendor: "Office Depot", AccountCode: "5050", Keywords: []string{"office depot", "officedepot", "officemax"}},
-	{Name: "Best Buy", RenamedVendor: "Best Buy", AccountCode: "5050", Keywords: []string{"best buy", "bestbuy.com", "bby #"}},
-
-	// ── 3. Home Improvement, Facilities & Maintenance (5040 Repairs & Maintenance)
-	{Name: "The Home Depot", RenamedVendor: "The Home Depot", AccountCode: "5040", Keywords: []string{"home depot", "homedepot", "thd store"}},
-	{Name: "Lowe's", RenamedVendor: "Lowe's", AccountCode: "5040", Keywords: []string{"lowes", "lowe's"}},
-	{Name: "Menards", RenamedVendor: "Menards", AccountCode: "5040", Keywords: []string{"menards"}},
-	{Name: "Ace Hardware", RenamedVendor: "Ace Hardware", AccountCode: "5040", Keywords: []string{"ace hardware", "ace hdwe"}},
-	{Name: "Harbor Freight Tools", RenamedVendor: "Harbor Freight Tools", AccountCode: "5040", Keywords: []string{"harbor freight"}},
-	{Name: "Tractor Supply", RenamedVendor: "Tractor Supply", AccountCode: "5040", Keywords: []string{"tractor supply", "tsc store"}},
-
-	// ── 4. Vehicle Fuel, Auto Maintenance & Fleet (5510 Vehicle & Mileage) ────
-	{Name: "Shell Fuel", RenamedVendor: "Shell", AccountCode: "5510", Keywords: []string{"shell oil", "shell service", "shell food", "shell"}},
-	{Name: "ExxonMobil Fuel", RenamedVendor: "ExxonMobil", AccountCode: "5510", Keywords: []string{"exxon", "mobil", "exxonmobil"}},
-	{Name: "Chevron Fuel", RenamedVendor: "Chevron", AccountCode: "5510", Keywords: []string{"chevron", "texaco"}},
-	{Name: "BP Fuel", RenamedVendor: "BP", AccountCode: "5510", Keywords: []string{"bp gas", "bp oil", "bp connect"}},
-	{Name: "Speedway Fuel", RenamedVendor: "Speedway", AccountCode: "5510", Keywords: []string{"speedway"}},
-	{Name: "Wawa Fuel & Food", RenamedVendor: "Wawa", AccountCode: "5510", Keywords: []string{"wawa", "wawa store"}},
-	{Name: "Sunoco Fuel", RenamedVendor: "Sunoco", AccountCode: "5510", Keywords: []string{"sunoco"}},
-	{Name: "7-Eleven", RenamedVendor: "7-Eleven", AccountCode: "5510", Keywords: []string{"7-eleven", "7 eleven", "seven eleven"}},
-	{Name: "Circle K", RenamedVendor: "Circle K", AccountCode: "5510", Keywords: []string{"circle k"}},
-	{Name: "QuikTrip", RenamedVendor: "QuikTrip", AccountCode: "5510", Keywords: []string{"quiktrip", "qt #"}},
-	{Name: "Love's Travel Stops", RenamedVendor: "Love's Travel Stops", AccountCode: "5510", Keywords: []string{"love's travel", "loves travel"}},
-	{Name: "Pilot Flying J", RenamedVendor: "Pilot Flying J", AccountCode: "5510", Keywords: []string{"pilot flying j", "pilot travel"}},
-	{Name: "Buc-ee's", RenamedVendor: "Buc-ee's", AccountCode: "5510", Keywords: []string{"buc-ee's", "bucees"}},
-	{Name: "Casey's", RenamedVendor: "Casey's", AccountCode: "5510", Keywords: []string{"casey's general", "caseys"}},
-	{Name: "Phillips 66", RenamedVendor: "Phillips 66", AccountCode: "5510", Keywords: []string{"phillips 66", "conoco"}},
-	{Name: "Marathon", RenamedVendor: "Marathon", AccountCode: "5510", Keywords: []string{"marathon petro", "marathon oil"}},
-	{Name: "Valero", RenamedVendor: "Valero", AccountCode: "5510", Keywords: []string{"valero"}},
-	{Name: "AutoZone", RenamedVendor: "AutoZone", AccountCode: "5510", Keywords: []string{"autozone"}},
-	{Name: "O'Reilly Auto Parts", RenamedVendor: "O'Reilly Auto Parts", AccountCode: "5510", Keywords: []string{"o'reilly auto", "oreilly auto"}},
-	{Name: "Advance Auto Parts", RenamedVendor: "Advance Auto Parts", AccountCode: "5510", Keywords: []string{"advance auto parts", "advance auto"}},
-	{Name: "NAPA Auto Parts", RenamedVendor: "NAPA Auto Parts", AccountCode: "5510", Keywords: []string{"napa auto parts", "napa auto"}},
-	{Name: "Valvoline", RenamedVendor: "Valvoline", AccountCode: "5510", Keywords: []string{"valvoline"}},
-	{Name: "Jiffy Lube", RenamedVendor: "Jiffy Lube", AccountCode: "5510", Keywords: []string{"jiffy lube"}},
-
-	// ── 5. Software, Cloud & SaaS Subscriptions (5210 Software & Subscriptions)
-	{Name: "Google Workspace", RenamedVendor: "Google Workspace", AccountCode: "5210", Keywords: []string{"google workspace", "google*workspace", "google cloud", "google*cloud", "google services", "google storage", "gsuite"}},
-	{Name: "Microsoft 365", RenamedVendor: "Microsoft", AccountCode: "5210", Keywords: []string{"microsoft 365", "microsoft*365", "msft azure", "msft*azure", "microsoft store", "msft office", "msft*office"}},
-	{Name: "Adobe Creative Cloud", RenamedVendor: "Adobe", AccountCode: "5210", Keywords: []string{"adobe creative", "adobe*creative", "adobe systems", "adobe inc"}},
-	{Name: "GitHub", RenamedVendor: "GitHub", AccountCode: "5210", Keywords: []string{"github", "github.com"}},
-	{Name: "Slack", RenamedVendor: "Slack", AccountCode: "5210", Keywords: []string{"slack technologies", "slack.com", "slack"}},
-	{Name: "Zoom", RenamedVendor: "Zoom Video Communications", AccountCode: "5210", Keywords: []string{"zoom.us", "zoom video"}},
-	{Name: "Intuit QuickBooks", RenamedVendor: "Intuit QuickBooks", AccountCode: "5210", Keywords: []string{"quickbooks", "quickbooks online", "qbo", "intuit payroll", "intuit"}},
-	{Name: "OpenAI ChatGPT", RenamedVendor: "OpenAI", AccountCode: "5210", Keywords: []string{"openai", "chatgpt subscription", "chatgpt"}},
-	{Name: "Anthropic Claude", RenamedVendor: "Anthropic", AccountCode: "5210", Keywords: []string{"anthropic", "claude.ai"}},
-	{Name: "Amazon Web Services (AWS)", RenamedVendor: "Amazon Web Services (AWS)", AccountCode: "5210", Keywords: []string{"aws.amazon", "amazon web services", "aws cloud"}},
-	{Name: "Apple Services", RenamedVendor: "Apple", AccountCode: "5210", Keywords: []string{"apple.com/bill", "apple store", "apple retail"}},
-	{Name: "Dropbox", RenamedVendor: "Dropbox", AccountCode: "5210", Keywords: []string{"dropbox", "dropbox.com"}},
-	{Name: "Box.com", RenamedVendor: "Box", AccountCode: "5210", Keywords: []string{"box inc", "box.com"}},
-	{Name: "Notion", RenamedVendor: "Notion", AccountCode: "5210", Keywords: []string{"notion labs", "notion.so"}},
-	{Name: "Atlassian", RenamedVendor: "Atlassian", AccountCode: "5210", Keywords: []string{"atlassian", "jira", "confluence", "trello"}},
-	{Name: "Figma", RenamedVendor: "Figma", AccountCode: "5210", Keywords: []string{"figma", "figma.com"}},
-	{Name: "Canva", RenamedVendor: "Canva", AccountCode: "5210", Keywords: []string{"canva", "canva pty"}},
-	{Name: "HubSpot", RenamedVendor: "HubSpot", AccountCode: "5210", Keywords: []string{"hubspot", "hubspot inc"}},
-	{Name: "Salesforce", RenamedVendor: "Salesforce", AccountCode: "5210", Keywords: []string{"salesforce", "salesforce.com"}},
-	{Name: "Mailchimp", RenamedVendor: "Mailchimp", AccountCode: "5210", Keywords: []string{"mailchimp", "the rocket science group"}},
-	{Name: "GoDaddy", RenamedVendor: "GoDaddy", AccountCode: "5210", Keywords: []string{"godaddy", "godaddy.com"}},
-	{Name: "Namecheap", RenamedVendor: "Namecheap", AccountCode: "5210", Keywords: []string{"namecheap", "name-cheap"}},
-	{Name: "Cloudflare", RenamedVendor: "Cloudflare", AccountCode: "5210", Keywords: []string{"cloudflare", "cloudflare inc"}},
-	{Name: "DigitalOcean", RenamedVendor: "DigitalOcean", AccountCode: "5210", Keywords: []string{"digitalocean", "digital ocean"}},
-	{Name: "Heroku", RenamedVendor: "Heroku", AccountCode: "5210", Keywords: []string{"heroku"}},
-	{Name: "Vercel", RenamedVendor: "Vercel", AccountCode: "5210", Keywords: []string{"vercel", "vercel inc"}},
-	{Name: "Netlify", RenamedVendor: "Netlify", AccountCode: "5210", Keywords: []string{"netlify"}},
-	{Name: "1Password", RenamedVendor: "1Password", AccountCode: "5210", Keywords: []string{"1password", "agilebits"}},
-	{Name: "LastPass", RenamedVendor: "LastPass", AccountCode: "5210", Keywords: []string{"lastpass"}},
-	{Name: "DocuSign", RenamedVendor: "DocuSign", AccountCode: "5210", Keywords: []string{"docusign", "docusign inc"}},
-	{Name: "Zendesk", RenamedVendor: "Zendesk", AccountCode: "5210", Keywords: []string{"zendesk"}},
-	{Name: "Shopify", RenamedVendor: "Shopify", AccountCode: "5210", Keywords: []string{"shopify", "shopify fee"}},
-	{Name: "Squarespace", RenamedVendor: "Squarespace", AccountCode: "5210", Keywords: []string{"squarespace"}},
-	{Name: "Wix", RenamedVendor: "Wix", AccountCode: "5210", Keywords: []string{"wix.com", "wixcom"}},
-	{Name: "WordPress", RenamedVendor: "WordPress", AccountCode: "5210", Keywords: []string{"wordpress.com", "automattic"}},
-	{Name: "Loom", RenamedVendor: "Loom", AccountCode: "5210", Keywords: []string{"loom inc", "loom.com"}},
-	{Name: "Grammarly", RenamedVendor: "Grammarly", AccountCode: "5210", Keywords: []string{"grammarly"}},
-
-	// ── 6. Shipping, Packing & Logistics (5050 Office Supplies) ───────────────
-	{Name: "USPS Postage", RenamedVendor: "USPS", AccountCode: "5050", Keywords: []string{"usps", "us postal service", "post office"}},
-	{Name: "FedEx Shipping", RenamedVendor: "FedEx", AccountCode: "5050", Keywords: []string{"fedex", "fedex freight", "federal express"}},
-	{Name: "The UPS Store", RenamedVendor: "The UPS Store", AccountCode: "5050", Keywords: []string{"ups store", "united parcel svc", "the ups store"}},
-	{Name: "DHL Express", RenamedVendor: "DHL Express", AccountCode: "5050", Keywords: []string{"dhl express", "dhl supply"}},
-	{Name: "Stamps.com", RenamedVendor: "Stamps.com", AccountCode: "5050", Keywords: []string{"stamps.com"}},
-	{Name: "Pirate Ship", RenamedVendor: "Pirate Ship", AccountCode: "5050", Keywords: []string{"pirate ship", "pirateship"}},
-	{Name: "ShipStation", RenamedVendor: "ShipStation", AccountCode: "5050", Keywords: []string{"shipstation"}},
-	{Name: "Pitney Bowes", RenamedVendor: "Pitney Bowes", AccountCode: "5050", Keywords: []string{"pitney bowes"}},
-
-	// ── 7. Travel, Airlines, Rideshare & Lodging (5410 Travel) ────────────────
-	{Name: "Uber Rides", RenamedVendor: "Uber", AccountCode: "5410", Keywords: []string{"uber trip", "uber*trip", "uber ride", "uber*ride"}},
-	{Name: "Lyft Rides", RenamedVendor: "Lyft", AccountCode: "5410", Keywords: []string{"lyft ride", "lyft*ride", "lyft trip"}},
-	{Name: "Delta Air Lines", RenamedVendor: "Delta Air Lines", AccountCode: "5410", Keywords: []string{"delta air", "delta.com"}},
-	{Name: "United Airlines", RenamedVendor: "United Airlines", AccountCode: "5410", Keywords: []string{"united air", "united.com"}},
-	{Name: "American Airlines", RenamedVendor: "American Airlines", AccountCode: "5410", Keywords: []string{"american air", "aa.com"}},
-	{Name: "Southwest Airlines", RenamedVendor: "Southwest Airlines", AccountCode: "5410", Keywords: []string{"southwest air", "southwest airlines", "wn air"}},
-	{Name: "JetBlue", RenamedVendor: "JetBlue", AccountCode: "5410", Keywords: []string{"jetblue", "jetblue airways"}},
-	{Name: "Alaska Airlines", RenamedVendor: "Alaska Airlines", AccountCode: "5410", Keywords: []string{"alaska air", "alaska airlines"}},
-	{Name: "Enterprise Rent-A-Car", RenamedVendor: "Enterprise Rent-A-Car", AccountCode: "5410", Keywords: []string{"enterprise rent-a-car", "enterprise rent a car"}},
-	{Name: "Hertz", RenamedVendor: "Hertz", AccountCode: "5410", Keywords: []string{"hertz rent-a-car", "hertz toll", "hertz"}},
-	{Name: "Avis", RenamedVendor: "Avis", AccountCode: "5410", Keywords: []string{"avis rent a car", "avis.com"}},
-	{Name: "Budget Rent A Car", RenamedVendor: "Budget Rent A Car", AccountCode: "5410", Keywords: []string{"budget rent a car", "budget rent-a-car"}},
-	{Name: "National Car Rental", RenamedVendor: "National Car Rental", AccountCode: "5410", Keywords: []string{"national car rental"}},
-	{Name: "Amtrak", RenamedVendor: "Amtrak", AccountCode: "5410", Keywords: []string{"amtrak"}},
-	{Name: "Marriott", RenamedVendor: "Marriott", AccountCode: "5410", Keywords: []string{"marriott", "courtyard by marriott", "residence inn", "springhill suites"}},
-	{Name: "Hilton", RenamedVendor: "Hilton", AccountCode: "5410", Keywords: []string{"hilton", "hampton inn", "doubletree", "embassy suites", "garden inn"}},
-	{Name: "Hyatt", RenamedVendor: "Hyatt", AccountCode: "5410", Keywords: []string{"hyatt", "hyatt place", "hyatt regency"}},
-	{Name: "Holiday Inn", RenamedVendor: "Holiday Inn", AccountCode: "5410", Keywords: []string{"holiday inn", "ihg hotels", "crowne plaza"}},
-	{Name: "Best Western", RenamedVendor: "Best Western", AccountCode: "5410", Keywords: []string{"best western"}},
-	{Name: "Airbnb", RenamedVendor: "Airbnb", AccountCode: "5410", Keywords: []string{"airbnb"}},
-	{Name: "VRBO", RenamedVendor: "VRBO", AccountCode: "5410", Keywords: []string{"vrbo"}},
-
-	// ── 8. Telecom, Internet & Office Utilities (5030 Utilities) ──────────────
-	{Name: "Verizon", RenamedVendor: "Verizon", AccountCode: "5030", Keywords: []string{"verizon wireless", "vzw wireless", "verizon"}},
-	{Name: "AT&T", RenamedVendor: "AT&T", AccountCode: "5030", Keywords: []string{"att wireless", "att*wireless", "at&t", "att bill payment"}},
-	{Name: "T-Mobile", RenamedVendor: "T-Mobile", AccountCode: "5030", Keywords: []string{"t-mobile", "tmobile"}},
-	{Name: "Comcast Xfinity", RenamedVendor: "Comcast Xfinity", AccountCode: "5030", Keywords: []string{"comcast", "xfinity"}},
-	{Name: "Spectrum Internet", RenamedVendor: "Spectrum", AccountCode: "5030", Keywords: []string{"spectrum", "charter comm"}},
-	{Name: "Cox Communications", RenamedVendor: "Cox Communications", AccountCode: "5030", Keywords: []string{"cox comm", "cox cable"}},
-	{Name: "Optimum", RenamedVendor: "Optimum", AccountCode: "5030", Keywords: []string{"optimum", "altice"}},
-	{Name: "CenturyLink", RenamedVendor: "CenturyLink", AccountCode: "5030", Keywords: []string{"centurylink", "lumen tech"}},
-	{Name: "Duke Energy", RenamedVendor: "Duke Energy", AccountCode: "5030", Keywords: []string{"duke energy"}},
-	{Name: "National Grid", RenamedVendor: "National Grid", AccountCode: "5030", Keywords: []string{"national grid"}},
-	{Name: "Con Edison", RenamedVendor: "Con Edison", AccountCode: "5030", Keywords: []string{"con edison", "coned"}},
-	{Name: "PG&E", RenamedVendor: "PG&E", AccountCode: "5030", Keywords: []string{"pacific gas & electric", "pg&e", "pge bill"}},
-	{Name: "Southern California Edison", RenamedVendor: "Southern California Edison", AccountCode: "5030", Keywords: []string{"so cal edison", "sce bill"}},
-	{Name: "Florida Power & Light", RenamedVendor: "Florida Power & Light", AccountCode: "5030", Keywords: []string{"fpl", "florida power light"}},
-	{Name: "Waste Management", RenamedVendor: "Waste Management", AccountCode: "5030", Keywords: []string{"waste management", "wm corporate"}},
-
-	// ── 9. Advertising & Digital Marketing (5310 Advertising) ─────────────────
-	{Name: "Google Ads", RenamedVendor: "Google Ads", AccountCode: "5310", Keywords: []string{"google ads", "google*ads", "google adwords"}},
-	{Name: "Meta Ads", RenamedVendor: "Meta Ads", AccountCode: "5310", Keywords: []string{"fb.me/ads", "facebook ads", "meta platforms"}},
-	{Name: "LinkedIn Marketing", RenamedVendor: "LinkedIn", AccountCode: "5310", Keywords: []string{"linkedin", "linkedin corp"}},
-	{Name: "X Ads", RenamedVendor: "X Ads", AccountCode: "5310", Keywords: []string{"twitter online ads", "x corp ads"}},
-	{Name: "TikTok Ads", RenamedVendor: "TikTok Ads", AccountCode: "5310", Keywords: []string{"tiktok ads", "bytedance"}},
-	{Name: "Yelp Advertising", RenamedVendor: "Yelp Advertising", AccountCode: "5310", Keywords: []string{"yelp inc", "yelp advertise"}},
-	{Name: "Microsoft Advertising", RenamedVendor: "Microsoft Advertising", AccountCode: "5310", Keywords: []string{"msft bing ads", "bing ads"}},
-	{Name: "Pinterest Ads", RenamedVendor: "Pinterest Ads", AccountCode: "5310", Keywords: []string{"pinterest ads"}},
-
-	// ── 10. Payroll, Legal & Professional Services (5020 Payroll / 5110 Legal) 
-	{Name: "Gusto Payroll", RenamedVendor: "Gusto", AccountCode: "5020", Keywords: []string{"gusto", "gusto payroll"}},
-	{Name: "ADP Payroll", RenamedVendor: "ADP", AccountCode: "5020", Keywords: []string{"adp payroll", "adp direct deposit", "adp tax"}},
-	{Name: "Paychex", RenamedVendor: "Paychex", AccountCode: "5020", Keywords: []string{"paychex"}},
-	{Name: "LegalZoom", RenamedVendor: "LegalZoom", AccountCode: "5110", Keywords: []string{"legalzoom", "legal zoom"}},
-	{Name: "Rocket Lawyer", RenamedVendor: "Rocket Lawyer", AccountCode: "5110", Keywords: []string{"rocket lawyer"}},
-
-	// ── 11. Payment Processing & Merchant Fees (5810 Merchant & Processing Fees)
-	{Name: "Stripe Fees", RenamedVendor: "Stripe", AccountCode: "5810", Keywords: []string{"stripe fee", "stripe payments", "stripe payout"}},
-	{Name: "Square Processing Fees", RenamedVendor: "Square", AccountCode: "5810", Keywords: []string{"squareup", "square inc fee", "square fee", "sq *"}},
-	{Name: "PayPal Processing Fees", RenamedVendor: "PayPal", AccountCode: "5810", Keywords: []string{"paypal fee", "paypal partner"}},
-	{Name: "Authorize.Net", RenamedVendor: "Authorize.Net", AccountCode: "5810", Keywords: []string{"authorize.net", "authnet"}},
-	{Name: "Clover", RenamedVendor: "Clover", AccountCode: "5810", Keywords: []string{"clover network", "clover"}},
-	{Name: "Toast", RenamedVendor: "Toast", AccountCode: "5810", Keywords: []string{"toast tab", "toast inc"}},
-	{Name: "Chase Paymentech", RenamedVendor: "Chase Paymentech", AccountCode: "5810", Keywords: []string{"chase paymentech", "chase merchant"}},
-
-	// ── 12. Bank Service Charges & Fees (5910 Bank Fees) ──────────────────────
-	{Name: "Bank of America Service Fee", RenamedVendor: "Bank of America", AccountCode: "5910", Keywords: []string{"bofa wire fee", "boa monthly fee", "bofa fee"}},
-	{Name: "Wells Fargo Service Fee", RenamedVendor: "Wells Fargo", AccountCode: "5910", Keywords: []string{"wells fargo fee", "wf monthly service"}},
-	{Name: "JPMorgan Chase Fee", RenamedVendor: "JPMorgan Chase", AccountCode: "5910", Keywords: []string{"chase service fee", "jpmorgan chase fee"}},
 }
 
 // SeedDefaultBankRules inserts default automated bank categorization rules if not already present.
@@ -336,6 +388,10 @@ func SeedDefaultBankRules() {
 	if DB == nil {
 		return
 	}
+
+	// 1. Clean up legacy duplicate if present
+	DB.Where("name = ?", "McDonalds Fast Food").Delete(&models.BankRule{})
+
 	var accounts []models.ChartAccount
 	if err := DB.Find(&accounts).Error; err != nil {
 		log.Printf("⚠️ SeedDefaultBankRules: failed to load accounts: %v\n", err)
@@ -349,11 +405,6 @@ func SeedDefaultBankRules() {
 
 	seeded := 0
 	for idx, entry := range defaultBankRules {
-		var existing models.BankRule
-		if err := DB.Where("name = ?", entry.Name).First(&existing).Error; err == nil {
-			continue // Already seeded
-		}
-
 		targetAccountID, ok := codeToID[entry.AccountCode]
 		var catIDPtr *uint
 		if ok {
@@ -374,9 +425,17 @@ func SeedDefaultBankRules() {
 			continue
 		}
 
+		priority := (idx + 1) * 10
+
+		var existing models.BankRule
+		if err := DB.Where("name = ?", entry.Name).First(&existing).Error; err == nil {
+			// Preserve user customizations on existing rules across restarts.
+			continue
+		}
+
 		rule := models.BankRule{
 			Name:              entry.Name,
-			Priority:          (idx + 1) * 10,
+			Priority:          priority,
 			Active:            true,
 			MatchLogic:        "OR",
 			ConditionsJSON:    string(condsJSON),
@@ -393,6 +452,6 @@ func SeedDefaultBankRules() {
 	}
 
 	if seeded > 0 {
-		log.Printf("Seeded %d default bank categorization rules.\n", seeded)
+		log.Printf("Seeded %d new default rules.\n", seeded)
 	}
 }

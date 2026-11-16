@@ -7,19 +7,19 @@ export type DetailDrawerType = "transaction" | "receipt" | "invoice";
 export type LinkTargetMode = "tx" | "expense" | "invoice";
 
 export interface ActionTarget {
-  type: "transaction" | "expense";
+  type: "transaction" | "expense" | "invoice";
   id: number;
   linkedChoice?: "ONLY_THIS" | "ALL_LINKED";
 }
 
 export interface ActionChoiceState {
   action: "EXCLUDE" | "IGNORE";
-  targetType: "transaction" | "expense";
+  targetType: "transaction" | "expense" | "invoice";
   targetId: number;
 }
 
 export interface AllowConfirmState {
-  type: "transaction" | "expense";
+  type: "transaction" | "expense" | "invoice";
   id: number;
   date: string;
 }

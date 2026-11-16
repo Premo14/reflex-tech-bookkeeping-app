@@ -22,8 +22,14 @@ var (
 	stopWatcherChan chan struct{}
 
 	// inFlight tracks files currently being processed to prevent concurrent processing
-	inFlight    = make(map[string]bool)
-	inFlightMu  sync.Mutex
+	inFlight   = make(map[string]bool)
+	inFlightMu sync.Mutex
+
+	// fileStabilityInterval pauses briefly between consecutive Stat calls to detect ongoing writes.
+	fileStabilityInterval = 75 * time.Millisecond
+
+	// ocrWorkerSem bounds concurrent background OCR/PDF extractions spawned by watcher debounces.
+	ocrWorkerSem = make(chan struct{}, 2)
 )
 
 // isIgnoredFile returns true if the file is a Syncthing temporary, metadata, or OS junk file.
@@ -55,7 +61,7 @@ func isIgnoredFile(filename string) bool {
 	return false
 }
 
-// isFileStable checks that a file is non-zero, has a consistent size across two rapid checks,
+// isFileStable checks that a file is non-zero, has a consistent size across two spaced checks,
 // and can be opened without error — indicating the writer has finished.
 func isFileStable(path string) bool {
 	fi, err := os.Stat(path)
@@ -63,7 +69,10 @@ func isFileStable(path string) bool {
 		return false
 	}
 	size := fi.Size()
-	// Second check — size must still match
+	if fileStabilityInterval > 0 {
+		time.Sleep(fileStabilityInterval)
+	}
+	// Second check — size must still match after pause
 	fi2, err2 := os.Stat(path)
 	if err2 != nil || fi2.Size() != size {
 		return false
@@ -95,58 +104,69 @@ func releaseInFlight(filePath string) {
 	delete(inFlight, filePath)
 }
 
+// clearPendingTimers cancels and clears all pending debounce timers cleanly.
+func clearPendingTimers() {
+	mu.Lock()
+	defer mu.Unlock()
+	for path, t := range timers {
+		t.Stop()
+		delete(timers, path)
+	}
+}
+
 // debounceEvent delays processing until a file is fully written to disk.
-// it resets the timer on every write event and uses file stability checks.
+// it resets the timer on every write event, uses spaced stability checks,
+// and dispatches OCR work to a bounded semaphore without blocking timer callbacks.
 func debounceEvent(filePath string, delay time.Duration) {
 	mu.Lock()
-	// If there is already a timer running for this file, stop it
+	defer mu.Unlock()
 	if t, exists := timers[filePath]; exists {
 		t.Stop()
 	}
 
-	// Create a new timer that will fire after the delay
-	timers[filePath] = time.AfterFunc(delay, func() {
-		// Verify file is stable before processing
+	var timer *time.Timer
+	timer = time.AfterFunc(delay, func() {
+		mu.Lock()
+		if timers[filePath] == timer {
+			delete(timers, filePath)
+		}
+		mu.Unlock()
+
+		// Verify file is stable before dispatching OCR work
 		if !isFileStable(filePath) {
 			log.Printf("⚠️ File '%s' is not stable (may still be writing), skipping.\n", filePath)
-			mu.Lock()
-			delete(timers, filePath)
-			mu.Unlock()
 			return
 		}
 
 		// Acquire in-flight lock to prevent concurrent processing
 		if !acquireInFlight(filePath) {
 			log.Printf("⚠️ File '%s' already in-flight, skipping duplicate.\n", filePath)
-			mu.Lock()
-			delete(timers, filePath)
-			mu.Unlock()
 			return
 		}
-		defer releaseInFlight(filePath)
 
-		if err := processFile(filePath); err != nil {
-			log.Println("Error processing file:", err)
-		} else {
-			events.Broadcast("TRANSACTIONS_UPDATED", nil)
-			events.Broadcast("EXPENSES_UPDATED", nil)
-			events.Broadcast("QUEUE_UPDATED", nil)
-			events.Broadcast("ACCOUNTS_UPDATED", nil)
-		}
+		go func() {
+			ocrWorkerSem <- struct{}{}
+			defer func() {
+				<-ocrWorkerSem
+				releaseInFlight(filePath)
+			}()
 
-		// Release the debounce lock before deleting the timer entry
-		// to avoid holding the lock during I/O-heavy operations.
-		mu.Lock()
-		delete(timers, filePath)
-		mu.Unlock()
+			if err := processFile(filePath); err != nil {
+				log.Println("Error processing file:", err)
+			} else {
+				events.Broadcast("TRANSACTIONS_UPDATED", nil)
+				events.Broadcast("EXPENSES_UPDATED", nil)
+				events.Broadcast("QUEUE_UPDATED", nil)
+				events.Broadcast("ACCOUNTS_UPDATED", nil)
+			}
+		}()
 	})
-	mu.Unlock()
+	timers[filePath] = timer
 }
 
-// runWatcherLoop listens for events until stopCh is closed or watcher is closed.
-// It also runs a periodic fallback sweep (every 30s) to handle missed inotify events
-// from Docker bind-mounts, Syncthing, and host OS drops.
-func runWatcherLoop(w *fsnotify.Watcher, stopCh chan struct{}) {
+// runWatcherChannels listens on fsnotify event/error channels until stopCh closes or a channel closes.
+// It also runs a periodic fallback sweep (every 30s) to handle missed inotify events.
+func runWatcherChannels(eventsCh <-chan fsnotify.Event, errsCh <-chan error, stopCh <-chan struct{}) {
 	// Start periodic fallback sweep for Docker bind-mount reliability
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -157,7 +177,7 @@ func runWatcherLoop(w *fsnotify.Watcher, stopCh chan struct{}) {
 			log.Println("Stopping watcher loop for previous directory.")
 			return
 
-		case event, ok := <-w.Events:
+		case event, ok := <-eventsCh:
 			if !ok {
 				return
 			}
@@ -171,7 +191,7 @@ func runWatcherLoop(w *fsnotify.Watcher, stopCh chan struct{}) {
 				}
 			}
 
-		case err, ok := <-w.Errors:
+		case err, ok := <-errsCh:
 			if !ok {
 				return
 			}
@@ -187,10 +207,17 @@ func runWatcherLoop(w *fsnotify.Watcher, stopCh chan struct{}) {
 	}
 }
 
+// runWatcherLoop wraps runWatcherChannels for an active *fsnotify.Watcher.
+func runWatcherLoop(w *fsnotify.Watcher, stopCh chan struct{}) {
+	runWatcherChannels(w.Events, w.Errors, stopCh)
+}
+
 // RestartWatcher dynamically stops any active watcher and binds to the current constants.GetInboxPath().
 func RestartWatcher() error {
 	watcherLock.Lock()
 	defer watcherLock.Unlock()
+
+	clearPendingTimers()
 
 	// Stop existing watcher if one is running
 	if activeWatcher != nil {
@@ -223,7 +250,7 @@ func RestartWatcher() error {
 	}
 
 	stopCh := stopWatcherChan
-	go runWatcherLoop(w, stopCh)
+	go runWatcherChannels(w.Events, w.Errors, stopCh)
 
 	log.Printf("File watcher active on inbox: %s (Host: %s)\n", inboxPath, constants.GetCurrentHostPath())
 

@@ -11,7 +11,14 @@ import (
 	"gorm.io/gorm"
 )
 
-var DB *gorm.DB
+var (
+	DB *gorm.DB
+
+	openGormDB = func(dsn string) (*gorm.DB, error) {
+		return gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	}
+	fatalConnect = log.Fatal
+)
 
 func Connect() {
 	var err error
@@ -43,9 +50,10 @@ func Connect() {
 
 	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=UTC", dbHost, dbUser, dbPass, dbName, dbPort)
 
-	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	DB, err = openGormDB(dsn)
 	if err != nil {
-		log.Fatal("Failed to connect to database.", err)
+		fatalConnect("Failed to connect to database.", err)
+		return
 	}
 
 	InitSchemaAndSeed(DB)
@@ -98,18 +106,23 @@ func InitSchemaAndSeed(database *gorm.DB) {
 		WHERE category_account_id IS NULL
 		AND chart_account_id IN (SELECT id FROM chart_accounts WHERE type IN ('REVENUE', 'EXPENSE'))`)
 
-	// Migration: clean up any items erroneously marked PENDING that do not fall in a closed period.
+	// Migration: clean up any items erroneously marked PENDING that do not fall in a closed period,
+	// while preserving open-period receipts flagged for missing amount/date or manual OCR review.
+	const openExpenseWarningClause = "review_status = 'PENDING' AND COALESCE(description, '') NOT LIKE '%[MISSING AMOUNT%' AND COALESCE(description, '') NOT LIKE '%[MISSING DATE%' AND COALESCE(description, '') NOT LIKE '%AI extraction unavailable%'"
 	var closedSetting models.AppSetting
 	if err := DB.Where("key = ?", "BooksClosedDate").First(&closedSetting).Error; err == nil && closedSetting.Value != "" {
 		if closedDate, err := time.Parse("2006-01-02", closedSetting.Value); err == nil {
 			endOfClosedDay := closedDate.Add(24 * time.Hour)
 			DB.Exec(`UPDATE bank_transactions SET review_status = 'APPROVED' WHERE review_status = 'PENDING' AND date >= ?`, endOfClosedDay)
-			DB.Exec(`UPDATE expenses SET review_status = 'APPROVED' WHERE review_status = 'PENDING' AND timestamp >= ?`, endOfClosedDay)
+			DB.Exec(`UPDATE expenses SET review_status = 'APPROVED' WHERE `+openExpenseWarningClause+` AND timestamp >= ?`, endOfClosedDay)
+			DB.Exec(`UPDATE invoices SET review_status = 'APPROVED' WHERE review_status = 'PENDING' AND issue_date >= ?`, endOfClosedDay)
 		}
 	} else {
 		DB.Exec(`UPDATE bank_transactions SET review_status = 'APPROVED' WHERE review_status = 'PENDING'`)
-		DB.Exec(`UPDATE expenses SET review_status = 'APPROVED' WHERE review_status = 'PENDING'`)
+		DB.Exec(`UPDATE expenses SET review_status = 'APPROVED' WHERE ` + openExpenseWarningClause)
+		DB.Exec(`UPDATE invoices SET review_status = 'APPROVED' WHERE review_status = 'PENDING'`)
 	}
+	DB.Exec(`UPDATE invoices SET review_status = 'APPROVED' WHERE review_status IS NULL OR review_status = ''`)
 
 	// Migration: rename reconciliation_status column to allocation_status and migrate status values
 	if isPostgres {
@@ -132,12 +145,14 @@ func InitSchemaAndSeed(database *gorm.DB) {
 	DB.Exec(`UPDATE expenses SET allocation_status = 'UNLINKED' WHERE allocation_status LIKE 'UNM%'`)
 	DB.Exec(`UPDATE expenses SET allocation_status = 'PARTIALLY_ALLOCATED' WHERE allocation_status LIKE 'PARTIAL%M%' OR allocation_status = 'PARTIALLY_LINKED'`)
 
-	// Migration: tender is compared case-sensitively against "cash" throughout the backend, but
-	// the UI and AI extraction used to write upper-case values (e.g. "CASH"). Normalize all stored
-	// values to lower-case, then repair cash expenses that were left flagged as UNLINKED.
+	// Migration: canonicalize tender casing & repair cash expenses that were left UNLINKED
+	// (unless flagged with missing-field warnings requiring review).
 	DB.Exec(`UPDATE expenses SET tender = LOWER(TRIM(tender)) WHERE tender IS NOT NULL AND tender != LOWER(TRIM(tender))`)
 	DB.Exec(`UPDATE expenses SET allocation_status = 'BALANCED'
-		WHERE tender = 'cash' AND (allocation_status IS NULL OR allocation_status = 'UNLINKED')
+		WHERE LOWER(TRIM(tender)) IN ('cash', 'cash / paper', 'cash/paper', 'currency', 'paper')
+		AND (allocation_status IS NULL OR allocation_status = 'UNLINKED')
+		AND COALESCE(description, '') NOT LIKE '%[MISSING AMOUNT%'
+		AND COALESCE(description, '') NOT LIKE '%[MISSING DATE%'
 		AND id NOT IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed')`)
 
 	// Migration: clean up any expenses erroneously categorized to non-EXPENSE accounts (e.g. 1xxx Asset accounts)
@@ -251,13 +266,13 @@ func InitSchemaAndSeed(database *gorm.DB) {
 		WHERE (ofx_account_id IS NULL OR ofx_account_id = '')
 		AND EXISTS (SELECT 1 FROM bank_statements bs WHERE bs.chart_account_id = chart_accounts.id)`)
 
-	// Set OFX ID description on adopted statement accounts
+	// Set OFX ID description only on adopted legacy statement accounts matching those exact IDs
 	DB.Exec(`UPDATE chart_accounts
 		SET description = 'OFX ID: 5137'
-		WHERE code = '2020' AND (description = '5137' OR description = 'Business credit card')`)
+		WHERE code = '2020' AND (description = '5137' OR ofx_account_id = '5137')`)
 	DB.Exec(`UPDATE chart_accounts
 		SET description = 'OFX ID: 50106954S:05'
-		WHERE code = '1010' AND (description = '50106954S:05' OR description = 'Business checking account')`)
+		WHERE code = '1010' AND (description = '50106954S:05' OR ofx_account_id = '50106954S:05')`)
 
 	// Migration: Backfill default Schedule C tax line mappings on standard accounts if empty
 	defaultScheduleCMapping := map[string]string{

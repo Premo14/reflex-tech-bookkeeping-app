@@ -33,7 +33,11 @@ export function VendorSpendTab({ report, isLoading }: VendorSpendTabProps) {
           <p className="text-sm">Aggregating vendor spend and payee concentration...</p>
         </div>
       ) : report ? (
-        <div className="space-y-4">
+        <div
+          className={`space-y-4 transition-opacity duration-200 ${
+            isLoading ? "opacity-50 pointer-events-none" : ""
+          }`}
+        >
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
             <div className="surface-glass border border-white/10 rounded-xl p-3 sm:p-3.5">
               <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
@@ -80,13 +84,13 @@ export function VendorSpendTab({ report, isLoading }: VendorSpendTabProps) {
               </span>
               <p
                 className="text-sm font-black text-white break-words line-clamp-1 leading-tight mt-1"
-                title={report.vendors[0]?.vendorName}
+                title={(report.vendors ?? [])[0]?.vendorName}
               >
-                {report.vendors[0]?.vendorName || "None"}
+                {(report.vendors ?? [])[0]?.vendorName || "None"}
               </p>
               <span className="text-[10px] text-purple-300/80 font-mono tabular-nums">
-                {report.vendors[0]
-                  ? `${formatCurrency(report.vendors[0].totalSpend)} (${report.vendors[0].percentOfTotal.toFixed(1)}%)`
+                {(report.vendors ?? [])[0]
+                  ? `${formatCurrency((report.vendors ?? [])[0].totalSpend)} (${(report.vendors ?? [])[0].percentOfTotal.toFixed(1)}%)`
                   : "No spend recorded"}
               </span>
             </div>
@@ -101,11 +105,11 @@ export function VendorSpendTab({ report, isLoading }: VendorSpendTabProps) {
                 </p>
               </div>
               <span className="text-[11px] font-mono tabular-nums text-zinc-400">
-                {report.vendors.length} payees
+                {(report.vendors ?? []).length} payees
               </span>
             </div>
 
-            {report.vendors.length === 0 ? (
+            {(report.vendors ?? []).length === 0 ? (
               <div className="py-6 text-center text-zinc-400 text-xs">
                 No vendor expenses found in this date range.
               </div>
@@ -124,7 +128,7 @@ export function VendorSpendTab({ report, isLoading }: VendorSpendTabProps) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5 whitespace-nowrap">
-                    {report.vendors.map((v, idx) => (
+                    {(report.vendors ?? []).map((v, idx) => (
                       <tr key={v.vendorName} className="hover:bg-white/5 transition-colors">
                         <td className="py-1.5 px-2.5 text-center font-mono tabular-nums">
                           {idx === 0 && (
@@ -175,9 +179,9 @@ export function VendorSpendTab({ report, isLoading }: VendorSpendTabProps) {
                           {formatCurrency(v.averageSpend)}
                         </td>
                         <td className="py-1.5 px-2.5">
-                          <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[10px] font-medium border border-white/5">
+                          <Badge variant="neutral" size="sm">
                             {v.primaryCategoryName || "Uncategorized"}
-                          </span>
+                          </Badge>
                         </td>
                       </tr>
                     ))}

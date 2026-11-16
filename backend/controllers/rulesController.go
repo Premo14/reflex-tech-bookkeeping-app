@@ -47,7 +47,8 @@ func GetRule(c fiber.Ctx) error {
 
 func validateRuleConditions(conditions []models.RuleCondition) error {
 	for _, c := range conditions {
-		if c.Operator == "regex" {
+		op := strings.ToLower(strings.TrimSpace(c.Operator))
+		if op == "regex" || op == "matches" {
 			if strings.TrimSpace(c.Value) == "" {
 				return fmt.Errorf("regex pattern cannot be empty")
 			}
@@ -72,10 +73,12 @@ func validateActiveRuleCategory(categoryAccountID *uint) (*uint, error) {
 	return catID, nil
 }
 
-// broadcastRuleAppliedUpdates notifies connected clients when rule execution modifies transactions.
+// broadcastRuleAppliedUpdates notifies connected clients when rule execution modifies transactions or expenses.
 func broadcastRuleAppliedUpdates(appliedCount int) {
 	if appliedCount > 0 {
 		events.Broadcast("TRANSACTIONS_UPDATED", nil)
+		events.Broadcast("EXPENSES_UPDATED", nil)
+		events.Broadcast("RECONCILIATION_UPDATED", nil)
 		events.Broadcast("SUMMARY_UPDATED", nil)
 		events.Broadcast("QUEUE_UPDATED", nil)
 	}
@@ -423,23 +426,60 @@ func GetRuleSuggestions(c fiber.Ctx) error {
 		FROM bank_transactions
 		WHERE category_account_id IS NOT NULL 
 		  AND COALESCE(review_status, '') NOT IN ('DELETED', 'IGNORED')
+		  AND TRIM(description) != ''
 		GROUP BY category_account_id, LOWER(TRIM(description))
 		HAVING COUNT(*) >= 2
 		ORDER BY count DESC
-		LIMIT 10
+		LIMIT 50
 	`).Scan(&candidates)
+
+	var expCandidates []candidateRow
+	db.DB.Raw(`
+		SELECT chart_account_id as category_account_id, COUNT(*) as count, MIN(vendor) as sample_desc
+		FROM expenses
+		WHERE chart_account_id IS NOT NULL 
+		  AND COALESCE(review_status, '') NOT IN ('DELETED', 'IGNORED')
+		  AND TRIM(vendor) != ''
+		GROUP BY chart_account_id, LOWER(TRIM(vendor))
+		HAVING COUNT(*) >= 2
+		ORDER BY count DESC
+		LIMIT 50
+	`).Scan(&expCandidates)
+
+	// Combine candidates by (category_account_id, normalized payee/description) so identical payees
+	// mapped to different categories remain distinct suggestions.
+	combinedMap := make(map[string]candidateRow)
+	for _, cand := range candidates {
+		key := fmt.Sprintf("%d|%s", cand.CategoryAccountID, strings.ToLower(strings.TrimSpace(cand.SampleDesc)))
+		combinedMap[key] = cand
+	}
+	for _, cand := range expCandidates {
+		key := fmt.Sprintf("%d|%s", cand.CategoryAccountID, strings.ToLower(strings.TrimSpace(cand.SampleDesc)))
+		if existing, ok := combinedMap[key]; ok {
+			existing.Count += cand.Count
+			combinedMap[key] = existing
+		} else {
+			combinedMap[key] = cand
+		}
+	}
+
+	var mergedCandidates []candidateRow
+	for _, cand := range combinedMap {
+		mergedCandidates = append(mergedCandidates, cand)
+	}
 
 	// Fetch existing active rules to filter out already-automated descriptions
 	var activeRules []models.BankRule
 	db.DB.Where("active = ?", true).Find(&activeRules)
 
 	var suggestions []fiber.Map
-	for _, cand := range candidates {
+	for _, cand := range mergedCandidates {
 		// Check if any rule already matches this sample description
 		alreadyCovered := false
 		dummyTx := models.BankTransaction{Description: cand.SampleDesc}
+		dummyExp := models.Expense{Vendor: cand.SampleDesc, Description: cand.SampleDesc}
 		for _, rule := range activeRules {
-			if utils.EvaluateRule(rule, dummyTx) {
+			if utils.EvaluateRule(rule, dummyTx) || utils.EvaluateRuleForExpense(rule, dummyExp) {
 				alreadyCovered = true
 				break
 			}

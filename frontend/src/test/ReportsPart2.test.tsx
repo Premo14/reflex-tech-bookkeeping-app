@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 import ReportsModal from "@/components/ReportsModal";
+import { ConfirmationProvider } from "@/components/ui/ConfirmDialog";
 import type {
   ARAgingReport,
   CashFlowReport,
@@ -26,6 +27,20 @@ vi.mock("@/services/api", () => ({
   getTrialBalanceExportUrl: vi.fn(({ startDate, endDate }: { startDate: string; endDate: string }) =>
     `/api/reports/trial-balance/export?start=${startDate}&end=${endDate}`
   ),
+  getChartAccounts: vi.fn().mockResolvedValue([]),
+  getSettings: vi.fn().mockResolvedValue({}),
+  getInvoice: vi.fn().mockResolvedValue({
+    id: 101,
+    invoiceNumber: "INV-101",
+    clientName: "Client",
+    totalAmount: 4750,
+    balanceDue: 4750,
+    status: "SENT",
+    issueDate: "2026-01-01",
+    dueDate: "2026-02-01",
+  }),
+  getInvoiceCandidates: vi.fn().mockResolvedValue([]),
+  getInvoices: vi.fn().mockResolvedValue({ invoices: [], summary: { totalOutstanding: 0, currentAmount: 0, overdueAmount: 0, openCount: 0, overdueCount: 0 } }),
 }));
 
 const mockedApi = vi.mocked(api);
@@ -313,7 +328,12 @@ describe("ReportsModal Part 2 (A/R Aging, Schedule C, Trial Balance)", () => {
         })
     );
 
-    render(<ReportsModal onClose={vi.fn()} initialTab="ar_aging" onOpenInvoiceDetail={onOpenInvoiceDetail} />);
+    const onClose = vi.fn();
+    render(
+      <ConfirmationProvider>
+        <ReportsModal onClose={onClose} initialTab="ar_aging" onOpenInvoiceDetail={onOpenInvoiceDetail} />
+      </ConfirmationProvider>
+    );
 
     expect(await screen.findByText("Calculating A/R aging buckets and invoice statuses...")).toBeInTheDocument();
     resolveAR(SAMPLE_AR_AGING);
@@ -327,21 +347,28 @@ describe("ReportsModal Part 2 (A/R Aging, Schedule C, Trial Balance)", () => {
     expect(screen.getByText("61d overdue")).toBeInTheDocument();
     expect(screen.getByText("Client Receivables Concentration")).toBeInTheDocument();
 
-    // Open invoice detail callback from View button
+    // Open invoice detail from View button & verify detail drawer opens without destroying reports modal
     const viewButtons = screen.getAllByRole("button", { name: "View" });
     await user.click(viewButtons[0]);
-    expect(onOpenInvoiceDetail).toHaveBeenCalledWith(101);
+    expect(await screen.findByRole("heading", { name: /Invoice #/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Close detail drawer" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: /Invoice #/i })).not.toBeInTheDocument();
+    });
+    expect(onClose).not.toHaveBeenCalled();
 
     // Export CSV & Print
     await user.click(screen.getByRole("button", { name: "Export CSV" }));
     expect(anchorClickSpy).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: "Print" }));
+    await user.click(screen.getByRole("button", { name: "Print / PDF" }));
     expect(printSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("report-print-document")).toBeInTheDocument();
 
-    // Change As-Of Date & DSO window then Recalculate
+    // Change As-Of Date & DSO window (using canonical Select primitive) then Recalculate
     const asOfInput = screen.getByLabelText("Aging As Of Date");
     fireEvent.change(asOfInput, { target: { value: "2025-07-15" } });
-    await user.selectOptions(screen.getByLabelText("DSO Window (Days)"), "365");
+    await user.click(screen.getByLabelText("DSO Window (Days)"));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: "365" }));
 
     mockedApi.getARAgingReport.mockResolvedValueOnce({
       ...SAMPLE_AR_AGING,
@@ -417,12 +444,14 @@ describe("ReportsModal Part 2 (A/R Aging, Schedule C, Trial Balance)", () => {
     // Solopreneur Mileage Calculator: 1000 miles at 2024 rate ($0.67 = $670 vs actual $1800 -> Actual better)
     const milesInput = screen.getByLabelText("Annual Business Miles");
     await user.type(milesInput, "1000");
-    await user.selectOptions(screen.getByLabelText("Tax Rate Year"), "2024");
+    await user.click(screen.getByLabelText("Tax Rate Year"));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: /2024/ }));
     expect(screen.getByText("$0.67 / mile (2024)")).toBeInTheDocument();
     expect(screen.getByText("-$1,130.00 (Actual better)")).toBeInTheDocument();
 
     // Increase to 5000 miles at 2026 rate ($0.70 = $3500 vs actual $1800 -> +$1,700.00 Mileage better)
-    await user.selectOptions(screen.getByLabelText("Tax Rate Year"), "2026");
+    await user.click(screen.getByLabelText("Tax Rate Year"));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: /2026/ }));
     await user.clear(milesInput);
     await user.type(milesInput, "5000");
     expect(screen.getByText("+$1,700.00 (Mileage better)")).toBeInTheDocument();
@@ -433,8 +462,9 @@ describe("ReportsModal Part 2 (A/R Aging, Schedule C, Trial Balance)", () => {
     expect(screen.getByText("$1,500.00")).toBeInTheDocument();
     expect(screen.getByText(/Potential Additional Tax Write-Offs: \$3,200\.00/i)).toBeInTheDocument();
 
-    // Change header Tax Year to 2024 -> Tax Pack uses 2024-01-01..2024-12-31, NOT 2026-01-01
-    await user.selectOptions(screen.getByLabelText("Tax Year:"), "2024");
+    // Change Schedule C Tax Year to 2024 -> Tax Pack uses 2024-01-01..2024-12-31, NOT 2026-01-01
+    await user.click(screen.getByLabelText("Tax Year:"));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: /2024/ }));
     await waitFor(() => {
       expect(mockedApi.getScheduleCReport).toHaveBeenLastCalledWith({
         year: 2024,
@@ -494,10 +524,11 @@ describe("ReportsModal Part 2 (A/R Aging, Schedule C, Trial Balance)", () => {
       screen.getByText('No ledger activity found for account type "LIABILITY".')
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /^ALL\b/i }));
+    await user.click(screen.getByRole("button", { name: /^ALL\s+\d+/ }));
 
-    // Export Trial Balance CSV via both top toolbar and banner button
+    // Export Trial Balance CSV via single canonical toolbar button (no duplicate button in banner)
     const csvButtons = screen.getAllByRole("button", { name: "Export CSV" });
+    expect(csvButtons).toHaveLength(1);
     await user.click(csvButtons[0]);
     expect(openSpy).toHaveBeenCalledWith(expect.stringContaining("/api/reports/trial-balance/export"), "_blank");
 
@@ -512,20 +543,40 @@ describe("ReportsModal Part 2 (A/R Aging, Schedule C, Trial Balance)", () => {
     expect(await screen.findByText("General Ledger Out of Balance Warning")).toBeInTheDocument();
     expect(screen.getAllByText("$12.50").length).toBeGreaterThanOrEqual(2);
 
-    // Switch through remaining tabs and test Update Report + tab switching
+    // Switch through remaining tabs and test Update Report + tab switching + custom print document
+    const printSpy = vi.spyOn(window, "print").mockImplementation(() => {});
+    await user.click(screen.getByRole("button", { name: "Print / PDF" }));
+    expect(screen.getByTestId("report-print-document")).toHaveTextContent("General Ledger Trial Balance");
+
     await user.click(screen.getByRole("tab", { name: /Profit & Loss/i }));
     expect(await screen.findByText("Consulting Revenue")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Update Report" }));
+    await user.click(screen.getByRole("button", { name: "Print / PDF" }));
+    expect(screen.getByTestId("report-print-document")).toHaveTextContent("Profit & Loss Statement (Income Statement)");
 
     await user.click(screen.getByRole("tab", { name: /Cash Flow/i }));
     await user.click(screen.getByRole("button", { name: "Update Report" }));
+    await user.click(screen.getByRole("button", { name: "Print / PDF" }));
+    expect(screen.getByTestId("report-print-document")).toHaveTextContent("Cash Flow Summary Report");
 
     await user.click(screen.getByRole("tab", { name: /Vendor Spend/i }));
     await user.click(screen.getByRole("button", { name: "Update Report" }));
+    await user.click(screen.getByRole("button", { name: "Print / PDF" }));
+    expect(screen.getByTestId("report-print-document")).toHaveTextContent("Vendor Spend & 1099-NEC Analytics Report");
 
     await user.click(screen.getByRole("tab", { name: /A\/R Aging/i }));
     await user.click(screen.getByRole("tab", { name: /Schedule C/i }));
+    act(() => {
+      window.dispatchEvent(new Event("beforeprint"));
+    });
+    expect(screen.getByTestId("report-print-document")).toHaveTextContent("IRS Form 1040 Schedule C");
+    act(() => {
+      window.dispatchEvent(new Event("afterprint"));
+    });
+    expect(screen.queryByTestId("report-print-document")).not.toBeInTheDocument();
+
     await user.click(screen.getByRole("tab", { name: /Trial Balance/i }));
+    printSpy.mockRestore();
   });
 
   it("handles API errors gracefully and cancels/clears reset timers on close and reopen", async () => {

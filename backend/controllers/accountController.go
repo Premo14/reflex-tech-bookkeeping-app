@@ -468,12 +468,12 @@ var ValidSubcategoryPrefixes = map[string][]string{
 	"LIABILITY": {"20", "21", "22", "25"},
 	"EQUITY":    {"30", "31"},
 	"REVENUE":   {"40", "41", "42"},
-	"EXPENSE":   {"50", "51", "52", "53", "54", "55", "56", "57", "59"},
+	"EXPENSE":   {"50", "51", "52", "53", "54", "55", "56", "57", "58", "59"},
 }
 
 // ValidateAccountCode enforces standard 4-digit numeric code, 1st digit type matching,
 // and 2-digit sub-category prefix matching:
-// ASSET -> 10xx-15xx, LIABILITY -> 20xx-22xx, 25xx, EQUITY -> 30xx-31xx, REVENUE -> 40xx-42xx, EXPENSE -> 50xx-57xx, 59xx
+// ASSET -> 10xx-15xx, LIABILITY -> 20xx-22xx, 25xx, EQUITY -> 30xx-31xx, REVENUE -> 40xx-42xx, EXPENSE -> 50xx-59xx
 func ValidateAccountCode(code, accountType string) error {
 	if !isNumericOnly(code) {
 		return fmt.Errorf("Account code must contain numbers only")

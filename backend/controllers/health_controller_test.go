@@ -132,6 +132,7 @@ func TestComputeOverallStatus(t *testing.T) {
 		{"all healthy", dbOK, storageOK, fpOK, aiOK, "healthy"},
 		{"db error", dbBad, storageOK, fpOK, aiOK, "degraded"},
 		{"storage warning", dbOK, storageWarn, fpOK, aiOK, "degraded"},
+		{"file-processor unavailable", dbOK, storageOK, map[string]interface{}{"status": "unavailable"}, aiOK, "degraded"},
 	}
 
 	for _, tt := range tests {

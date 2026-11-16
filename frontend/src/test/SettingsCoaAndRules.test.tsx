@@ -26,6 +26,7 @@ vi.mock("@/services/api", () => ({
   createBankRule: vi.fn(),
   updateBankRule: vi.fn(),
   deleteBankRule: vi.fn(),
+  reorderBankRules: vi.fn(),
   applyAllBankRules: vi.fn(),
   previewBankRule: vi.fn(),
   getChartAccounts: vi.fn(),
@@ -680,8 +681,8 @@ describe("S20 Settings, Chart of Accounts & Bank Rules", () => {
       expect(screen.getByText("Auto-Approve")).toBeInTheDocument();
       expect(screen.getByText("Auto-Exclude (PERSONAL)")).toBeInTheDocument();
 
-      // Run All Rules
-      await user.click(screen.getByRole("button", { name: "Run All Rules" }));
+      // Apply All Rules
+      await user.click(screen.getByRole("button", { name: /Apply All Rules|Run All Rules/i }));
       expect(await screen.findByRole("status")).toHaveTextContent(
         "Applied rules to 3 open transactions."
       );
@@ -817,6 +818,34 @@ describe("S20 Settings, Chart of Accounts & Bank Rules", () => {
       );
       expect(await screen.findByLabelText(/Rule Name/i)).toHaveValue("Coffee Shop");
       expect(screen.getByLabelText("Condition 1 value")).toHaveValue("STARBUCKS");
+    });
+
+    it("filters rules via search and reorders priorities", async () => {
+      const user = userEvent.setup();
+      mockedApi.reorderBankRules.mockResolvedValueOnce({ status: "success", message: "Rules reordered" });
+
+      wrapWithProviders(<BankRulesModal isOpen onClose={vi.fn()} />);
+
+      // Search rule
+      const searchInput = await screen.findByPlaceholderText(/Search rules by name, keyword/i);
+      await user.type(searchInput, "Personal");
+      expect(screen.getByText("Personal Transfer")).toBeInTheDocument();
+      expect(screen.queryByText("AWS Hosting")).not.toBeInTheDocument();
+
+      // Clear search
+      await user.click(screen.getByRole("button", { name: "Clear rule search" }));
+      expect(screen.getByText("AWS Hosting")).toBeInTheDocument();
+
+      // Search unmatched
+      await user.type(searchInput, "NonexistentRuleXYZ");
+      expect(screen.getByText(/No rules match/i)).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Clear Search" }));
+      expect(screen.getByText("AWS Hosting")).toBeInTheDocument();
+
+      // Move rule down
+      const moveDownBtn = screen.getByRole("button", { name: "Move rule AWS Hosting down" });
+      await user.click(moveDownBtn);
+      expect(mockedApi.reorderBankRules).toHaveBeenCalledWith([102, 101]);
     });
 
     it("renders empty state when there are no rules", async () => {

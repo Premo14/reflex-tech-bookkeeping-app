@@ -21,16 +21,18 @@ import ExcludeItemModal from "./ExcludeItemModal";
 import { EXCLUSION_REASON_LABELS, matchesAmountQuery } from "../utils/ledgerStatus";
 import { toCents } from "../utils/formatCurrency";
 import DetailDrawer from "./DetailDrawer";
-import type { BankTransaction, Expense, ExclusionReason, ChartAccount } from "../types/models";
+import type { BankTransaction, Expense, ExclusionReason, ChartAccount, Invoice } from "../types/models";
 import {
   PAGE_SIZE,
   QUEUE_TABS,
   appendExpenseRow,
   appendTransactionRow,
+  appendInvoiceRow,
   computeDaysRemaining,
   computeTargetReopenDate,
   getBannerConfig,
   getErrorMessage,
+  isItemDateClosed,
   resolveAllocationIssue,
   type IssueType,
   type ReviewRow,
@@ -42,12 +44,13 @@ import { ReviewConfirmModals } from "./review/ReviewConfirmModals";
 
 interface ReviewModalProps {
   isOpen: boolean;
+  suspended?: boolean;
   onClose: () => void;
   statusType: ReviewStatusType;
   refreshData: () => void;
 }
 
-export default function ReviewModal({ isOpen, onClose, statusType, refreshData }: ReviewModalProps) {
+export default function ReviewModal({ isOpen, suspended = false, onClose, statusType, refreshData }: ReviewModalProps) {
   const [rows, setRows] = useState<RowState>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
@@ -62,7 +65,7 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
   const [accounts, setAccounts] = useState<ChartAccount[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [info, setInfo] = useState("");
-  const [drawerConfig, setDrawerConfig] = useState<{ type: "transaction" | "expense" | null; id: number | null }>({
+  const [drawerConfig, setDrawerConfig] = useState<{ type: "transaction" | "expense" | "invoice" | null; id: number | null }>({
     type: null,
     id: null,
   });
@@ -146,10 +149,50 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
 
       if (targetTab === "PENDING") {
         (queueRes.transactions || []).forEach((tx: BankTransaction) => {
-          appendTransactionRow(rowMap, closedDate, tx, ["CLOSED_PERIOD"]);
+          const isClosed = tx.reviewStatus === "PENDING" && isItemDateClosed(closedDate, tx.date);
+          const issues: IssueType[] = [];
+          if (isClosed) {
+            issues.push("CLOSED_PERIOD");
+          }
+          if (tx.allocationStatus && tx.allocationStatus !== "BALANCED") {
+            issues.push(resolveAllocationIssue(tx.allocationStatus, tx.linkStatus));
+          }
+          if (issues.length === 0) {
+            issues.push(isClosed ? "CLOSED_PERIOD" : "UNLINKED");
+          }
+          appendTransactionRow(rowMap, closedDate, tx, issues);
         });
         (queueRes.expenses || []).forEach((exp: Expense) => {
-          appendExpenseRow(rowMap, closedDate, exp, ["CLOSED_PERIOD"]);
+          const isClosed = exp.reviewStatus === "PENDING" && isItemDateClosed(closedDate, exp.timestamp);
+          const issues: IssueType[] = [];
+          if (isClosed) {
+            issues.push("CLOSED_PERIOD");
+          }
+          if (exp.allocationStatus && exp.allocationStatus !== "BALANCED") {
+            issues.push(resolveAllocationIssue(exp.allocationStatus, exp.linkStatus));
+          }
+          if (issues.length === 0) {
+            issues.push(isClosed ? "CLOSED_PERIOD" : "UNLINKED");
+          }
+          appendExpenseRow(rowMap, closedDate, exp, issues);
+        });
+        (queueRes.invoices || []).forEach((inv: Invoice) => {
+          const isClosed = inv.reviewStatus === "PENDING" && isItemDateClosed(closedDate, inv.issueDate);
+          const issues: IssueType[] = [];
+          if (isClosed) {
+            issues.push("CLOSED_PERIOD");
+          }
+          if (inv.status === "OVERDUE") {
+            issues.push("OVERDUE");
+          } else if (inv.status === "SENT") {
+            issues.push("UNPAID");
+          } else if (inv.status === "PARTIALLY_PAID") {
+            issues.push("UNDER_ALLOCATED");
+          }
+          if (issues.length === 0) {
+            issues.push(isClosed ? "CLOSED_PERIOD" : "UNPAID");
+          }
+          appendInvoiceRow(rowMap, closedDate, inv, issues);
         });
 
         try {
@@ -173,6 +216,9 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
         (queueRes.expenses || []).forEach((exp: Expense) => {
           appendExpenseRow(rowMap, closedDate, exp, ["IGNORED"]);
         });
+        (queueRes.invoices || []).forEach((inv: Invoice) => {
+          appendInvoiceRow(rowMap, closedDate, inv, ["IGNORED"]);
+        });
       } else if (targetTab === "WARNINGS_IGNORED") {
         (queueRes.transactions || []).forEach((tx: BankTransaction) => {
           const subIssue = resolveAllocationIssue(tx.allocationStatus, tx.linkStatus);
@@ -181,6 +227,10 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
         (queueRes.expenses || []).forEach((exp: Expense) => {
           const subIssue = resolveAllocationIssue(exp.allocationStatus, exp.linkStatus);
           appendExpenseRow(rowMap, closedDate, exp, ["WARNINGS_IGNORED", subIssue]);
+        });
+        (queueRes.invoices || []).forEach((inv: Invoice) => {
+          const subIssue: IssueType = inv.status === "OVERDUE" ? "OVERDUE" : "UNPAID";
+          appendInvoiceRow(rowMap, closedDate, inv, ["WARNINGS_IGNORED", subIssue]);
         });
       } else if (targetTab === "DELETED") {
         (queueRes.transactions || []).forEach((tx: BankTransaction) => {
@@ -194,6 +244,13 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
           appendExpenseRow(rowMap, closedDate, exp, ["DELETED"], {
             deletedAt: exp.deletedAt,
             daysRemaining: computeDaysRemaining(exp.deletedAt),
+            clearReason: true,
+          });
+        });
+        (queueRes.invoices || []).forEach((inv: Invoice) => {
+          appendInvoiceRow(rowMap, closedDate, inv, ["DELETED"], {
+            deletedAt: inv.deletedAt,
+            daysRemaining: computeDaysRemaining(inv.deletedAt),
             clearReason: true,
           });
         });
@@ -394,7 +451,8 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
         await resolveReviewItems(
           action,
           selectedRows.filter((r) => r.type === "transaction").map((r) => r.id),
-          selectedRows.filter((r) => r.type === "expense").map((r) => r.id)
+          selectedRows.filter((r) => r.type === "expense").map((r) => r.id),
+          selectedRows.filter((r) => r.type === "invoice").map((r) => r.id)
         );
         if (action === "ignore_warnings") {
           setInfo(`Silenced reconciliation warnings for ${totalSelected} item(s).`);
@@ -467,7 +525,8 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
       const res = await resolveReviewItems(
         "allow",
         selectedRows.filter((r) => r.type === "transaction").map((r) => r.id),
-        selectedRows.filter((r) => r.type === "expense").map((r) => r.id)
+        selectedRows.filter((r) => r.type === "expense").map((r) => r.id),
+        selectedRows.filter((r) => r.type === "invoice").map((r) => r.id)
       );
       setShowAllowConfirm(false);
       let msg = "Items allowed.";
@@ -494,7 +553,8 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
     try {
       const txIds = selectedRows.filter((r) => r.type === "transaction").map((r) => r.id);
       const expIds = selectedRows.filter((r) => r.type === "expense").map((r) => r.id);
-      const res = await batchCategorizeItems(txIds, expIds, Number(bulkCategory));
+      const invIds = selectedRows.filter((r) => r.type === "invoice").map((r) => r.id);
+      const res = await batchCategorizeItems(txIds, expIds, Number(bulkCategory), invIds);
       setInfo(res.message || `Successfully categorized ${res.count} item(s).`);
       setBulkCategory("");
       await afterAction();
@@ -630,7 +690,7 @@ export default function ReviewModal({ isOpen, onClose, statusType, refreshData }
     <>
       <Modal
         isOpen={isOpen}
-        suspended={Boolean(drawerConfig.type)}
+        suspended={suspended || Boolean(drawerConfig.type)}
         onClose={onClose}
         title={modalTitle}
         maxWidth="4xl"

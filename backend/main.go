@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,54 +21,59 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/cors"
 )
 
-// shutdownCh is closed on SIGTERM/SIGINT so background goroutines can exit cleanly.
-var shutdownCh = make(chan struct{})
+var (
+	sweepTickerDuration    = 15 * time.Minute
+	connectDBFn            = db.Connect
+	processExistingFilesFn = utils.ProcessExistingFiles
+	startWatcherFn         = utils.Watcher
+	listenAppFn            = func(app *fiber.App, addr string) error { return app.Listen(addr) }
+	fatalLogFn             = log.Fatal
+)
 
-func main() {
-	db.Connect()
+func startBackgroundSweep(stopCh <-chan struct{}, interval time.Duration) {
+	controllers.SweepOverdueInvoices()
+	utils.RunReconciliation()
 
-	// 15-minute background reconciliation & overdue sweep ticker
-	go func() {
-		controllers.SweepOverdueInvoices()
-		utils.RunReconciliation()
-
-		ticker := time.NewTicker(15 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				controllers.SweepOverdueInvoices()
-				utils.RunReconciliation()
-			case <-shutdownCh:
-				return
-			}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			controllers.SweepOverdueInvoices()
+			utils.RunReconciliation()
+		case <-stopCh:
+			return
 		}
-	}()
+	}
+}
 
-	// Initialize dynamic dropbox location from DB settings or environment
+func initDropboxLocation() {
 	var dropboxSetting models.AppSetting
-	if err := db.DB.Where("key = ?", "DocumentDropboxPath").First(&dropboxSetting).Error; err == nil && dropboxSetting.Value != "" {
-		if _, err := constants.SetDropboxLocation(dropboxSetting.Value); err != nil {
-			log.Printf("Warning: saved DocumentDropboxPath (%s) could not be loaded: %v", dropboxSetting.Value, err)
+	if db.DB != nil {
+		if err := db.DB.Where("key = ?", "DocumentDropboxPath").First(&dropboxSetting).Error; err == nil && dropboxSetting.Value != "" {
+			if _, err := constants.SetDropboxLocation(dropboxSetting.Value); err != nil {
+				log.Printf("Warning: saved DocumentDropboxPath (%s) could not be loaded: %v", dropboxSetting.Value, err)
+			}
+			return
 		}
-	} else if envPath := os.Getenv("DOCUMENT_DATA_PATH"); envPath != "" {
+	}
+	if envPath := os.Getenv("DOCUMENT_DATA_PATH"); envPath != "" {
 		if _, err := constants.SetDropboxLocation(envPath); err != nil {
 			log.Printf("Warning: env DOCUMENT_DATA_PATH (%s) could not be loaded: %v", envPath, err)
 		}
 	}
+}
 
-	if err := utils.CreateDirsIfNotExists(); err != nil {
-		log.Fatal("Failed to create watched \"inbox/\" and \"processed/\" folders:", err)
+func resolveProcessedImagePath(baseDir, relPath string) (string, bool) {
+	cleanedBase := filepath.Clean(baseDir)
+	cleanTarget := filepath.Clean(filepath.Join(cleanedBase, relPath))
+	if !strings.HasPrefix(cleanTarget, cleanedBase+string(filepath.Separator)) && cleanTarget != cleanedBase {
+		return "", false
 	}
+	return cleanTarget, true
+}
 
-	if err := utils.ProcessExistingFiles(constants.GetInboxPath()); err != nil {
-		log.Fatal("Failed to process existing files:", err)
-	}
-
-	if err := utils.Watcher(); err != nil {
-		log.Fatal("Failed to start the watcher:", err)
-	}
-
+func newApp() *fiber.App {
 	app := fiber.New(fiber.Config{
 		BodyLimit: 50 << 20, // 50 MB — max image + bank statement upload size
 	})
@@ -82,30 +88,88 @@ func main() {
 
 	// Expose the processed/ folder so the frontend can display receipt images dynamically
 	app.Get("/api/images/*", func(c fiber.Ctx) error {
-		relPath := c.Params("*")
-		baseDir := filepath.Clean(constants.GetProcessedPath())
-		cleanTarget := filepath.Clean(filepath.Join(baseDir, relPath))
-
-		// Prevent path traversal outside the processed folder
-		if !strings.HasPrefix(cleanTarget, baseDir+string(filepath.Separator)) && cleanTarget != baseDir {
+		cleanTarget, ok := resolveProcessedImagePath(constants.GetProcessedPath(), c.Params("*"))
+		if !ok {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Access denied"})
 		}
 		return c.SendFile(cleanTarget)
 	})
 
+	return app
+}
+
+func main() {
+	connectDBFn()
+
+	stopCh := make(chan struct{})
+	var stopOnce sync.Once
+	closeStop := func() {
+		stopOnce.Do(func() { close(stopCh) })
+	}
+	var bgWG sync.WaitGroup
+	defer func() {
+		closeStop()
+		bgWG.Wait()
+	}()
+
+	// 15-minute background reconciliation & overdue sweep ticker
+	bgWG.Add(1)
+	go func() {
+		defer bgWG.Done()
+		startBackgroundSweep(stopCh, sweepTickerDuration)
+	}()
+
+	// Initialize dynamic dropbox location from DB settings or environment
+	initDropboxLocation()
+
+	if err := utils.CreateDirsIfNotExists(); err != nil {
+		fatalLogFn("Failed to create watched \"inbox/\" and \"processed/\" folders:", err)
+		return
+	}
+
+	if err := startWatcherFn(); err != nil {
+		fatalLogFn("Failed to start the watcher:", err)
+		return
+	}
+
+	app := newApp()
+
+	// Process queued inbox files asynchronously after app creation so /api/health
+	// binds immediately even when Ollama is cold-starting or offline.
+	bgWG.Add(1)
+	go func() {
+		defer bgWG.Done()
+		select {
+		case <-stopCh:
+			return
+		default:
+		}
+		if err := processExistingFilesFn(constants.GetInboxPath()); err != nil {
+			log.Printf("Warning: initial inbox sweep finished with error: %v", err)
+		}
+	}()
+
 	// Graceful shutdown on SIGTERM/SIGINT
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigCh)
+	bgWG.Add(1)
 	go func() {
-		<-sigCh
-		log.Println("Shutting down server...")
-		close(shutdownCh) // signal background goroutines to exit
-		_ = app.Shutdown()
+		defer bgWG.Done()
+		select {
+		case <-sigCh:
+			log.Println("Shutting down server...")
+			closeStop()
+			_ = app.Shutdown()
+		case <-stopCh:
+		}
 	}()
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-	log.Fatal(app.Listen(":" + port))
+	if err := listenAppFn(app, ":"+port); err != nil {
+		fatalLogFn(err)
+	}
 }

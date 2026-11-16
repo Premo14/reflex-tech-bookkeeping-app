@@ -332,3 +332,83 @@ func TestPairDaysDistance(t *testing.T) {
 		t.Errorf("zero expense time = %d, expected 999999", d)
 	}
 }
+
+func TestScoreExpenseTxCandidate_SplitAndPartialAllocation(t *testing.T) {
+	catSupplies := uint(5010)
+	catTravel := uint(5020)
+	now := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+
+	// 1:N multi-category split: transaction already has confirmed links on another category,
+	// so TxHasConfirmedLinks=true with ExpHasConfirmedLinks=false and equal remaining cents must still score.
+	splitScore, splitReason := ScoreExpenseTxCandidate(PairScoreContext{
+		Expense: models.Expense{
+			Vendor:         "Amazon",
+			Amount:         models.NewMoney(40.00),
+			Timestamp:      now,
+			ChartAccountID: &catTravel,
+		},
+		Transaction: models.BankTransaction{
+			Description:       "AMAZON MKTPLACE",
+			Amount:            models.NewMoney(-100.00),
+			Date:              now,
+			CategoryAccountID: &catSupplies,
+		},
+		ExpRemainingCents:    4000,
+		TxRemainingCents:     4000,
+		ExpHasConfirmedLinks: false,
+		TxHasConfirmedLinks:  true,
+	})
+	if splitScore <= 0 {
+		t.Fatalf("expected positive score for 1:N split candidate, got %d (%q)", splitScore, splitReason)
+	}
+
+	// Unsplit mismatched categories (TxHasConfirmedLinks=false) must be rejected with score 0.
+	mismatchedUnsplitScore, _ := ScoreExpenseTxCandidate(PairScoreContext{
+		Expense:              models.Expense{Amount: models.NewMoney(40.00), Timestamp: now, ChartAccountID: &catTravel},
+		Transaction:          models.BankTransaction{Amount: models.NewMoney(-100.00), Date: now, CategoryAccountID: &catSupplies},
+		ExpRemainingCents:    4000,
+		TxRemainingCents:     4000,
+		ExpHasConfirmedLinks: false,
+		TxHasConfirmedLinks:  false,
+	})
+	if mismatchedUnsplitScore != 0 {
+		t.Fatalf("expected unsplit mismatched-category pair score 0, got %d", mismatchedUnsplitScore)
+	}
+
+	// Partial remaining match ($60 remaining on $100 expense matching -$60 tx) must label
+	// "Exact remaining match" rather than misleading "Exact amount match".
+	partialScore, partialReason := ScoreExpenseTxCandidate(PairScoreContext{
+		Expense: models.Expense{
+			Vendor:    "Staples",
+			Amount:    models.NewMoney(100.00),
+			Timestamp: now,
+		},
+		Transaction: models.BankTransaction{
+			Description: "STAPLES #123",
+			Amount:      models.NewMoney(-60.00),
+			Date:        now,
+		},
+		ExpRemainingCents:    6000,
+		TxRemainingCents:     6000,
+		ExpHasConfirmedLinks: true,
+		TxHasConfirmedLinks:  false,
+	})
+	if partialScore <= 0 {
+		t.Fatalf("expected positive score for remaining partial match, got %d", partialScore)
+	}
+	if partialReason == "" || containsSubstring(partialReason, "Exact amount match") || !containsSubstring(partialReason, "Exact remaining match") {
+		t.Fatalf("expected 'Exact remaining match' without 'Exact amount match', got %q", partialReason)
+	}
+}
+
+func containsSubstring(haystack, needle string) bool {
+	if len(needle) == 0 {
+		return true
+	}
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
+}

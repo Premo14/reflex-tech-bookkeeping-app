@@ -10,6 +10,7 @@ import (
 
 	"reflex-tech-bookkeeping-app-api/db"
 	"reflex-tech-bookkeeping-app-api/models"
+	"reflex-tech-bookkeeping-app-api/utils"
 
 	"github.com/stretchr/testify/require"
 )
@@ -101,26 +102,19 @@ func TestTriggerFlaggedAndUnlinkedEndpoints(t *testing.T) {
 	app.Get("/reconcile/unlinked", GetUnlinkedItems)
 
 	// Concurrency guard (409) when already running, then start (200)
-	reconciliationMutex.Lock()
-	reconciliationRunning = true
-	reconciliationMutex.Unlock()
+	utils.SetReconciliationRunningForTest(true)
 	resp, err := app.Test(httptest.NewRequest(http.MethodPost, "/reconcile", nil))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
 
-	reconciliationMutex.Lock()
-	reconciliationRunning = false
-	reconciliationMutex.Unlock()
+	utils.SetReconciliationRunningForTest(false)
 	resp, err = app.Test(httptest.NewRequest(http.MethodPost, "/reconcile", nil))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	// Wait briefly for background goroutine to finish before teardownTestDB
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		reconciliationMutex.Lock()
-		done := !reconciliationRunning
-		reconciliationMutex.Unlock()
-		if done {
+		if !utils.IsReconciliationRunning() {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)

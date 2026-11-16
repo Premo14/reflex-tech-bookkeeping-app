@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/valyala/fasthttp"
 )
@@ -308,7 +310,7 @@ func TestSortNumericSuffix(t *testing.T) {
 func TestInjectOCRContext(t *testing.T) {
 	basicPrompt := "You are a receipt data extractor."
 	ocrText := "TOTAL  $25.50\nDATE  11/13/2026"
-	withContext := injectOCRContext(basicPrompt, "", ocrText)
+	withContext := injectOCRContext(basicPrompt, ocrText)
 
 	expectedSuffix := "\n\nSupplemental Tesseract OCR text (use to confirm blurry totals/dates):\n" + ocrText
 	if withContext != basicPrompt+expectedSuffix {
@@ -316,7 +318,7 @@ func TestInjectOCRContext(t *testing.T) {
 	}
 
 	// Empty OCR should return prompt unchanged
-	if injectOCRContext(basicPrompt, "", "") != basicPrompt {
+	if injectOCRContext(basicPrompt, "") != basicPrompt {
 		t.Error("injectOCRContext() should return prompt unchanged when OCR text is empty")
 	}
 }
@@ -428,6 +430,8 @@ func TestValidateUpload(t *testing.T) {
 		{"valid PDF", 1024*1024, "application/pdf", false},
 		{"valid JPEG", 500000, "image/jpeg", false},
 		{"valid PNG", 800000, "image/png", false},
+		{"valid WEBP", 800000, "image/webp", false},
+		{"rejected HEIC direct", 800000, "image/heic", true},
 		{"zero size PDF", 0, "application/pdf", false},
 		{"max size PDF (exact)", maxUploadSize, "application/pdf", false},
 		{"over max size PDF", maxUploadSize + 1, "application/pdf", true},
@@ -551,9 +555,14 @@ func TestRepairJSON_EdgeCases(t *testing.T) {
 			expectOK: true,
 		},
 		{
-			name:     "single quotes in nested value",
+			name:     "apostrophe inside double-quoted string preserved",
 			input:    `{"vendor":"Joe's Diner","amount":15.50}`,
-			expectOK: false, // repairJSON naively replaces all ' with ", breaking string values
+			expectOK: true,
+		},
+		{
+			name:     "single-quoted keys and apostrophe value repaired",
+			input:    `{'vendor':'Joe's Diner','amount':15.50,}`,
+			expectOK: true,
 		},
 		{
 			name:     "already valid JSON",
@@ -652,9 +661,11 @@ func TestHealthHandler(t *testing.T) {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	// Tesseract may not be installed (e.g. in CI/minimal envs)
-	if strings.Contains(string(body), "tesseract failed") {
-		t.Log("Health check failed: tesseract not installed (expected in minimal CI env)")
+	// Tesseract/poppler may not be installed on host dev/CI machines
+	if strings.Contains(string(body), "tesseract failed") ||
+		strings.Contains(string(body), "pdftoppm failed") ||
+		strings.Contains(string(body), "pdftotext failed") {
+		t.Logf("Health check failed: binary missing on host (%s)", strings.TrimSpace(string(body)))
 		return
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -894,8 +905,9 @@ func TestResolveUploadMIME_MultipartSniffing(t *testing.T) {
 	}{
 		{"Go CreateFormFile JPEG", "receipt.jpg", []byte("\xff\xd8\xff\xe0\x00\x10JFIF"), "image/jpeg", true},
 		{"Go CreateFormFile PNG", "receipt.png", []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), "image/png", true},
+		{"Go CreateFormFile WEBP", "receipt.webp", []byte("RIFF\x18\x00\x00\x00WEBPVP8L\x0c\x00\x00\x00\x00\x00\x00\x00"), "image/webp", true},
 		{"Go CreateFormFile PDF", "receipt.pdf", []byte("%PDF-1.7\n"), "application/pdf", true},
-		{"Go CreateFormFile HEIC", "receipt.heic", []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c'}, "image/heic", true},
+		{"Go CreateFormFile HEIC rejected directly", "receipt.heic", []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c'}, "image/heic", false},
 		{"Disguised plain text as PDF", "evil.pdf", []byte("not really a pdf, just plain text"), "text/plain", false},
 	}
 
@@ -968,5 +980,183 @@ func TestResizeImage_TallReceiptHeightCap(t *testing.T) {
 	}
 	if cfg.Height != 2400 || cfg.Width != 480 {
 		t.Errorf("resized dimensions = %dx%d, want 480x2400", cfg.Width, cfg.Height)
+	}
+}
+
+func TestCompactOCRText_UTF8AndHeadTailTotals(t *testing.T) {
+	// Multi-line receipt over 4000 runes with multi-byte UTF-8 characters and footer totals.
+	header := "CAFE ESPERANZA — CAFÉ\n2026-10-12\n"
+	middleLine := strings.Repeat("Café Item ", 300) + "\n"
+	middle := strings.Repeat(middleLine, 2) // ~6000 chars with UTF-8 'é'
+	footer := "\nSUBTOTAL $80.00\nTAX $6.40\nGRAND TOTAL $86.40\nVISA ENDING 4242"
+	got := compactOCRText(header + middle + footer)
+
+	if !utf8.ValidString(got) {
+		t.Fatalf("compactOCRText returned invalid UTF-8 string")
+	}
+	if utf8.RuneCountInString(got) > maxOCRRunes {
+		t.Fatalf("compactOCRText rune count = %d, want <= %d", utf8.RuneCountInString(got), maxOCRRunes)
+	}
+	if !strings.Contains(got, "CAFE ESPERANZA") {
+		t.Errorf("compactOCRText lost header vendor line")
+	}
+	if !strings.Contains(got, "GRAND TOTAL $86.40") {
+		t.Errorf("compactOCRText lost footer grand total line")
+	}
+}
+
+func TestResizeImage_WebPFormatRegistered(t *testing.T) {
+	tmp := t.TempDir()
+	inPath := filepath.Join(tmp, "sample.webp")
+	outPath := filepath.Join(tmp, "out.jpg")
+	// Minimal WebP header so stdlib image.Decode identifies the WebP decoder rather than unknown format.
+	if err := os.WriteFile(inPath, []byte("RIFF\x18\x00\x00\x00WEBPVP8L\x0c\x00\x00\x00\x00\x00\x00\x00"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	err := resizeImage(inPath, outPath)
+	if err == nil {
+		return
+	}
+	if strings.Contains(err.Error(), "image: unknown format") {
+		t.Fatalf("WebP decoder not registered in imaging/image: %v", err)
+	}
+}
+
+func TestHealthHandler_ChecksAllToolsAndOllama(t *testing.T) {
+	origExec := execCmd
+	defer func() { execCmd = origExec }()
+
+	ollamaMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"models":[]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ollamaMock.Close()
+	t.Setenv("OLLAMA_HOST", ollamaMock.URL)
+
+	// 1. Failure in pdftoppm fails health check explicitly
+	execCmd = func(name string, args ...string) *exec.Cmd {
+		if name == "pdftoppm" {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	ctx := &fasthttp.RequestCtx{}
+	health(ctx)
+	if ctx.Response.StatusCode() != http.StatusInternalServerError || !strings.Contains(string(ctx.Response.Body()), "pdftoppm failed") {
+		t.Fatalf("expected pdftoppm health failure, got status=%d body=%s", ctx.Response.StatusCode(), string(ctx.Response.Body()))
+	}
+
+	// 2. All tools succeed + Ollama reachable
+	execCmd = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("true")
+	}
+	ctx = &fasthttp.RequestCtx{}
+	health(ctx)
+	if ctx.Response.StatusCode() != http.StatusOK {
+		t.Fatalf("expected 200 OK, got status=%d body=%s", ctx.Response.StatusCode(), string(ctx.Response.Body()))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(ctx.Response.Body(), &payload); err != nil {
+		t.Fatalf("invalid health JSON: %v", err)
+	}
+	if payload["ollamaReachable"] != true {
+		t.Fatalf("expected ollamaReachable=true, got %+v", payload)
+	}
+}
+
+func TestPDFVisionFallback_TesseractContextAndExtraPageCleanup(t *testing.T) {
+	origExec := execCmd
+	defer func() { execCmd = origExec }()
+
+	tmpWork := t.TempDir()
+	var createdPageFiles []string
+
+	// Capture Ollama request payload to verify supplemental Tesseract text & options.num_ctx.
+	var capturedReq OllamaRequest
+	ollamaMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &capturedReq)
+		resp := map[string]string{
+			"response": `{"timestamp":"2026-06-15T00:00:00Z","vendor":"Acorn Supply","description":"Paper","amount":42.50,"taxAmount":3.50,"currencyCode":"USD","tender":"CARD","chartAccountId":null}`,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ollamaMock.Close()
+	t.Setenv("OLLAMA_HOST", ollamaMock.URL)
+
+	execCmd = func(name string, args ...string) *exec.Cmd {
+		switch name {
+		case "pdftotext":
+			// Return empty text to force vision + Tesseract fallback.
+			return exec.Command("true")
+		case "pdftoppm":
+			// Create 4 PNG pages (more than maxVisionPages=3) in tmpWork.
+			baseArg := args[len(args)-1]
+			basePrefix := filepath.Join(tmpWork, filepath.Base(baseArg))
+			// Match filepath.Glob pattern used by convertPDFToImages (`baseFileName-*.png`)
+			// by creating files at the exact prefix expected in /tmp, then recording them for assertion.
+			_ = basePrefix
+			for page := 1; page <= 4; page++ {
+				pPath := fmt.Sprintf("%s-%d.png", baseArg, page)
+				f, err := os.Create(pPath)
+				if err == nil {
+					img := image.NewRGBA(image.Rect(0, 0, 100, 100))
+					_ = png.Encode(f, img)
+					_ = f.Close()
+					createdPageFiles = append(createdPageFiles, pPath)
+				}
+			}
+			return exec.Command("true")
+		case "tesseract":
+			return exec.Command("printf", "ACORN SUPPLY\nTOTAL $42.50\n")
+		default:
+			return exec.Command("true")
+		}
+	}
+
+	var multipartBody bytes.Buffer
+	mw := multipart.NewWriter(&multipartBody)
+	fw, err := mw.CreateFormFile("document", "scan.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fw.Write([]byte("%PDF-1.4\n%fake binary pdf\n"))
+	_ = mw.Close()
+
+	var fctx fasthttp.RequestCtx
+	fctx.Request.Header.SetMethod(fasthttp.MethodPost)
+	fctx.Request.SetRequestURI("/process")
+	fctx.Request.Header.SetContentType(mw.FormDataContentType())
+	fctx.Request.SetBody(multipartBody.Bytes())
+
+	process(&fctx)
+
+	if fctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("process() status = %d, want 200; body = %s", fctx.Response.StatusCode(), string(fctx.Response.Body()))
+	}
+	if len(capturedReq.Images) != 3 {
+		t.Fatalf("expected 3 vision images (capped at maxVisionPages), got %d", len(capturedReq.Images))
+	}
+	if !strings.Contains(capturedReq.Prompt, "TOTAL $42.50") {
+		t.Errorf("expected vision prompt to include supplemental Tesseract OCR text, got: %s", capturedReq.Prompt)
+	}
+	opts, ok := capturedReq.Options.(map[string]any)
+	if !ok || opts["num_ctx"] == nil || opts["temperature"] == nil {
+		t.Errorf("expected temperature and num_ctx options, got: %#v", capturedReq.Options)
+	}
+	// Verify all 4 generated page PNGs (including page 4 beyond maxVisionPages) were removed!
+	if len(createdPageFiles) != 4 {
+		t.Fatalf("expected 4 generated page files, got %d", len(createdPageFiles))
+	}
+	for _, p := range createdPageFiles {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			_ = os.Remove(p)
+			t.Errorf("leaked temporary PDF page PNG: %s", p)
+		}
 	}
 }

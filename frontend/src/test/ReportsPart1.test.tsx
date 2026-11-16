@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -310,11 +311,13 @@ describe("ReportsModal - S23A (P&L, Cash Flow, Vendor Spend)", () => {
     const anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
     render(
-      <ReportsModal
-        isOpen
-        onClose={onClose}
-        onViewUncategorized={onViewUncategorized}
-      />
+      <StrictMode>
+        <ReportsModal
+          isOpen
+          onClose={onClose}
+          onViewUncategorized={onViewUncategorized}
+        />
+      </StrictMode>
     );
 
     expect(await screen.findByText("Consulting Revenue")).toBeInTheDocument();
@@ -324,11 +327,14 @@ describe("ReportsModal - S23A (P&L, Cash Flow, Vendor Spend)", () => {
     expect(screen.getByText("$185.50")).toBeInTheDocument();
     expect(screen.getByText(/1 Excluded Expenses \(\$25\.00\)/i)).toBeInTheDocument();
 
-    // Quick Presets
+    // Quick Presets (including All Time, Open Books, Closed Books, and date range labels)
+    await user.click(screen.getByRole("button", { name: "All Time" }));
+    await user.click(screen.getByRole("button", { name: "Open Books" }));
+    await user.click(screen.getByRole("button", { name: "Closed Books" }));
     await user.click(screen.getByRole("button", { name: "This Month" }));
     await user.click(screen.getByRole("button", { name: "Last Month" }));
     await user.click(screen.getByRole("button", { name: "Year to Date (YTD)" }));
-    expect(mockedApi.getProfitLoss).toHaveBeenCalledTimes(4);
+    expect(mockedApi.getProfitLoss).toHaveBeenCalledTimes(7);
 
     // Custom dates + Update Report
     await user.clear(screen.getByLabelText("Start Date"));

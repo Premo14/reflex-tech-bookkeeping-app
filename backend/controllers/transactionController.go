@@ -24,6 +24,9 @@ import (
 //   - ?accountId=5      filter by ChartAccountID (which bank account)
 //   - ?search=walmart   ILIKE search on description
 func GetTransactions(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 	accountId := c.Query("accountId")
@@ -46,10 +49,11 @@ func GetTransactions(c fiber.Ctx) error {
 
 	search = strings.TrimSpace(search)
 	if search != "" {
+		lowerSearch := "%" + strings.ToLower(search) + "%"
 		if val, err := strconv.ParseFloat(strings.TrimPrefix(search, "$"), 64); err == nil {
-			query = query.Where("description ILIKE ? OR notes ILIKE ? OR fit_id ILIKE ? OR ABS(amount) = ?", "%"+search+"%", "%"+search+"%", "%"+search+"%", math.Abs(val))
+			query = query.Where("LOWER(description) LIKE ? OR LOWER(notes) LIKE ? OR LOWER(fit_id) LIKE ? OR ABS(amount) = ?", lowerSearch, lowerSearch, lowerSearch, math.Abs(val))
 		} else {
-			query = query.Where("description ILIKE ? OR notes ILIKE ? OR fit_id ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
+			query = query.Where("LOWER(description) LIKE ? OR LOWER(notes) LIKE ? OR LOWER(fit_id) LIKE ?", lowerSearch, lowerSearch, lowerSearch)
 		}
 	}
 
@@ -63,13 +67,14 @@ func GetTransactions(c fiber.Ctx) error {
 		query = query.Where("allocation_status = 'BALANCED' OR amount >= 0")
 	case "LINKED":
 		query = query.Where("allocation_status = 'BALANCED'")
-	case "PARTIALLY_ALLOCATED":
-		query = query.Where("allocation_status = 'PARTIALLY_ALLOCATED'")
+	case "PARTIALLY_ALLOCATED", "PARTIAL":
+		query = query.Where("allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL')")
 	case "OVER_ALLOCATED":
 		query = query.Where("allocation_status = 'OVER_ALLOCATED'")
 	case "UNCATEGORIZED":
-		query = query.Where("category_account_id IS NULL").
-			Where("id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')").
+		query = query.Where("amount != 0").
+			Where("category_account_id IS NULL").
+			Where("(id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed') OR (amount < 0 AND allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL')))").
 			Where("NOT (amount > 0 AND chart_account_id IN (SELECT id FROM chart_accounts WHERE type = 'LIABILITY'))")
 	}
 
@@ -99,7 +104,7 @@ func GetTransactions(c fiber.Ctx) error {
 		WHEN COALESCE(review_status, '') IN ('WARNINGS_IGNORED', 'IGNORED') THEN 5
 		WHEN COALESCE(allocation_status, 'UNLINKED') = 'UNLINKED' AND has_suggestions = true THEN 0
 		WHEN allocation_status = 'OVER_ALLOCATED' THEN 1
-		WHEN allocation_status = 'PARTIALLY_ALLOCATED' THEN 2
+		WHEN allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL') THEN 2
 		WHEN amount < 0 AND COALESCE(allocation_status, 'UNLINKED') = 'UNLINKED' THEN 3
 		ELSE 4
 	END ASC, ` + secondaryOrder
@@ -127,6 +132,9 @@ func GetTransactions(c fiber.Ctx) error {
 // GetTransaction fetches a single BankTransaction and returns confirmed and suggested
 // expense links as separate arrays so the UI can distinguish them without ambiguity.
 func GetTransaction(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	id := c.Params("id")
 	var tx models.BankTransaction
 
@@ -145,12 +153,8 @@ func GetTransaction(c fiber.Ctx) error {
 		Order("expenses.timestamp ASC, expenses.id ASC").
 		Find(&confirmedExpenses)
 
-	// Load suggested expenses — scoring system guesses awaiting user action.
-	var suggestedExpenses []models.Expense
-	db.DB.Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = expenses.id").
-		Where("ebt.bank_transaction_id = ? AND ebt.status = ?", tx.ID, "suggested").
-		Preload("ChartAccount").
-		Find(&suggestedExpenses)
+	// Load ranked suggested expenses (persisted reconciler guesses + scored open candidates).
+	suggestedExpenseCandidates, suggestedExpenses := utils.FindTransactionMatchCandidates(db.DB, tx, confirmedExpenses)
 
 	// Load linked invoice (if this bank transaction is matched to an invoice payment)
 	var linkedInvoice *models.Invoice
@@ -180,12 +184,13 @@ func GetTransaction(c fiber.Ctx) error {
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"status":            "success",
-		"transaction":       tx,
-		"confirmedExpenses": confirmedExpenses,
-		"suggestedExpenses": suggestedExpenses,
-		"linkedInvoice":     linkedInvoice,
-		"suggestedInvoices": suggestedInvoices,
+		"status":                     "success",
+		"transaction":                tx,
+		"confirmedExpenses":          confirmedExpenses,
+		"suggestedExpenses":          suggestedExpenses,
+		"suggestedExpenseCandidates": suggestedExpenseCandidates,
+		"linkedInvoice":              linkedInvoice,
+		"suggestedInvoices":          suggestedInvoices,
 	})
 }
 
@@ -238,6 +243,10 @@ func CreateTransaction(c fiber.Ctx) error {
 		ChartAccountID    *uint   `json:"chartAccountId"`
 		CategoryAccountID *uint   `json:"categoryAccountId"`
 		Notes             string  `json:"notes"`
+	}
+
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
 	}
 
 	var input createInput
@@ -320,12 +329,16 @@ func CreateTransaction(c fiber.Ctx) error {
 	}
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "success", "transaction": tx})
 }
 
 // UpdateTransaction allows updating fields on a transaction.
 func UpdateTransaction(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	id := c.Params("id")
 	var tx models.BankTransaction
 
@@ -352,7 +365,6 @@ func UpdateTransaction(c fiber.Ctx) error {
 	if err := c.Bind().JSON(&input); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid input"})
 	}
-
 	var raw map[string]interface{}
 	_ = json.Unmarshal(c.Body(), &raw)
 
@@ -394,34 +406,33 @@ func UpdateTransaction(c fiber.Ctx) error {
 		updates["chart_account_id"] = input.ChartAccountID
 	}
 
-	// Validate category account or support clearing category to Uncategorized
-	if _, exists := raw["categoryAccountId"]; exists {
-		if input.CategoryAccountID != nil && *input.CategoryAccountID > 0 {
-			var catAccount models.ChartAccount
-			if err := db.DB.First(&catAccount, *input.CategoryAccountID).Error; err != nil {
-				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Category account not found"})
-			}
-			if err := ValidateTransactionCategory(&catAccount); err != nil {
-				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
-			}
-			updates["category_account_id"] = input.CategoryAccountID
+	// Validate category account or support clearing category to Uncategorized via explicit null or 0.
+	_, hasCategoryKey := raw["categoryAccountId"]
+	if input.CategoryAccountID != nil && *input.CategoryAccountID > 0 {
+		var catAccount models.ChartAccount
+		if err := db.DB.First(&catAccount, *input.CategoryAccountID).Error; err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Category account not found"})
+		}
+		if err := ValidateTransactionCategory(&catAccount); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+		updates["category_account_id"] = input.CategoryAccountID
 
-			// Sync category to linked expenses ONLY if it's a 1:1 link (not a split) and the category is an EXPENSE account
-			if catAccount.Type == "EXPENSE" {
-				var linkedExpCount int64
-				db.DB.Model(&models.ExpenseBankTransaction{}).Where("bank_transaction_id = ? AND status = 'confirmed'", tx.ID).Count(&linkedExpCount)
-				if linkedExpCount == 1 {
-					db.DB.Exec("UPDATE expenses SET chart_account_id = ? WHERE id IN (SELECT expense_id FROM expense_bank_transactions WHERE bank_transaction_id = ? AND status = 'confirmed')", input.CategoryAccountID, tx.ID)
-				}
-			}
-		} else {
-			// Explicit null or 0 means un-categorize
-			updates["category_account_id"] = nil
+		// Sync category to linked expenses ONLY if it's a 1:1 link (not a split) and the category is an EXPENSE account
+		if catAccount.Type == "EXPENSE" {
 			var linkedExpCount int64
 			db.DB.Model(&models.ExpenseBankTransaction{}).Where("bank_transaction_id = ? AND status = 'confirmed'", tx.ID).Count(&linkedExpCount)
 			if linkedExpCount == 1 {
-				db.DB.Exec("UPDATE expenses SET chart_account_id = NULL WHERE id IN (SELECT expense_id FROM expense_bank_transactions WHERE bank_transaction_id = ? AND status = 'confirmed')", tx.ID)
+				db.DB.Exec("UPDATE expenses SET chart_account_id = ? WHERE id IN (SELECT expense_id FROM expense_bank_transactions WHERE bank_transaction_id = ? AND status = 'confirmed')", input.CategoryAccountID, tx.ID)
 			}
+		}
+	} else if hasCategoryKey && (input.CategoryAccountID == nil || *input.CategoryAccountID == 0) {
+		// Explicit null or 0 means un-categorize
+		updates["category_account_id"] = nil
+		var linkedExpCount int64
+		db.DB.Model(&models.ExpenseBankTransaction{}).Where("bank_transaction_id = ? AND status = 'confirmed'", tx.ID).Count(&linkedExpCount)
+		if linkedExpCount == 1 {
+			db.DB.Exec("UPDATE expenses SET chart_account_id = NULL WHERE id IN (SELECT expense_id FROM expense_bank_transactions WHERE bank_transaction_id = ? AND status = 'confirmed')", tx.ID)
 		}
 	}
 
@@ -451,12 +462,16 @@ func UpdateTransaction(c fiber.Ctx) error {
 	db.DB.Model(&tx).Updates(updates)
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success", "transaction": tx})
 }
 
 // DeleteTransaction soft-deletes a transaction, unlinks it, and moves it to Deleted Items.
 func DeleteTransaction(c fiber.Ctx) error {
+	if db.DB == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
+	}
 	id := c.Params("id")
 	var tx models.BankTransaction
 
@@ -489,6 +504,7 @@ func DeleteTransaction(c fiber.Ctx) error {
 	})
 
 	utils.RunReconciliation()
+	broadcastReconciliationSync()
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success"})
 }

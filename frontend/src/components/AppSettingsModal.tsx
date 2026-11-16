@@ -9,6 +9,7 @@ import BankRulesTab from "./BankRulesTab";
 
 interface AppSettingsModalProps {
   isOpen: boolean;
+  suspended?: boolean;
   onClose: () => void;
   settings: Record<string, string>;
   refreshSettings: () => void;
@@ -23,6 +24,7 @@ interface AppSettingsModalProps {
 
 export default function AppSettingsModal({
   isOpen,
+  suspended = false,
   onClose,
   settings,
   refreshSettings,
@@ -51,6 +53,7 @@ export default function AppSettingsModal({
 
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoreStatus, setRestoreStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isEditingRule, setIsEditingRule] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleRestoreFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -203,6 +206,7 @@ export default function AppSettingsModal({
   return (
     <Modal
       isOpen={isOpen}
+      suspended={suspended}
       onClose={onClose}
       title={
         <div className="flex items-center gap-2">
@@ -231,7 +235,7 @@ export default function AppSettingsModal({
               {isSaving ? "Moving Folder..." : isChanged ? "Move Folder & Connect" : "Location Connected"}
             </Button>
           </div>
-        ) : (
+        ) : isEditingRule ? null : (
           <div className="flex justify-end w-full">
             <Button variant="secondary" size="sm" onClick={onClose}>
               Close
@@ -281,6 +285,7 @@ export default function AppSettingsModal({
           <BankRulesTab
             initialRuleData={initialRuleData}
             onRulesApplied={onRulesApplied}
+            onEditingChange={setIsEditingRule}
           />
         ) : (
           <div className="space-y-4">
@@ -618,7 +623,7 @@ export default function AppSettingsModal({
                 Includes Chart of Accounts, Bank Transactions, Receipts, Invoices, Bank Rules & Audit Logs.
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-2 shrink-0 flex-wrap">
               <input
                 ref={fileInputRef}
                 type="file"

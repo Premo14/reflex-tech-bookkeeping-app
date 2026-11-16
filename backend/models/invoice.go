@@ -30,6 +30,10 @@ type Invoice struct {
 	CategoryAccount   *ChartAccount    `gorm:"foreignKey:CategoryAccountID" json:"categoryAccount"`
 	DeclinedTxIDs     string           `gorm:"type:text" json:"-"` // Comma-wrapped bank tx IDs manually unmatched from this invoice
 	LinkedExpenses    []Expense        `gorm:"foreignKey:InvoiceID" json:"linkedExpenses,omitempty"`
+	ReviewStatus      string           `gorm:"size:30;default:'APPROVED'" json:"reviewStatus"` // PENDING, APPROVED, IGNORED, WARNINGS_IGNORED, DELETED
+	ExclusionReason   string           `gorm:"size:50" json:"exclusionReason"`                 // DUPLICATE, PERSONAL, OTHER, CLOSED_PERIOD
+	ExclusionNote     string           `gorm:"type:text" json:"exclusionNote"`
+	DeletedAt         *time.Time       `gorm:"column:deleted_at;index" json:"deletedAt,omitempty"`
 	CreatedAt         time.Time        `json:"createdAt"`
 	UpdatedAt         time.Time        `json:"updatedAt"`
 }

@@ -72,6 +72,7 @@ import type {
 interface DetailDrawerProps {
   type: "transaction" | "receipt" | "invoice" | null;
   id: number | null;
+  suspended?: boolean;
   onClose: () => void;
   onCreateRule?: (data: { name: string; descriptionKeyword: string; categoryAccountId?: number | null }) => void;
   onOpenInvoices?: () => void;
@@ -84,6 +85,7 @@ const LINK_LIMIT = 20;
 export default function DetailDrawer({
   type,
   id,
+  suspended = false,
   onClose,
   onCreateRule,
   onOpenInvoices,
@@ -295,9 +297,10 @@ export default function DetailDrawer({
         } else if (type === "invoice") {
           const data = await getInvoice(Number(id));
           if (reqId !== activeRequestId.current) return;
-          const inv = data.invoice;
-          loadedDate = inv.issueDate || inv.createdAt;
-          loadedReview = "";
+          const inv = data?.invoice || (data as unknown as Invoice);
+          if (!inv) return;
+          loadedDate = inv.issueDate || inv.createdAt || "";
+          loadedReview = inv.reviewStatus || "";
           setInvoice(inv);
           if (inv.bankTransaction) {
             setTx(inv.bankTransaction);
@@ -539,7 +542,26 @@ export default function DetailDrawer({
     }
   });
 
+  const prevSuspendedRef = useRef(suspended);
   useEffect(() => {
+    if (prevSuspendedRef.current && !suspended && id && type) {
+      void loadData(false);
+    }
+    prevSuspendedRef.current = suspended;
+  }, [suspended, id, type, loadData]);
+
+  useEffect(() => {
+    if (!id || !type || suspended) return;
+    const prevActive = document.activeElement as HTMLElement | null;
+    return () => {
+      if (prevActive && typeof prevActive.focus === "function") {
+        prevActive.focus();
+      }
+    };
+  }, [id, type, suspended]);
+
+  useEffect(() => {
+    if (suspended) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       const isInputFocused = ["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement)?.tagName);
       if (e.key === "Escape") {
@@ -587,6 +609,7 @@ export default function DetailDrawer({
     suggestedExpenseCandidates,
     suggestedTransactionCandidates,
     isClosed,
+    suspended,
   ]);
 
   const handleUploadReceipt = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -952,7 +975,7 @@ export default function DetailDrawer({
   const handleDeleteInvoiceRecord = async (inv: Invoice) => {
     const ok = await confirm({
       title: "Delete Invoice",
-      message: `Delete invoice ${inv.invoiceNumber || `INV-${inv.id}`} for ${inv.clientName}?`,
+      message: `Delete invoice ${inv.invoiceNumber || `INV-${inv.id}`} for ${inv.clientName}?\n\nIt will be moved to Deleted Items for 30 days before permanent deletion. You can restore it anytime from the sidebar.`,
       confirmText: "Delete Invoice",
       variant: "danger",
     });
@@ -1021,9 +1044,16 @@ export default function DetailDrawer({
     else if (expense) await executeLink(expense.id, selectedLinkId);
   };
 
-  const handleCardAction = (action: "EXCLUDE" | "IGNORE", targetType: "transaction" | "expense", targetId: number) => {
+  const handleCardAction = (
+    action: "EXCLUDE" | "IGNORE",
+    targetType: ActionTarget["type"],
+    targetId: number
+  ) => {
     const isLinked =
-      (type === "transaction" && expensesList.length > 0) || (type === "receipt" && transactionsList.length > 0);
+      (type === "transaction" && expensesList.length > 0) ||
+      (type === "receipt" && transactionsList.length > 0) ||
+      (type === "invoice" &&
+        Boolean(invoice?.bankTransactionId || (invoice?.linkedExpenses && invoice.linkedExpenses.length > 0)));
     if (!isLinked) {
       if (action === "EXCLUDE") setExcludeTarget({ type: targetType, id: targetId });
       else setIgnoreTarget({ type: targetType, id: targetId });
@@ -1089,17 +1119,25 @@ export default function DetailDrawer({
         if (target.type === "transaction") {
           for (const e of confirmedExpenses) await unlinkExpenseFromTransaction(e.id, target.id);
           await resolveReviewItems("ignore_warnings", [target.id], []);
-        } else {
+        } else if (target.type === "expense") {
           for (const t of confirmedTransactions) await unlinkExpenseFromTransaction(target.id, t.id);
           await resolveReviewItems("ignore_warnings", [], [target.id]);
+        } else if (target.type === "invoice") {
+          await resolveReviewItems("ignore_warnings", [], [], [target.id]);
         }
       } else if (target.linkedChoice === "ALL_LINKED") {
         const tIds = type === "transaction" && tx ? [tx.id] : confirmedTransactions.map((t) => t.id);
         const eIds = type === "receipt" && expense ? [expense.id] : confirmedExpenses.map((e) => e.id);
-        await resolveReviewItems("ignore_warnings", tIds, eIds);
+        const iIds = type === "invoice" && invoice ? [invoice.id] : [];
+        if (iIds.length > 0) {
+          await resolveReviewItems("ignore_warnings", tIds, eIds, iIds);
+        } else {
+          await resolveReviewItems("ignore_warnings", tIds, eIds);
+        }
       } else {
         if (target.type === "transaction") await resolveReviewItems("ignore_warnings", [target.id], []);
-        else await resolveReviewItems("ignore_warnings", [], [target.id]);
+        else if (target.type === "expense") await resolveReviewItems("ignore_warnings", [], [target.id]);
+        else if (target.type === "invoice") await resolveReviewItems("ignore_warnings", [], [], [target.id]);
       }
       setIgnoreTarget(null);
       await loadData();
@@ -1180,11 +1218,15 @@ export default function DetailDrawer({
   const handleConfirmAllowClosed = async (target: AllowConfirmState) => {
     setIsAllowing(true);
     try {
-      await resolveReviewItems(
-        "allow",
-        target.type === "transaction" ? [target.id] : [],
-        target.type === "expense" ? [target.id] : []
-      );
+      if (target.type === "invoice") {
+        await resolveReviewItems("allow", [], [], [target.id]);
+      } else {
+        await resolveReviewItems(
+          "allow",
+          target.type === "transaction" ? [target.id] : [],
+          target.type === "expense" ? [target.id] : []
+        );
+      }
       setAllowConfirmTarget(null);
       await loadData();
     } catch (err: unknown) {
@@ -1195,7 +1237,12 @@ export default function DetailDrawer({
     }
   };
 
-  const itemReviewStatus = type === "transaction" ? tx?.reviewStatus : expense?.reviewStatus;
+  const itemReviewStatus =
+    type === "transaction"
+      ? tx?.reviewStatus
+      : type === "invoice"
+      ? invoice?.reviewStatus
+      : expense?.reviewStatus;
   const itemAwaitingReview = itemReviewStatus === "PENDING" && isDateInClosedPeriod;
 
   const linkPickerNode =
@@ -1248,15 +1295,15 @@ export default function DetailDrawer({
   return ReactDOM.createPortal(
     <>
       <div
-        className={`fixed inset-0 z-60 bg-black/60 transition-opacity duration-300 ${
+        className={`fixed inset-0 z-[105] bg-black/60 transition-opacity duration-300 ${
           isVisible ? "opacity-100" : "opacity-0"
-        }`}
+        } ${suspended ? "invisible pointer-events-none" : ""}`}
         onClick={handleClose}
       />
       <div
-        className={`fixed inset-y-0 right-0 z-70 w-full lg:w-[85vw] lg:max-w-5xl bg-zinc-950/90 backdrop-blur-3xl border-l border-white/10 flex flex-col shadow-2xl transform transition-transform duration-300 ease-out ${
+        className={`fixed inset-y-0 right-0 z-[110] w-full lg:w-[85vw] lg:max-w-5xl bg-zinc-950/90 backdrop-blur-3xl border-l border-white/10 flex flex-col shadow-2xl transform transition-transform duration-300 ease-out ${
           isVisible ? "translate-x-0" : "translate-x-full"
-        }`}
+        } ${suspended ? "invisible pointer-events-none" : ""}`}
       >
         <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-zinc-800 shrink-0">
           <div className="flex items-center gap-2.5">
@@ -1344,8 +1391,18 @@ export default function DetailDrawer({
                       It does not affect totals or reports and cannot be linked while excluded.
                     </p>
                     {(() => {
-                      const reason = type === "transaction" ? tx?.exclusionReason : expense?.exclusionReason;
-                      const note = type === "transaction" ? tx?.exclusionNote : expense?.exclusionNote;
+                      const reason =
+                        type === "transaction"
+                          ? tx?.exclusionReason
+                          : type === "invoice"
+                          ? invoice?.exclusionReason
+                          : expense?.exclusionReason;
+                      const note =
+                        type === "transaction"
+                          ? tx?.exclusionNote
+                          : type === "invoice"
+                          ? invoice?.exclusionNote
+                          : expense?.exclusionNote;
                       return (
                         <div className="mt-1 text-xs text-zinc-400">
                           {reason && (
@@ -1368,7 +1425,10 @@ export default function DetailDrawer({
                       setIsRestoring(true);
                       setRestoreError("");
                       try {
-                        await restoreItem(type === "receipt" ? "expense" : "transaction", Number(id));
+                        await restoreItem(
+                          type === "invoice" ? "invoice" : type === "receipt" ? "expense" : "transaction",
+                          Number(id)
+                        );
                         await loadData();
                       } catch (err: unknown) {
                         const parsed = parseApiError(err, "Failed to restore item");
@@ -1420,6 +1480,15 @@ export default function DetailDrawer({
                   onDeleteInvoice={handleDeleteInvoiceRecord}
                   onEditInvoice={onEditInvoice}
                   onPrintInvoice={onPrintInvoice}
+                  isClosed={isClosed}
+                  itemAwaitingReview={itemAwaitingReview}
+                  isDateInClosedPeriod={isDateInClosedPeriod}
+                  onRestoreInvoiceWarnings={async (invId) => {
+                    await resolveReviewItems("restore_warnings", [], [], [invId]);
+                    await loadData();
+                  }}
+                  onAllowInvoiceClosed={setAllowConfirmTarget}
+                  onCardAction={handleCardAction}
                 />
               ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5 items-stretch relative">
@@ -1493,7 +1562,22 @@ export default function DetailDrawer({
                     isEditingExpense={isEditingExpense}
                     expenseForm={expenseForm}
                     onChangeExpenseForm={setExpenseForm}
-                    onStartEditExpense={() => setIsEditingExpense(true)}
+                    onStartEditExpense={() => {
+                      if (activeExpense) {
+                        setExpenseForm({
+                          timestamp: activeExpense.timestamp ? activeExpense.timestamp.split("T")[0] : "",
+                          vendor: activeExpense.vendor,
+                          description: activeExpense.description,
+                          amount: activeExpense.amount,
+                          taxAmount: activeExpense.taxAmount || 0,
+                          currencyCode: activeExpense.currencyCode || "USD",
+                          tender: activeExpense.tender,
+                          notes: activeExpense.notes || "",
+                          chartAccountId: activeExpense.chartAccountId || "",
+                        });
+                      }
+                      setIsEditingExpense(true);
+                    }}
                     onCancelEditExpense={() => setIsEditingExpense(false)}
                     onSaveExpense={() => void handleSaveExpense()}
                     onDeleteExpense={() => void handleDeleteExpense()}
@@ -1556,7 +1640,19 @@ export default function DetailDrawer({
                     isEditingTx={isEditingTx}
                     txForm={txForm}
                     onChangeTxForm={setTxForm}
-                    onStartEditTx={() => setIsEditingTx(true)}
+                    onStartEditTx={() => {
+                      if (activeTx) {
+                        setTxForm({
+                          date: activeTx.date ? activeTx.date.split("T")[0] : "",
+                          description: activeTx.description,
+                          amount: activeTx.amount,
+                          notes: activeTx.notes || "",
+                          chartAccountId: activeTx.chartAccountId || "",
+                          categoryAccountId: activeTx.categoryAccountId || "",
+                        });
+                      }
+                      setIsEditingTx(true);
+                    }}
                     onCancelEditTx={() => setIsEditingTx(false)}
                     onSaveTx={() => void handleSaveTx()}
                     onDeleteTx={() => void handleDeleteTx()}

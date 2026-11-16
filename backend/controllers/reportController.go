@@ -104,7 +104,7 @@ func BuildProfitLossData(input PLBuilderInput) ProfitLossReportData {
 		}
 	}
 
-	var revenue []PLLine
+	revenue := make([]PLLine, 0, len(revMap))
 	for _, l := range revMap {
 		revenue = append(revenue, *l)
 	}
@@ -179,7 +179,7 @@ func BuildProfitLossData(input PLBuilderInput) ProfitLossReportData {
 		}
 	}
 
-	var expenses []PLLine
+	expenses := make([]PLLine, 0, len(expMap))
 	for _, l := range expMap {
 		expenses = append(expenses, *l)
 	}
@@ -277,7 +277,7 @@ func GetProfitLoss(c fiber.Ctx) error {
 		Joins("JOIN chart_accounts ca ON ca.id = e.chart_account_id").
 		Where("ca.type = ?", "EXPENSE").
 		Where(inBooksClauseExpAS).
-		Where("(LOWER(COALESCE(e.tender, '')) = 'cash' OR e.review_status = 'WARNINGS_IGNORED' OR e.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))").
+		Where("(" + isCashClauseExpAS + " OR e.review_status = 'WARNINGS_IGNORED' OR e.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))").
 		Group("ca.id, ca.code, ca.name")
 	expQ = ApplyDateRange(expQ, "e.timestamp", startDate, endDate)
 	if err := expQ.Scan(&expFromReceipts).Error; err != nil {
@@ -305,7 +305,7 @@ func GetProfitLoss(c fiber.Ctx) error {
 		Select("COALESCE(SUM(amount), 0) as total").
 		Where("chart_account_id IS NULL").
 		Where(inBooksClause).
-		Where("(LOWER(COALESCE(tender, '')) = 'cash' OR review_status = 'WARNINGS_IGNORED' OR id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
+		Where("(" + isCashClause + " OR review_status = 'WARNINGS_IGNORED' OR id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
 	ueQ = ApplyDateRange(ueQ, "timestamp", startDate, endDate)
 	if err := ueQ.Scan(&uncatExpTotal).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to calculate uncategorized expenses"})
@@ -326,10 +326,11 @@ func GetProfitLoss(c fiber.Ctx) error {
 	var partialDebitLines []PLPartialDebitRemainder
 	partQ := db.DB.Table("bank_transactions bt").
 		Select("ca.code as account_code, ca.name as account_name, ca.type as account_type, COALESCE(SUM(ABS(bt.amount) - sub.allocated), 0) as total").
-		Joins("JOIN (SELECT bank_transaction_id, SUM(e.amount) as allocated FROM expense_bank_transactions ebt JOIN expenses e ON e.id = ebt.expense_id WHERE ebt.status = 'confirmed' GROUP BY bank_transaction_id) sub ON sub.bank_transaction_id = bt.id").
+		Joins("JOIN (SELECT bank_transaction_id, SUM(e.amount) as allocated FROM expense_bank_transactions ebt JOIN expenses e ON e.id = ebt.expense_id WHERE ebt.status = 'confirmed' AND e.deleted_at IS NULL GROUP BY bank_transaction_id) sub ON sub.bank_transaction_id = bt.id").
 		Joins("LEFT JOIN chart_accounts ca ON ca.id = bt.category_account_id").
 		Where("bt.amount < 0").
-		Where("bt.allocation_status = 'PARTIALLY_ALLOCATED'").
+		Where("bt.allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL')").
+		Where("ABS(bt.amount) > sub.allocated").
 		Where(inBooksClauseBT).
 		Group("ca.id, ca.code, ca.name, ca.type")
 	partQ = ApplyDateRange(partQ, "bt.date", startDate, endDate)
@@ -337,18 +338,22 @@ func GetProfitLoss(c fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to calculate partial debit remainders"})
 	}
 
-	// Also count uncategorized transactions and expenses for completeness
+	// Also count uncategorized transactions and expenses included in Suspense (9998 / 9999)
 	var uncategorizedTxCount int64
 	uncatTxQ := db.DB.Model(&models.BankTransaction{}).
 		Where(inBooksClause).
+		Where("amount != 0").
 		Where("category_account_id IS NULL").
-		Where("id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')").
+		Where("(id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed') OR (amount < 0 AND allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL')))").
 		Where("NOT (amount > 0 AND chart_account_id IN (SELECT id FROM chart_accounts WHERE type = 'LIABILITY'))")
 	uncatTxQ = ApplyDateRange(uncatTxQ, "date", startDate, endDate)
 	uncatTxQ.Count(&uncategorizedTxCount)
 
 	var uncategorizedExpCount int64
-	uncatExpQ := db.DB.Model(&models.Expense{}).Where(inBooksClause).Where("chart_account_id IS NULL")
+	uncatExpQ := db.DB.Model(&models.Expense{}).
+		Where(inBooksClause).
+		Where("chart_account_id IS NULL").
+		Where("(" + isCashClause + " OR review_status = 'WARNINGS_IGNORED' OR id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
 	uncatExpQ = ApplyDateRange(uncatExpQ, "timestamp", startDate, endDate)
 	uncatExpQ.Count(&uncategorizedExpCount)
 
@@ -369,7 +374,7 @@ func GetProfitLoss(c fiber.Ctx) error {
 	stQ := db.DB.Model(&models.Expense{}).
 		Select("COALESCE(SUM(tax_amount), 0) as total").
 		Where(inBooksClause).
-		Where("(LOWER(COALESCE(tender, '')) = 'cash' OR review_status = 'WARNINGS_IGNORED' OR id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
+		Where("(" + isCashClause + " OR review_status = 'WARNINGS_IGNORED' OR id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
 	stQ = ApplyDateRange(stQ, "timestamp", startDate, endDate)
 	stQ.Scan(&salesTaxTotal)
 
@@ -728,7 +733,7 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		Joins("JOIN chart_accounts ca ON ca.id = e.chart_account_id").
 		Where("ca.type = ?", "EXPENSE").
 		Where(inBooksClauseExpAS).
-		Where("(LOWER(COALESCE(e.tender, '')) = 'cash' OR e.review_status = 'WARNINGS_IGNORED' OR e.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))").
+		Where("(" + isCashClauseExpAS + " OR e.review_status = 'WARNINGS_IGNORED' OR e.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))").
 		Group("ca.id")
 	expQ = ApplyDateRange(expQ, "e.timestamp", startDate, endDate)
 	if err := expQ.Scan(&expReceiptSums).Error; err != nil {
@@ -755,13 +760,13 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		expByAccount[s.AccountID] = expByAccount[s.AccountID].Add(s.Total)
 	}
 
-	// 2c. Uncategorized expenses & unlinked debits
+	// 2c. Uncategorized expenses & unlinked debits & partial debit remainders
 	var uncatExpTotal amtResult
 	ueQ := db.DB.Model(&models.Expense{}).
 		Select("COALESCE(SUM(amount), 0) as total").
 		Where("chart_account_id IS NULL").
 		Where(inBooksClause).
-		Where("(LOWER(COALESCE(tender, '')) = 'cash' OR review_status = 'WARNINGS_IGNORED' OR id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
+		Where("(" + isCashClause + " OR review_status = 'WARNINGS_IGNORED' OR id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
 	ueQ = ApplyDateRange(ueQ, "timestamp", startDate, endDate)
 	_ = ueQ.Scan(&uncatExpTotal)
 
@@ -775,17 +780,34 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 	udQ = ApplyDateRange(udQ, "date", startDate, endDate)
 	_ = udQ.Scan(&uncatDebitTotal)
 
-	var partialDebitRemainder amtResult
+	type schedCPartialRow struct {
+		AccountID   *uint        `gorm:"column:account_id"`
+		AccountType *string      `gorm:"column:account_type"`
+		Total       models.Money `gorm:"column:total"`
+	}
+	var partialRows []schedCPartialRow
 	partQ := db.DB.Table("bank_transactions bt").
-		Select("COALESCE(SUM(ABS(bt.amount) - sub.allocated), 0) as total").
-		Joins("JOIN (SELECT bank_transaction_id, SUM(e.amount) as allocated FROM expense_bank_transactions ebt JOIN expenses e ON e.id = ebt.expense_id WHERE ebt.status = 'confirmed' GROUP BY bank_transaction_id) sub ON sub.bank_transaction_id = bt.id").
+		Select("ca.id as account_id, ca.type as account_type, COALESCE(SUM(ABS(bt.amount) - sub.allocated), 0) as total").
+		Joins("JOIN (SELECT bank_transaction_id, SUM(e.amount) as allocated FROM expense_bank_transactions ebt JOIN expenses e ON e.id = ebt.expense_id WHERE ebt.status = 'confirmed' AND e.deleted_at IS NULL GROUP BY bank_transaction_id) sub ON sub.bank_transaction_id = bt.id").
+		Joins("LEFT JOIN chart_accounts ca ON ca.id = bt.category_account_id").
 		Where("bt.amount < 0").
-		Where("bt.allocation_status = 'PARTIALLY_ALLOCATED'").
-		Where(inBooksClauseBT)
+		Where("bt.allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL')").
+		Where("ABS(bt.amount) > sub.allocated").
+		Where(inBooksClauseBT).
+		Group("ca.id, ca.type")
 	partQ = ApplyDateRange(partQ, "bt.date", startDate, endDate)
-	_ = partQ.Scan(&partialDebitRemainder)
+	_ = partQ.Scan(&partialRows)
 
-	totalUncatExp := uncatExpTotal.Total.Add(uncatDebitTotal.Total).Add(partialDebitRemainder.Total)
+	var partialUncatRemainder models.Money
+	for _, pr := range partialRows {
+		if pr.AccountID != nil && pr.AccountType != nil && *pr.AccountType == "EXPENSE" {
+			expByAccount[*pr.AccountID] = expByAccount[*pr.AccountID].Add(pr.Total)
+		} else {
+			partialUncatRemainder = partialUncatRemainder.Add(pr.Total)
+		}
+	}
+
+	totalUncatExp := uncatExpTotal.Total.Add(uncatDebitTotal.Total).Add(partialUncatRemainder)
 
 	// Aggregate into Income Lines
 	var grossReceipts models.Money
@@ -804,17 +826,23 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		if !ok {
 			return nil, fmt.Errorf("revenue account %q is mapped to unsupported Schedule C income line %q; choose Line 1, 2, 4, or 6", acc.Name, lineNum)
 		}
-		addScheduleCIncomeAccountLine(incomeLineMap, lineNum, lineName, acc, s.Total)
+		amt := s.Total
+		// Returns & Allowances (Line 2) and COGS (Line 4) are contra-revenue debits (negative in bank_transactions)
+		// that are subtracted in Part I (Line 3 = Line 1 - Line 2; Line 5 = Line 3 - Line 4), so store their magnitude as positive.
+		if treatment == "returns_and_allowances" || treatment == "cost_of_goods_sold" {
+			amt = s.Total.Abs()
+		}
+		addScheduleCIncomeAccountLine(incomeLineMap, lineNum, lineName, acc, amt)
 
 		switch treatment {
 		case "gross_receipts":
-			grossReceipts = grossReceipts.Add(s.Total)
+			grossReceipts = grossReceipts.Add(amt)
 		case "returns_and_allowances":
-			returnsAndAllowances = returnsAndAllowances.Add(s.Total)
+			returnsAndAllowances = returnsAndAllowances.Add(amt)
 		case "cost_of_goods_sold":
-			cogs = cogs.Add(s.Total)
+			cogs = cogs.Add(amt)
 		case "other_income":
-			otherIncome = otherIncome.Add(s.Total)
+			otherIncome = otherIncome.Add(amt)
 		}
 	}
 
@@ -874,7 +902,7 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		})
 	}
 
-	var incomeLines []ScheduleCIncomeLine
+	incomeLines := make([]ScheduleCIncomeLine, 0, len(incomeLineMap))
 	for _, l := range incomeLineMap {
 		sort.Slice(l.Accounts, func(i, j int) bool {
 			return l.Accounts[i].AccountCode < l.Accounts[j].AccountCode
@@ -882,7 +910,18 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		incomeLines = append(incomeLines, *l)
 	}
 	sort.Slice(incomeLines, func(i, j int) bool {
-		return incomeLines[i].LineNumber < incomeLines[j].LineNumber
+		orderI := scheduleCLineOrder[incomeLines[i].LineNumber]
+		if orderI == 0 {
+			orderI = 500
+		}
+		orderJ := scheduleCLineOrder[incomeLines[j].LineNumber]
+		if orderJ == 0 {
+			orderJ = 500
+		}
+		if orderI != orderJ {
+			return orderI < orderJ
+		}
+		return incomeLines[i].LineName < incomeLines[j].LineName
 	})
 
 	netReceipts := grossReceipts.Sub(returnsAndAllowances)
@@ -903,7 +942,7 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 		}
 	}
 
-	var expenseLines []ScheduleCExpenseLine
+	expenseLines := make([]ScheduleCExpenseLine, 0, len(expenseLineMap))
 	var totalGrossExp models.Money
 	var totalDedExp models.Money
 	var nondeductibleMeals models.Money
@@ -944,14 +983,18 @@ func BuildScheduleCData(startDate, endDate string, year int) (*ScheduleCReportDa
 	var uncategorizedTxCount int64
 	uncatTxQ := db.DB.Model(&models.BankTransaction{}).
 		Where(inBooksClause).
+		Where("amount != 0").
 		Where("category_account_id IS NULL").
-		Where("id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')").
+		Where("(id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed') OR (amount < 0 AND allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL')))").
 		Where("NOT (amount > 0 AND chart_account_id IN (SELECT id FROM chart_accounts WHERE type = 'LIABILITY'))")
 	uncatTxQ = ApplyDateRange(uncatTxQ, "date", startDate, endDate)
 	uncatTxQ.Count(&uncategorizedTxCount)
 
 	var uncategorizedExpCount int64
-	uncatExpQ := db.DB.Model(&models.Expense{}).Where(inBooksClause).Where("chart_account_id IS NULL")
+	uncatExpQ := db.DB.Model(&models.Expense{}).
+		Where(inBooksClause).
+		Where("chart_account_id IS NULL").
+		Where("(" + isCashClause + " OR review_status = 'WARNINGS_IGNORED' OR id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
 	uncatExpQ = ApplyDateRange(uncatExpQ, "timestamp", startDate, endDate)
 	uncatExpQ.Count(&uncategorizedExpCount)
 
@@ -1141,6 +1184,9 @@ func BuildCashFlowData(input CashFlowBuilderInput) CashFlowReportData {
 	var monthKeys []string
 
 	for _, tx := range input.Transactions {
+		if tx.Amount.Cents == 0 {
+			continue
+		}
 		mKey := tx.Date.Format("2006-01")
 		period, exists := monthMap[mKey]
 		if !exists {
@@ -1163,7 +1209,7 @@ func BuildCashFlowData(input CashFlowBuilderInput) CashFlowReportData {
 
 	sort.Strings(monthKeys)
 
-	var periods []CashFlowPeriod
+	periods := make([]CashFlowPeriod, 0, len(monthKeys))
 	var totalInCents, totalOutCents int64
 	var runningTotalCents int64
 
@@ -1206,8 +1252,9 @@ func BuildCashFlowData(input CashFlowBuilderInput) CashFlowReportData {
 }
 
 // GetCashFlowSummary calculates monthly cash inflows vs outflows and liquidity trends.
-// Excludes LIABILITY accounts (e.g. credit cards) and internal transfers between ASSET accounts
-// so that only true Cash and Cash Equivalent flows are measured without double-counting.
+// Tracks liquid Cash & Cash Equivalent accounts (10xx: Checking 1010, Savings 1020, Cash on Hand 1030),
+// includes physical cash-tender expense outflows (1030), excludes LIABILITY source accounts (e.g. credit cards),
+// and excludes internal cash-to-cash transfers between 10xx accounts while preserving CapEx (1300) / Inventory (1200) cash purchases.
 func GetCashFlowSummary(c fiber.Ctx) error {
 	if db.DB == nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not initialized"})
@@ -1220,13 +1267,38 @@ func GetCashFlowSummary(c fiber.Ctx) error {
 		Joins("LEFT JOIN chart_accounts bank_ca ON bank_ca.id = bt.chart_account_id").
 		Joins("LEFT JOIN chart_accounts cat_ca ON cat_ca.id = bt.category_account_id").
 		Where(inBooksClauseBT).
+		Where("bt.amount != 0").
 		Where("COALESCE(bank_ca.type, 'ASSET') != 'LIABILITY'").
-		Where("COALESCE(cat_ca.type, '') != 'ASSET'")
+		Where("COALESCE(bank_ca.code, '1010') LIKE '10%'").
+		Where("NOT (COALESCE(cat_ca.type, '') = 'ASSET' AND COALESCE(cat_ca.code, '') LIKE '10%')")
 	query = ApplyDateRange(query, "bt.date", startDate, endDate)
 
 	var txs []CashFlowRawTx
 	if err := query.Order("bt.date ASC").Scan(&txs).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch cash flow data"})
+	}
+
+	// Include standalone physical cash-tender expenses (which reduce 1030 Cash on Hand without a bank debit row)
+	type rawCashExp struct {
+		Timestamp time.Time
+		Amount    models.Money
+	}
+	cashExpQuery := db.DB.Table("expenses").
+		Select("timestamp, amount").
+		Where(inBooksClause).
+		Where(isCashClause).
+		Where("amount > 0").
+		Where("id NOT IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed')")
+	cashExpQuery = ApplyDateRange(cashExpQuery, "timestamp", startDate, endDate)
+
+	var cashExps []rawCashExp
+	if err := cashExpQuery.Order("timestamp ASC").Scan(&cashExps).Error; err == nil {
+		for _, ce := range cashExps {
+			txs = append(txs, CashFlowRawTx{
+				Date:   ce.Timestamp,
+				Amount: models.Money{Cents: -ce.Amount.Cents},
+			})
+		}
 	}
 
 	report := BuildCashFlowData(CashFlowBuilderInput{
@@ -1283,17 +1355,21 @@ type VendorSpendBuilderInput struct {
 // BuildVendorSpendData compiles vendor spend analytics and IRS 1099-NEC contractor compliance using exact integer cents.
 func BuildVendorSpendData(input VendorSpendBuilderInput) VendorSpendReportData {
 	type vendorAgg struct {
-		VendorName string
-		TotalCents int64
-		Count      int64
-		Categories map[string]int // "Code|Name" -> count
-		MostRecent time.Time
+		VendorName    string
+		TotalCents    int64
+		Count         int64
+		Categories    map[string]int   // "Code|Name" -> count
+		CategoryCents map[string]int64 // "Code|Name" -> total cents
+		MostRecent    time.Time
 	}
 
 	aggMap := make(map[string]*vendorAgg)
 	var grandTotalCents int64
 
 	for _, item := range input.Items {
+		if item.Amount.Cents == 0 {
+			continue
+		}
 		name := strings.TrimSpace(item.Vendor)
 		if name == "" {
 			name = strings.TrimSpace(item.Description)
@@ -1307,8 +1383,9 @@ func BuildVendorSpendData(input VendorSpendBuilderInput) VendorSpendReportData {
 		agg, exists := aggMap[key]
 		if !exists {
 			agg = &vendorAgg{
-				VendorName: cleanName,
-				Categories: make(map[string]int),
+				VendorName:    cleanName,
+				Categories:    make(map[string]int),
+				CategoryCents: make(map[string]int64),
 			}
 			aggMap[key] = agg
 		}
@@ -1326,16 +1403,22 @@ func BuildVendorSpendData(input VendorSpendBuilderInput) VendorSpendReportData {
 
 		catKey := fmt.Sprintf("%s|%s", item.CategoryCode, item.CategoryName)
 		agg.Categories[catKey]++
+		agg.CategoryCents[catKey] += cents
 	}
 
-	var vendorList []VendorSpendItem
+	vendorList := make([]VendorSpendItem, 0, len(aggMap))
 	for _, agg := range aggMap {
 		bestCatCode := ""
 		bestCatName := ""
+		bestKey := ""
 		bestCount := -1
+		var bestCents int64 = -1
 		for ck, count := range agg.Categories {
-			if count > bestCount {
+			cents := agg.CategoryCents[ck]
+			if count > bestCount || (count == bestCount && cents > bestCents) || (count == bestCount && cents == bestCents && (bestKey == "" || ck < bestKey)) {
 				bestCount = count
+				bestCents = cents
+				bestKey = ck
 				parts := strings.SplitN(ck, "|", 2)
 				bestCatCode = parts[0]
 				if len(parts) > 1 {
@@ -1367,7 +1450,10 @@ func BuildVendorSpendData(input VendorSpendBuilderInput) VendorSpendReportData {
 	}
 
 	sort.Slice(vendorList, func(i, j int) bool {
-		return vendorList[i].TotalSpend.Cents > vendorList[j].TotalSpend.Cents
+		if vendorList[i].TotalSpend.Cents != vendorList[j].TotalSpend.Cents {
+			return vendorList[i].TotalSpend.Cents > vendorList[j].TotalSpend.Cents
+		}
+		return strings.ToUpper(vendorList[i].VendorName) < strings.ToUpper(vendorList[j].VendorName)
 	})
 
 	var top5Cents int64
@@ -1418,11 +1504,12 @@ func GetVendorSpendReport(c fiber.Ctx) error {
 
 	var exps []dbExpenseRow
 	expQ := db.DB.Table("expenses e").
-		Select("e.vendor, e.description, e.amount, e.timestamp, ca.code as category_code, ca.name as category_name").
-		Joins("JOIN chart_accounts ca ON ca.id = e.chart_account_id").
-		Where("ca.type = ?", "EXPENSE").
+		Select("e.vendor, e.description, e.amount, e.timestamp, COALESCE(ca.code, '9999') as category_code, COALESCE(ca.name, 'Uncategorized') as category_name").
+		Joins("LEFT JOIN chart_accounts ca ON ca.id = e.chart_account_id").
+		Where("(ca.type = ? OR e.chart_account_id IS NULL)", "EXPENSE").
+		Where("e.amount != 0").
 		Where(inBooksClauseExpAS).
-		Where("(LOWER(COALESCE(e.tender, '')) = 'cash' OR e.review_status = 'WARNINGS_IGNORED' OR e.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
+		Where("(" + isCashClauseExpAS + " OR e.review_status = 'WARNINGS_IGNORED' OR e.id IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed'))")
 	expQ = ApplyDateRange(expQ, "e.timestamp", startDate, endDate)
 	if err := expQ.Scan(&exps).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch vendor expense data"})
@@ -1430,15 +1517,30 @@ func GetVendorSpendReport(c fiber.Ctx) error {
 
 	var debits []dbExpenseRow
 	debQ := db.DB.Table("bank_transactions bt").
-		Select("bt.description as vendor, bt.description, ABS(bt.amount) as amount, bt.date as timestamp, ca.code as category_code, ca.name as category_name").
-		Joins("JOIN chart_accounts ca ON ca.id = bt.category_account_id").
-		Where("ca.type = ?", "EXPENSE").
+		Select("bt.description as vendor, bt.description, ABS(bt.amount) as amount, bt.date as timestamp, COALESCE(ca.code, '9999') as category_code, COALESCE(ca.name, 'Uncategorized') as category_name").
+		Joins("LEFT JOIN chart_accounts ca ON ca.id = bt.category_account_id").
+		Where("(ca.type = ? OR bt.category_account_id IS NULL)", "EXPENSE").
 		Where("bt.amount < 0").
 		Where(inBooksClauseBT).
 		Where("bt.id NOT IN (SELECT bank_transaction_id FROM expense_bank_transactions WHERE status = 'confirmed')")
 	debQ = ApplyDateRange(debQ, "bt.date", startDate, endDate)
 	if err := debQ.Scan(&debits).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch vendor debit data"})
+	}
+
+	var partialDebits []dbExpenseRow
+	partQ := db.DB.Table("bank_transactions bt").
+		Select("bt.description as vendor, bt.description, (ABS(bt.amount) - sub.allocated) as amount, bt.date as timestamp, COALESCE(ca.code, '9999') as category_code, COALESCE(ca.name, 'Uncategorized') as category_name").
+		Joins("JOIN (SELECT bank_transaction_id, SUM(e.amount) as allocated FROM expense_bank_transactions ebt JOIN expenses e ON e.id = ebt.expense_id WHERE ebt.status = 'confirmed' AND e.deleted_at IS NULL GROUP BY bank_transaction_id) sub ON sub.bank_transaction_id = bt.id").
+		Joins("LEFT JOIN chart_accounts ca ON ca.id = bt.category_account_id").
+		Where("(ca.type = ? OR bt.category_account_id IS NULL)", "EXPENSE").
+		Where("bt.amount < 0").
+		Where("bt.allocation_status IN ('PARTIALLY_ALLOCATED', 'PARTIAL')").
+		Where("ABS(bt.amount) > sub.allocated").
+		Where(inBooksClauseBT)
+	partQ = ApplyDateRange(partQ, "bt.date", startDate, endDate)
+	if err := partQ.Scan(&partialDebits).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch vendor partial debit data"})
 	}
 
 	var rawItems []VendorSpendRawItem
@@ -1460,6 +1562,16 @@ func GetVendorSpendReport(c fiber.Ctx) error {
 			Timestamp:    d.Timestamp,
 			CategoryCode: d.CategoryCode,
 			CategoryName: d.CategoryName,
+		})
+	}
+	for _, pd := range partialDebits {
+		rawItems = append(rawItems, VendorSpendRawItem{
+			Vendor:       pd.Vendor,
+			Description:  pd.Description,
+			Amount:       pd.Amount,
+			Timestamp:    pd.Timestamp,
+			CategoryCode: pd.CategoryCode,
+			CategoryName: pd.CategoryName,
 		})
 	}
 
@@ -1571,6 +1683,15 @@ func BuildARAgingData(invoices []models.Invoice, asOf time.Time, creditSales mod
 
 		daysOverdue := arDaysPastDue(inv.DueDate, asOf)
 
+		effectiveStatus := inv.Status
+		if effectiveStatus != "PARTIALLY_PAID" {
+			if daysOverdue > 0 {
+				effectiveStatus = "OVERDUE"
+			} else {
+				effectiveStatus = "SENT"
+			}
+		}
+
 		item := ARAgingInvoiceItem{
 			ID:            inv.ID,
 			InvoiceNumber: inv.InvoiceNumber,
@@ -1582,7 +1703,7 @@ func BuildARAgingData(invoices []models.Invoice, asOf time.Time, creditSales mod
 			AmountPaid:    inv.AmountPaid,
 			BalanceDue:    receivable,
 			DaysOverdue:   daysOverdue,
-			Status:        inv.Status,
+			Status:        effectiveStatus,
 		}
 
 		var bucket *ARAgingBucket
@@ -1633,12 +1754,15 @@ func BuildARAgingData(invoices []models.Invoice, asOf time.Time, creditSales mod
 
 	buckets := []ARAgingBucket{*currentBucket, *b1_30, *b31_60, *b61_90, *b90plus}
 
-	var clients []ARClientSummary
+	clients := make([]ARClientSummary, 0, len(clientMap))
 	for _, cs := range clientMap {
 		clients = append(clients, *cs)
 	}
 	sort.Slice(clients, func(i, j int) bool {
-		return clients[i].TotalOutstanding.GreaterThan(clients[j].TotalOutstanding)
+		if clients[i].TotalOutstanding.Cents != clients[j].TotalOutstanding.Cents {
+			return clients[i].TotalOutstanding.GreaterThan(clients[j].TotalOutstanding)
+		}
+		return strings.ToUpper(clients[i].ClientName) < strings.ToUpper(clients[j].ClientName)
 	})
 
 	// DSO = (Total Receivables / Credit Sales in trailing window) x window days.
@@ -1693,19 +1817,21 @@ func GetARAgingReport(c fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database not available"})
 	}
 
+	asOfDayStr := truncateToDay(asOf).Format("2006-01-02")
+
 	var invoices []models.Invoice
-	if err := db.DB.Where("status IN ('SENT', 'OVERDUE', 'PARTIALLY_PAID')").
-		Order("due_date ASC, id ASC").
-		Find(&invoices).Error; err != nil {
+	openQ := db.DB.Where("status IN ('SENT', 'OVERDUE', 'PARTIALLY_PAID')")
+	openQ = ApplyDateRange(openQ, "issue_date", "", asOfDayStr)
+	if err := openQ.Order("due_date ASC, id ASC").Find(&invoices).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch invoices for aging report"})
 	}
 
 	// Credit sales in the trailing window (DSO denominator): face value of all
-	// non-VOID invoices issued between asOf-salesDays+1 and asOf (inclusive).
+	// issued (non-VOID, non-DRAFT) invoices between asOf-salesDays+1 and asOf (inclusive).
 	windowStart := truncateToDay(asOf).AddDate(0, 0, -(salesDays - 1))
 	creditQ := db.DB.Model(&models.Invoice{}).
-		Where("status != ?", "VOID")
-	creditQ = ApplyDateRange(creditQ, "issue_date", windowStart.Format("2006-01-02"), truncateToDay(asOf).Format("2006-01-02"))
+		Where("status NOT IN ('VOID', 'DRAFT')")
+	creditQ = ApplyDateRange(creditQ, "issue_date", windowStart.Format("2006-01-02"), asOfDayStr)
 	var creditInvoices []models.Invoice
 	if err := creditQ.Find(&creditInvoices).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch credit sales for aging report"})
@@ -1756,6 +1882,7 @@ func BuildTrialBalanceData(startDate, endDate string) (*TrialBalanceReportData, 
 		return &TrialBalanceReportData{
 			StartDate:  startDate,
 			EndDate:    endDate,
+			Accounts:   []TrialBalanceAccountLine{},
 			IsBalanced: true,
 		}, nil
 	}
@@ -1772,86 +1899,234 @@ func BuildTrialBalanceData(startDate, endDate string) (*TrialBalanceReportData, 
 		creditCents int64
 	}
 
-	accMap := make(map[uint]*accAccumulator)
+	accMap := make(map[uint]*accAccumulator, len(accounts))
 	for i := range accounts {
 		accMap[accounts[i].ID] = &accAccumulator{account: accounts[i]}
 	}
 
-	// Find default cash/equity account for cash tender offsetting credit
-	var cashAccountID uint
+	// Find default cash, owner capital, and owner draw accounts for offsetting entries
+	var cashAccountID, ownerCapitalID, ownerDrawID uint
 	for _, acc := range accounts {
-		if acc.Type == "ASSET" && (acc.Code == "1030" || acc.Code == "1050" || strings.Contains(strings.ToLower(acc.Name), "cash")) {
+		if cashAccountID == 0 && acc.Type == "ASSET" && (acc.Code == "1030" || acc.Code == "1050" || strings.Contains(strings.ToLower(acc.Name), "cash")) {
 			cashAccountID = acc.ID
-			break
+		}
+		if ownerCapitalID == 0 && acc.Type == "EQUITY" && (acc.Code == "3010" || !strings.Contains(strings.ToLower(acc.Name), "draw")) {
+			ownerCapitalID = acc.ID
+		}
+		if ownerDrawID == 0 && acc.Type == "EQUITY" && (acc.Code == "3110" || strings.Contains(strings.ToLower(acc.Name), "draw")) {
+			ownerDrawID = acc.ID
 		}
 	}
 	if cashAccountID == 0 {
-		// Fallback to checking (1010) or owner equity (3010)
 		for _, acc := range accounts {
-			if acc.Code == "1010" || acc.Code == "3010" {
+			if acc.Code == "1010" || acc.Code == "3010" || acc.Type == "ASSET" {
 				cashAccountID = acc.ID
 				break
 			}
 		}
+	}
+	if ownerCapitalID == 0 {
+		ownerCapitalID = cashAccountID
+	}
+	if ownerDrawID == 0 {
+		ownerDrawID = ownerCapitalID
 	}
 
 	// Suspense accumulators for uncategorized entries
 	var suspenseIncDebit, suspenseIncCredit int64
 	var suspenseExpDebit, suspenseExpCredit int64
 
-	// 1. Process Bank Transactions
+	// 1. Load in-books Bank Transactions
 	var txs []models.BankTransaction
-	txQ := db.DB.Model(&models.BankTransaction{}).Where("COALESCE(review_status, '') NOT IN ('IGNORED', 'DELETED')")
+	txQ := db.DB.Model(&models.BankTransaction{}).Where(inBooksClause)
 	txQ = ApplyDateRange(txQ, "date", startDate, endDate)
-	if err := txQ.Find(&txs).Error; err != nil {
+	if err := txQ.Order("date ASC, id ASC").Find(&txs).Error; err != nil {
 		return nil, err
 	}
 
+	// Deduplicate paired mirror-leg internal transfers (when both bank/card statements are imported
+	// for the same inter-account transfer: txA has ChartAccount=A, Category=B, Amount=-X and txB has
+	// ChartAccount=B, Category=A, Amount=+X within 3 days). txA already posts both the Credit A and
+	// Debit B legs, so skipping the mirror inflow leg txB prevents double-counting the transfer.
+	skipMirrorTx := make(map[uint]bool)
+	for i := range txs {
+		txA := &txs[i]
+		if txA.Amount.Cents >= 0 || txA.ChartAccountID == nil || txA.CategoryAccountID == nil {
+			continue
+		}
+		if *txA.ChartAccountID == *txA.CategoryAccountID {
+			continue
+		}
+		dstAcc, ok := accMap[*txA.CategoryAccountID]
+		if !ok || (dstAcc.account.Type != "ASSET" && dstAcc.account.Type != "LIABILITY") {
+			continue
+		}
+		for j := range txs {
+			txB := &txs[j]
+			if skipMirrorTx[txB.ID] || txB.ID == txA.ID || txB.Amount.Cents != -txA.Amount.Cents {
+				continue
+			}
+			if txB.ChartAccountID == nil || txB.CategoryAccountID == nil {
+				continue
+			}
+			if *txB.ChartAccountID == *txA.CategoryAccountID && *txB.CategoryAccountID == *txA.ChartAccountID {
+				diff := txA.Date.Sub(txB.Date)
+				if diff < 0 {
+					diff = -diff
+				}
+				if diff <= 72*time.Hour {
+					skipMirrorTx[txB.ID] = true
+					break
+				}
+			}
+		}
+	}
+
+	// Load confirmed Expense links for bank transactions so 1:N split receipts and matched expenses
+	// allocate their exact category accounts consistently with P&L, Schedule C, and Vendor Spend.
+	type linkedExpRow struct {
+		BankTransactionID uint         `gorm:"column:bank_transaction_id"`
+		ExpenseID         uint         `gorm:"column:expense_id"`
+		Amount            models.Money `gorm:"column:amount"`
+		ChartAccountID    *uint        `gorm:"column:chart_account_id"`
+		ReviewStatus      string       `gorm:"column:review_status"`
+	}
+	var linkedRows []linkedExpRow
+	if len(txs) > 0 {
+		txIDs := make([]uint, 0, len(txs))
+		for i := range txs {
+			txIDs = append(txIDs, txs[i].ID)
+		}
+		_ = db.DB.Table("expense_bank_transactions ebt").
+			Select("ebt.bank_transaction_id, e.id as expense_id, e.amount, e.chart_account_id, COALESCE(e.review_status, '') as review_status").
+			Joins("JOIN expenses e ON e.id = ebt.expense_id").
+			Where("ebt.status = 'confirmed' AND e.deleted_at IS NULL AND ebt.bank_transaction_id IN ?", txIDs).
+			Order("ebt.bank_transaction_id ASC, ebt.expense_id ASC").
+			Scan(&linkedRows).Error
+	}
+	txLinksMap := make(map[uint][]linkedExpRow)
+	expTxCountMap := make(map[uint]int)
+	for _, lr := range linkedRows {
+		txLinksMap[lr.BankTransactionID] = append(txLinksMap[lr.BankTransactionID], lr)
+		expTxCountMap[lr.ExpenseID]++
+	}
+
+	debitCategory := func(catID *uint, cents int64) {
+		if cents <= 0 {
+			return
+		}
+		if catID != nil {
+			if cAcc, ok := accMap[*catID]; ok {
+				cAcc.debitCents += cents
+				return
+			}
+		}
+		suspenseExpDebit += cents
+	}
+
 	for _, tx := range txs {
+		if skipMirrorTx[tx.ID] {
+			continue
+		}
 		amtCents := tx.Amount.Cents
 		if amtCents == 0 {
 			continue
 		}
 
-		// Source Bank Account
+		// Source Bank / Card Account
+		var bAcc *accAccumulator
 		if tx.ChartAccountID != nil {
-			if bAcc, ok := accMap[*tx.ChartAccountID]; ok {
-				if amtCents > 0 {
-					// Deposit increases bank asset -> Debit
-					bAcc.debitCents += amtCents
-				} else {
-					// Disbursement decreases bank asset -> Credit
-					bAcc.creditCents += -amtCents
-				}
+			bAcc = accMap[*tx.ChartAccountID]
+		}
+		if bAcc == nil && cashAccountID > 0 {
+			bAcc = accMap[cashAccountID]
+		}
+		if bAcc != nil {
+			if amtCents > 0 {
+				// Deposit / card payment increases asset or decreases liability -> Debit
+				bAcc.debitCents += amtCents
+			} else {
+				// Disbursement / card charge decreases asset or increases liability -> Credit
+				bAcc.creditCents += -amtCents
 			}
 		}
 
-		// Offsetting Category Account
-		if tx.CategoryAccountID != nil {
-			if cAcc, ok := accMap[*tx.CategoryAccountID]; ok {
-				if amtCents > 0 {
-					// Incoming revenue -> Credit
+		// Offsetting Category Account(s)
+		if amtCents > 0 {
+			if tx.CategoryAccountID != nil {
+				if cAcc, ok := accMap[*tx.CategoryAccountID]; ok {
 					cAcc.creditCents += amtCents
 				} else {
-					// Expense / Draw / Capital Asset payment -> Debit
-					cAcc.debitCents += -amtCents
+					suspenseIncCredit += amtCents
 				}
+			} else if bAcc != nil && bAcc.account.Type == "LIABILITY" && ownerCapitalID > 0 {
+				// Uncategorized positive entry on a LIABILITY (Credit Card) account (e.g. unlinked card
+				// payment or credit) is excluded from 9998 Uncategorized Business Revenue in P&L/Schedule C.
+				accMap[ownerCapitalID].creditCents += amtCents
+			} else {
+				suspenseIncCredit += amtCents
 			}
 		} else {
-			// Uncategorized suspense
-			if amtCents > 0 {
-				suspenseIncCredit += amtCents
-			} else {
-				suspenseExpDebit += -amtCents
+			absTxCents := -amtCents
+			links := txLinksMap[tx.ID]
+			if len(links) > 0 {
+				var sumLinkCents int64
+				allSingleTxLinks := true
+				for _, l := range links {
+					sumLinkCents += l.Amount.Cents
+					if expTxCountMap[l.ExpenseID] > 1 {
+						allSingleTxLinks = false
+					}
+				}
+				if allSingleTxLinks && sumLinkCents <= absTxCents {
+					var allocatedCents int64
+					for _, l := range links {
+						if l.Amount.Cents <= 0 {
+							continue
+						}
+						switch l.ReviewStatus {
+						case "IGNORED":
+							// Personal split line paid on business account -> Owner's Draw
+							if ownerDrawID > 0 {
+								accMap[ownerDrawID].debitCents += l.Amount.Cents
+							} else {
+								debitCategory(l.ChartAccountID, l.Amount.Cents)
+							}
+							allocatedCents += l.Amount.Cents
+						case "DELETED", "PENDING":
+							// Unallocated back to parent transaction category
+						default:
+							debitCategory(l.ChartAccountID, l.Amount.Cents)
+							allocatedCents += l.Amount.Cents
+						}
+					}
+					if remCents := absTxCents - allocatedCents; remCents > 0 {
+						debitCategory(tx.CategoryAccountID, remCents)
+					}
+					continue
+				}
+				// N:1 (multiple bank debits linked to 1 expense) or 1:1 partial card payment where receipt > bank tx:
+				// Debit absTxCents to the linked active expense category (or fallback to tx.CategoryAccountID).
+				targetCatID := tx.CategoryAccountID
+				for _, l := range links {
+					if l.ReviewStatus != "IGNORED" && l.ReviewStatus != "DELETED" && l.ReviewStatus != "PENDING" && l.ChartAccountID != nil {
+						targetCatID = l.ChartAccountID
+						break
+					}
+				}
+				debitCategory(targetCatID, absTxCents)
+				continue
 			}
+			debitCategory(tx.CategoryAccountID, absTxCents)
 		}
 	}
 
-	// 2. Process Cash Expenses (paid in cash, never appeared on bank statements)
+	// 2. Process Standalone Cash Expenses (paid in physical cash, not linked to a bank transaction)
 	var cashExps []models.Expense
 	cashQ := db.DB.Model(&models.Expense{}).
-		Where("COALESCE(review_status, '') NOT IN ('IGNORED', 'DELETED')").
-		Where("LOWER(COALESCE(tender, '')) = 'cash' OR LOWER(COALESCE(tender, '')) = 'cash / paper'")
+		Where(inBooksClause).
+		Where(isCashClause).
+		Where("id NOT IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed')")
 	cashQ = ApplyDateRange(cashQ, "timestamp", startDate, endDate)
 	if err := cashQ.Find(&cashExps).Error; err == nil {
 		for _, e := range cashExps {
@@ -1859,17 +2134,7 @@ func BuildTrialBalanceData(startDate, endDate string) (*TrialBalanceReportData, 
 			if eCents <= 0 {
 				continue
 			}
-
-			// Expense Category -> Debit
-			if e.ChartAccountID != nil {
-				if cAcc, ok := accMap[*e.ChartAccountID]; ok {
-					cAcc.debitCents += eCents
-				}
-			} else {
-				suspenseExpDebit += eCents
-			}
-
-			// Cash on Hand / Owner Capital -> Credit
+			debitCategory(e.ChartAccountID, eCents)
 			if cashAccountID > 0 {
 				if cAcc, ok := accMap[cashAccountID]; ok {
 					cAcc.creditCents += eCents
@@ -1878,8 +2143,62 @@ func BuildTrialBalanceData(startDate, endDate string) (*TrialBalanceReportData, 
 		}
 	}
 
+	// 3. Process Standalone WARNINGS_IGNORED Non-Cash Expenses & Confirmed Receipt Split-Tender Excesses
+	// (expenses in books that were paid via external card/owner funds without a bank feed debit)
+	var warnExps []models.Expense
+	warnQ := db.DB.Model(&models.Expense{}).
+		Where(inBooksClause).
+		Where("NOT (" + isCashClause + ")").
+		Where("review_status = 'WARNINGS_IGNORED'").
+		Where("id NOT IN (SELECT expense_id FROM expense_bank_transactions WHERE status = 'confirmed')")
+	warnQ = ApplyDateRange(warnQ, "timestamp", startDate, endDate)
+	if err := warnQ.Find(&warnExps).Error; err == nil {
+		for _, e := range warnExps {
+			if e.Amount.Cents <= 0 {
+				continue
+			}
+			debitCategory(e.ChartAccountID, e.Amount.Cents)
+			if ownerCapitalID > 0 {
+				if cAcc, ok := accMap[ownerCapitalID]; ok {
+					cAcc.creditCents += e.Amount.Cents
+				}
+			}
+		}
+	}
+
+	// Confirmed expenses whose receipt total exceeds the sum of linked bank debits (e.g., partial payment on second card)
+	type confirmedExcessRow struct {
+		ExpenseID      uint         `gorm:"column:expense_id"`
+		ExpenseAmount  models.Money `gorm:"column:expense_amount"`
+		ChartAccountID *uint        `gorm:"column:chart_account_id"`
+		LinkedTxSum    models.Money `gorm:"column:linked_tx_sum"`
+	}
+	var excessRows []confirmedExcessRow
+	exQ := db.DB.Table("expenses e").
+		Select("e.id as expense_id, e.amount as expense_amount, e.chart_account_id, COALESCE(SUM(ABS(bt.amount)), 0) as linked_tx_sum").
+		Joins("JOIN expense_bank_transactions ebt ON ebt.expense_id = e.id AND ebt.status = 'confirmed'").
+		Joins("JOIN bank_transactions bt ON bt.id = ebt.bank_transaction_id AND " + inBooksClauseBT).
+		Where(inBooksClauseExpAS).
+		Group("e.id, e.amount, e.chart_account_id").
+		Having("e.amount > COALESCE(SUM(ABS(bt.amount)), 0)")
+	exQ = ApplyDateRange(exQ, "e.timestamp", startDate, endDate)
+	if err := exQ.Scan(&excessRows).Error; err == nil {
+		for _, r := range excessRows {
+			diffCents := r.ExpenseAmount.Cents - r.LinkedTxSum.Cents
+			if diffCents <= 0 {
+				continue
+			}
+			debitCategory(r.ChartAccountID, diffCents)
+			if ownerCapitalID > 0 {
+				if cAcc, ok := accMap[ownerCapitalID]; ok {
+					cAcc.creditCents += diffCents
+				}
+			}
+		}
+	}
+
 	// Build output lines
-	var lines []TrialBalanceAccountLine
+	lines := make([]TrialBalanceAccountLine, 0, len(accounts)+2)
 	var totalNetDebitCents int64
 	var totalNetCreditCents int64
 
@@ -1888,7 +2207,7 @@ func BuildTrialBalanceData(startDate, endDate string) (*TrialBalanceReportData, 
 		gDebit := accum.debitCents
 		gCredit := accum.creditCents
 
-		// Only include accounts with activity or liquid anchor accounts
+		// Only include accounts with activity
 		if gDebit == 0 && gCredit == 0 {
 			continue
 		}
@@ -1919,10 +2238,13 @@ func BuildTrialBalanceData(startDate, endDate string) (*TrialBalanceReportData, 
 
 	// Add Suspense rows if uncategorized activity exists
 	if suspenseIncCredit > 0 || suspenseIncDebit > 0 {
-		var nCredit int64
+		var nDebit, nCredit int64
 		if suspenseIncCredit > suspenseIncDebit {
 			nCredit = suspenseIncCredit - suspenseIncDebit
+		} else if suspenseIncDebit > suspenseIncCredit {
+			nDebit = suspenseIncDebit - suspenseIncCredit
 		}
+		totalNetDebitCents += nDebit
 		totalNetCreditCents += nCredit
 		lines = append(lines, TrialBalanceAccountLine{
 			AccountCode: "9998",
@@ -1930,17 +2252,20 @@ func BuildTrialBalanceData(startDate, endDate string) (*TrialBalanceReportData, 
 			AccountType: "REVENUE",
 			GrossDebit:  models.Money{Cents: suspenseIncDebit},
 			GrossCredit: models.Money{Cents: suspenseIncCredit},
-			NetDebit:    models.Money{Cents: 0},
+			NetDebit:    models.Money{Cents: nDebit},
 			NetCredit:   models.Money{Cents: nCredit},
 		})
 	}
 
 	if suspenseExpDebit > 0 || suspenseExpCredit > 0 {
-		var nDebit int64
+		var nDebit, nCredit int64
 		if suspenseExpDebit > suspenseExpCredit {
 			nDebit = suspenseExpDebit - suspenseExpCredit
+		} else if suspenseExpCredit > suspenseExpDebit {
+			nCredit = suspenseExpCredit - suspenseExpDebit
 		}
 		totalNetDebitCents += nDebit
+		totalNetCreditCents += nCredit
 		lines = append(lines, TrialBalanceAccountLine{
 			AccountCode: "9999",
 			AccountName: "Uncategorized Expense (Suspense)",
@@ -1948,7 +2273,7 @@ func BuildTrialBalanceData(startDate, endDate string) (*TrialBalanceReportData, 
 			GrossDebit:  models.Money{Cents: suspenseExpDebit},
 			GrossCredit: models.Money{Cents: suspenseExpCredit},
 			NetDebit:    models.Money{Cents: nDebit},
-			NetCredit:   models.Money{Cents: 0},
+			NetCredit:   models.Money{Cents: nCredit},
 		})
 	}
 

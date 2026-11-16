@@ -71,9 +71,9 @@ func TestDefaultAccounts(t *testing.T) {
 // ---- SeedDefaultBankRules: defaultBankRules data integrity ----
 
 func TestDefaultBankRules(t *testing.T) {
-	// Verify rules count (183 rules across 12 categories)
-	if len(defaultBankRules) != 183 {
-		t.Errorf("expected 183 default bank rules, got %d", len(defaultBankRules))
+	// Verify rules count (233 rules across 12 business categories)
+	if len(defaultBankRules) != 233 {
+		t.Errorf("expected 233 default bank rules, got %d", len(defaultBankRules))
 	}
 
 	// Check each rule has required fields

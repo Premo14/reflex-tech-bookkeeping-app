@@ -554,4 +554,93 @@ describe("S21 InvoicingModal & Extracted Subcomponents", () => {
       expect(screen.queryByText("Invoices & Client Receivables")).not.toBeInTheDocument();
     });
   });
+
+  it("sorts invoices by invoice #, client, issue/due date, amount, and status with interactive arrow indicators", async () => {
+    const user = userEvent.setup();
+    wrapModal(<InvoicingModal isOpen onClose={vi.fn()} />);
+
+    expect(await screen.findByText("INV-2026-001")).toBeInTheDocument();
+
+    // Default sort is Date descending
+    const dateHeader = screen.getByRole("columnheader", { name: /Issue \/ Due/i });
+    expect(dateHeader).toHaveAttribute("aria-sort", "descending");
+
+    // 1. Sort by Invoice #
+    const invHeader = screen.getByRole("columnheader", { name: /Invoice #/i });
+    expect(invHeader).toHaveAttribute("aria-sort", "none");
+    await user.click(within(invHeader).getByRole("button"));
+    expect(invHeader).toHaveAttribute("aria-sort", "ascending");
+
+    // Check row order by invoice numbers
+    let rows = screen.getAllByRole("row").slice(1); // skip header row
+    expect(within(rows[0]).getByText("INV-2026-001")).toBeInTheDocument();
+    expect(within(rows[3]).getByText("INV-2026-004")).toBeInTheDocument();
+
+    // Click again -> descending
+    await user.click(within(invHeader).getByRole("button"));
+    expect(invHeader).toHaveAttribute("aria-sort", "descending");
+    rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("INV-2026-004")).toBeInTheDocument();
+    expect(within(rows[3]).getByText("INV-2026-001")).toBeInTheDocument();
+
+    // 2. Sort by Client Name
+    const clientHeader = screen.getByRole("columnheader", { name: /Client/i });
+    await user.click(within(clientHeader).getByRole("button"));
+    expect(clientHeader).toHaveAttribute("aria-sort", "ascending");
+    rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("Cash Client LLC")).toBeInTheDocument();
+    expect(within(rows[3]).getByText("Partial Co")).toBeInTheDocument();
+
+    // 3. Sort by Amount
+    const amountHeader = screen.getByRole("columnheader", { name: /Amount/i });
+    await user.click(within(amountHeader).getByRole("button"));
+    // Default for amount is descending
+    expect(amountHeader).toHaveAttribute("aria-sort", "descending");
+    rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("Late Payer Inc")).toBeInTheDocument(); // $1,500.00
+    expect(within(rows[3]).getByText("Cash Client LLC")).toBeInTheDocument(); // $500.00
+
+    // Click amount again -> ascending
+    await user.click(within(amountHeader).getByRole("button"));
+    expect(amountHeader).toHaveAttribute("aria-sort", "ascending");
+    rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("Cash Client LLC")).toBeInTheDocument(); // $500.00
+    expect(within(rows[3]).getByText("Late Payer Inc")).toBeInTheDocument(); // $1,500.00
+
+    // 4. Sort by Status
+    const statusHeader = screen.getByRole("columnheader", { name: /Status/i });
+    await user.click(within(statusHeader).getByRole("button"));
+    expect(statusHeader).toHaveAttribute("aria-sort", "ascending");
+  });
+
+  it("renders trash can icon for delete actions and exports CSV cleanly", async () => {
+    const user = userEvent.setup();
+
+    // Mock URL object methods for CSV export
+    const createObjectURLMock = vi.fn().mockReturnValue("blob:mock-url");
+    const revokeObjectURLMock = vi.fn();
+    window.URL.createObjectURL = createObjectURLMock;
+    window.URL.revokeObjectURL = revokeObjectURLMock;
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    wrapModal(<InvoicingModal isOpen onClose={vi.fn()} />);
+    expect(await screen.findByText("INV-2026-001")).toBeInTheDocument();
+
+    // Verify Delete button has trash can icon (svg)
+    const deleteBtn = screen.getByRole("button", { name: "Delete invoice INV-2026-001" });
+    expect(deleteBtn.querySelector("svg")).toBeInTheDocument();
+    expect(deleteBtn).toHaveAttribute("title", "Delete invoice");
+
+    // Click Export CSV
+    const exportBtn = screen.getByRole("button", { name: /Export CSV/i });
+    expect(exportBtn).toBeInTheDocument();
+    await user.click(exportBtn);
+
+    expect(createObjectURLMock).toHaveBeenCalledTimes(1);
+    const blobArg = createObjectURLMock.mock.calls[0][0] as Blob;
+    expect(blobArg).toBeInstanceOf(Blob);
+    expect(revokeObjectURLMock).toHaveBeenCalledTimes(1);
+    expect(clickSpy).toHaveBeenCalled();
+    clickSpy.mockRestore();
+  });
 });

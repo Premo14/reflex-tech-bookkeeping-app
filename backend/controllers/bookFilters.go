@@ -11,17 +11,19 @@ import (
 // never contribute to totals, reports, or reconciliation. Legacy rows with an empty
 // review status are treated as approved.
 const (
-	inBooksClause      = "(review_status IS NULL OR review_status = '' OR review_status = 'APPROVED' OR review_status = 'WARNINGS_IGNORED')"
-	inBooksClauseBT    = "(bt.review_status IS NULL OR bt.review_status = '' OR bt.review_status = 'APPROVED' OR bt.review_status = 'WARNINGS_IGNORED')"
-	inBooksClauseExpAS = "(e.review_status IS NULL OR e.review_status = '' OR e.review_status = 'APPROVED' OR e.review_status = 'WARNINGS_IGNORED')"
+	inBooksClause      = "deleted_at IS NULL AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED' OR review_status = 'WARNINGS_IGNORED')"
+	inBooksClauseBT    = "bt.deleted_at IS NULL AND (bt.review_status IS NULL OR bt.review_status = '' OR bt.review_status = 'APPROVED' OR bt.review_status = 'WARNINGS_IGNORED')"
+	inBooksClauseExpAS = "e.deleted_at IS NULL AND (e.review_status IS NULL OR e.review_status = '' OR e.review_status = 'APPROVED' OR e.review_status = 'WARNINGS_IGNORED')"
 )
 
-// Shared fragments used wherever "needs attention" is decided, so the Action Required list,
-// the dashboard summary and the close preflight can never disagree.
-//   - notCashClause: cash expenses never need a bank link (case-insensitive, NULL-safe).
+// Shared fragments used wherever "needs attention" or cash tender is decided, so the Action Required list,
+// the dashboard summary, reports, and the close preflight can never disagree.
+//   - isCashClause / isCashClauseExpAS / notCashClause: cash expenses never need a bank link (case-insensitive, NULL-safe).
 //   - unbalancedClause: anything that is not BALANCED, including rows never evaluated (NULL).
 const (
-	notCashClause        = "LOWER(COALESCE(tender, '')) != 'cash'"
+	isCashClause         = "LOWER(TRIM(COALESCE(tender, ''))) IN ('cash', 'cash / paper', 'cash/paper', 'currency', 'paper')"
+	isCashClauseExpAS    = "LOWER(TRIM(COALESCE(e.tender, ''))) IN ('cash', 'cash / paper', 'cash/paper', 'currency', 'paper')"
+	notCashClause        = "LOWER(TRIM(COALESCE(tender, ''))) NOT IN ('cash', 'cash / paper', 'cash/paper', 'currency', 'paper')"
 	unbalancedClause     = "(allocation_status IS NULL OR allocation_status != 'BALANCED')"
 	needsAttentionClause = "(allocation_status IS NULL OR allocation_status != 'BALANCED') AND (review_status IS NULL OR review_status = '' OR review_status = 'APPROVED')"
 )

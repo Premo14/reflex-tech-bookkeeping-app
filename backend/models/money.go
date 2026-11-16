@@ -155,7 +155,7 @@ func (Money) GormDBDataType(db *gorm.DB, _ *schema.Field) string {
 // MarshalJSON produces a JSON number with exactly 2 decimal places.
 // Example: 4876.10 (not 4876.1 or 4876).
 func (m Money) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf("%.2f", m.Dollars())), nil
+	return fmt.Appendf(nil, "%.2f", m.Dollars()), nil
 }
 
 // UnmarshalJSON parses a JSON number or numeric string into Money.

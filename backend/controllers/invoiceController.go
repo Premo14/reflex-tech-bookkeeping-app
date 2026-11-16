@@ -76,7 +76,7 @@ func GetInvoices(c fiber.Ctx) error {
 	search := strings.TrimSpace(c.Query("search"))
 	yearStr := strings.TrimSpace(c.Query("year"))
 
-	query := db.DB.Model(&models.Invoice{})
+	query := db.DB.Model(&models.Invoice{}).Where("COALESCE(review_status, '') NOT IN ('IGNORED', 'DELETED')")
 
 	if status != "" && status != "ALL" {
 		query = query.Where("status = ?", status)
@@ -113,15 +113,27 @@ func GetInvoices(c fiber.Ctx) error {
 	var totalPaidCents int64
 	var totalUnpaidCents int64
 	var overdueCount int64
+	var activeInvoiceCount int
+
+	statusCounts := map[string]int{
+		"ALL":     0,
+		"SENT":    0,
+		"PAID":    0,
+		"OVERDUE": 0,
+		"DRAFT":   0,
+	}
 
 	var allInvoices []models.Invoice
-	db.DB.Find(&allInvoices)
+	db.DB.Where("deleted_at IS NULL AND COALESCE(review_status, '') NOT IN ('DELETED', 'IGNORED')").Find(&allInvoices)
 	for _, inv := range allInvoices {
 		if inv.Status != "VOID" {
 			totalInvoicedCents += inv.TotalAmount.Cents
+			activeInvoiceCount++
+			statusCounts["ALL"]++
 		}
 		if inv.Status == "PAID" {
 			totalPaidCents += inv.TotalAmount.Cents
+			statusCounts["PAID"]++
 		} else {
 			totalPaidCents += inv.AmountPaid.Cents
 			unpaidCents := inv.BalanceDue.Cents
@@ -133,6 +145,11 @@ func GetInvoices(c fiber.Ctx) error {
 			}
 			if (inv.Status == "SENT" || inv.Status == "OVERDUE" || inv.Status == "PARTIALLY_PAID") && inv.DueDate.Before(now) {
 				overdueCount++
+				statusCounts["OVERDUE"]++
+			} else if inv.Status == "SENT" || inv.Status == "PARTIALLY_PAID" {
+				statusCounts["SENT"]++
+			} else if inv.Status == "DRAFT" {
+				statusCounts["DRAFT"]++
 			}
 		}
 	}
@@ -145,7 +162,8 @@ func GetInvoices(c fiber.Ctx) error {
 			"totalPaid":     models.Money{Cents: totalPaidCents},
 			"totalUnpaid":   models.Money{Cents: totalUnpaidCents},
 			"overdueCount":  overdueCount,
-			"invoiceCount":  len(invoices),
+			"invoiceCount":  activeInvoiceCount,
+			"statusCounts":  statusCounts,
 		},
 	})
 }
@@ -334,6 +352,12 @@ func UpdateInvoice(c fiber.Ctx) error {
 	if err := db.DB.First(&invoice, "id = ?", id).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Invoice not found"})
 	}
+	if invoice.DeletedAt != nil || invoice.ReviewStatus == "DELETED" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot update a deleted invoice"})
+	}
+	if utils.IsDateInClosedPeriod(invoice.IssueDate) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot update an invoice in a closed accounting period."})
+	}
 
 	var input CreateInvoiceInput
 	if err := c.Bind().JSON(&input); err != nil {
@@ -351,6 +375,9 @@ func UpdateInvoice(c fiber.Ctx) error {
 	}
 	if input.IssueDate != "" {
 		if t, err := parseDateFlexible(input.IssueDate); err == nil {
+			if utils.IsDateInClosedPeriod(t) {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cannot move an invoice into a closed accounting period."})
+			}
 			invoice.IssueDate = t
 		}
 	}
@@ -389,7 +416,7 @@ func UpdateInvoice(c fiber.Ctx) error {
 		var subtotal models.Money
 		for _, it := range input.Items {
 			lineAmt := models.NewMoney(it.Quantity * it.UnitPrice)
-			if it.Amount.Cents > 0 {
+			if it.Amount.Cents != 0 {
 				lineAmt = it.Amount
 			}
 			subtotal = subtotal.Add(lineAmt)
@@ -509,9 +536,21 @@ func DeleteInvoice(c fiber.Ctx) error {
 		})
 	}
 
-	if err := db.DB.Delete(&invoice).Error; err != nil {
+	now := time.Now()
+	if err := db.DB.Model(&invoice).Updates(map[string]interface{}{
+		"bank_transaction_id": nil,
+		"review_status":       "DELETED",
+		"deleted_at":          now,
+	}).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete invoice"})
 	}
+
+	db.DB.Create(&models.ItemAuditLog{
+		ItemType: "invoice",
+		ItemID:   invoice.ID,
+		Action:   "DELETED",
+		GroupID:  fmt.Sprintf("G%d", time.Now().UnixNano()),
+	})
 
 	if syntheticCashTxID != nil {
 		db.DB.Unscoped().Delete(&models.BankTransaction{}, *syntheticCashTxID)
@@ -833,7 +872,7 @@ func GetMatchingDeposits(c fiber.Ctx) error {
 	// 1. Exclude bank transactions already matched to any other active invoice
 	var matchedTxIDs []uint
 	db.DB.Model(&models.Invoice{}).
-		Where("bank_transaction_id IS NOT NULL AND id != ?", invoice.ID).
+		Where("bank_transaction_id IS NOT NULL AND id != ? AND deleted_at IS NULL AND COALESCE(review_status, '') != 'DELETED'", invoice.ID).
 		Pluck("bank_transaction_id", &matchedTxIDs)
 
 	// 2. Query credit deposits (amount > 0)

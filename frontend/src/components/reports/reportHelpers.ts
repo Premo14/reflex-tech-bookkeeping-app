@@ -5,13 +5,47 @@ import type {
   ScheduleCReport,
   VendorSpendReport,
 } from "../../types/models";
-import { formatDateMMDDYYYY, toLocalISODate } from "../../utils/dateUtils";
+import { addDaysToISODate, formatDateMMDDYYYY, toLocalISODate } from "../../utils/dateUtils";
 import { formatFixedDollars } from "../../utils/formatCurrency";
 
-export type ReportPreset = "this_month" | "last_month" | "ytd" | "full_year";
+export type ReportPreset =
+  | "all_time"
+  | "open_books"
+  | "closed_books"
+  | "this_month"
+  | "last_month"
+  | "ytd"
+  | "full_year";
+
+export interface ReportPresetOption {
+  id: ReportPreset;
+  label: string;
+  rangeLabel: string;
+  start: string;
+  end: string;
+}
 
 /** Computes YYYY-MM-DD bounds for quick date-range presets using local calendar dates. */
-export function computePresetRange(preset: ReportPreset, now: Date = new Date()): { start: string; end: string } {
+export function computePresetRange(
+  preset: ReportPreset,
+  now: Date = new Date(),
+  booksClosedDate = ""
+): { start: string; end: string } {
+  if (preset === "all_time") {
+    return { start: "", end: "" };
+  }
+  if (preset === "open_books") {
+    return {
+      start: booksClosedDate ? addDaysToISODate(booksClosedDate, 1) : "",
+      end: "",
+    };
+  }
+  if (preset === "closed_books") {
+    return {
+      start: "",
+      end: booksClosedDate || "1970-01-01",
+    };
+  }
   if (preset === "this_month") {
     return {
       start: toLocalISODate(new Date(now.getFullYear(), now.getMonth(), 1)),
@@ -34,6 +68,70 @@ export function computePresetRange(preset: ReportPreset, now: Date = new Date())
     start: toLocalISODate(new Date(now.getFullYear(), 0, 1)),
     end: toLocalISODate(new Date(now.getFullYear(), 11, 31)),
   };
+}
+
+/** Builds the Quick Preset descriptors with human-readable MM/DD/YYYY range subtitles. */
+export function getReportPresetOptions(
+  now: Date = new Date(),
+  booksClosedDate = ""
+): ReportPresetOption[] {
+  const allTime = computePresetRange("all_time", now, booksClosedDate);
+  const openBooks = computePresetRange("open_books", now, booksClosedDate);
+  const closedBooks = computePresetRange("closed_books", now, booksClosedDate);
+  const thisMonth = computePresetRange("this_month", now, booksClosedDate);
+  const lastMonth = computePresetRange("last_month", now, booksClosedDate);
+  const ytd = computePresetRange("ytd", now, booksClosedDate);
+  const fullYear = computePresetRange("full_year", now, booksClosedDate);
+
+  return [
+    {
+      id: "all_time",
+      label: "All Time",
+      rangeLabel: "Past – Present",
+      ...allTime,
+    },
+    {
+      id: "open_books",
+      label: "Open Books",
+      rangeLabel:
+        booksClosedDate && openBooks.start
+          ? `${formatDateMMDDYYYY(openBooks.start)} – Present`
+          : "Past – Present",
+      ...openBooks,
+    },
+    {
+      id: "closed_books",
+      label: "Closed Books",
+      rangeLabel: booksClosedDate
+        ? `Past – ${formatDateMMDDYYYY(booksClosedDate)}`
+        : "None (Books Open)",
+      ...closedBooks,
+    },
+    {
+      id: "this_month",
+      label: "This Month",
+      rangeLabel: `${formatDateMMDDYYYY(thisMonth.start)} – ${formatDateMMDDYYYY(thisMonth.end)}`,
+      ...thisMonth,
+    },
+    {
+      id: "last_month",
+      label: "Last Month",
+      rangeLabel: `${formatDateMMDDYYYY(lastMonth.start)} – ${formatDateMMDDYYYY(lastMonth.end)}`,
+      ...lastMonth,
+    },
+    {
+      id: "ytd",
+      label: "Year to Date (YTD)",
+      rangeLabel: `${formatDateMMDDYYYY(ytd.start)} – ${formatDateMMDDYYYY(ytd.end)}`,
+      ...ytd,
+    },
+    {
+      id: "full_year",
+      label: "Full Year",
+      rangeLabel: `${formatDateMMDDYYYY(fullYear.start)} – ${formatDateMMDDYYYY(fullYear.end)}`,
+      ...fullYear,
+    },
+  ];
 }
 
 /** Formats a YYYY-MM period key as a short readable month/year label (e.g., "Mar 2025"). */
@@ -85,7 +183,7 @@ export function exportProfitLossCSV(report: ProfitLossReport): void {
     [sanitizeCSV("REVENUE"), "", "", ""],
   ];
 
-  report.revenue.forEach((r) => {
+  (report.revenue ?? []).forEach((r) => {
     rows.push([
       sanitizeCSV("Revenue"),
       sanitizeCSV(r.accountCode),
@@ -97,7 +195,7 @@ export function exportProfitLossCSV(report: ProfitLossReport): void {
   rows.push([]);
 
   rows.push([sanitizeCSV("OPERATING EXPENSES"), "", "", ""]);
-  report.expenses.forEach((e) => {
+  (report.expenses ?? []).forEach((e) => {
     rows.push([
       sanitizeCSV("Expense"),
       sanitizeCSV(e.accountCode),
@@ -148,7 +246,7 @@ export function exportCashFlowCSV(report: CashFlowReport): void {
     ],
   ];
 
-  report.periods.forEach((p) => {
+  (report.periods ?? []).forEach((p) => {
     rows.push([
       sanitizeCSV(p.period),
       sanitizeCSV(formatFixedDollars(p.cashIn)),
@@ -158,7 +256,7 @@ export function exportCashFlowCSV(report: CashFlowReport): void {
     ]);
   });
 
-  downloadCSVFile(rows, `Cash_Flow_${report.startDate}_to_${report.endDate}.csv`);
+  downloadCSVFile(rows, `Cash_Flow_${report.startDate || "start"}_to_${report.endDate || "end"}.csv`);
 }
 
 /** Exports the Vendor Spend & 1099-NEC analytics report to CSV. */
@@ -187,7 +285,7 @@ export function exportVendorSpendCSV(report: VendorSpendReport): void {
     ],
   ];
 
-  report.vendors.forEach((v, idx) => {
+  (report.vendors ?? []).forEach((v, idx) => {
     rows.push([
       sanitizeCSV((idx + 1).toString()),
       sanitizeCSV(v.vendorName),
@@ -200,7 +298,7 @@ export function exportVendorSpendCSV(report: VendorSpendReport): void {
     ]);
   });
 
-  downloadCSVFile(rows, `Vendor_Spend_${report.startDate}_to_${report.endDate}.csv`);
+  downloadCSVFile(rows, `Vendor_Spend_${report.startDate || "start"}_to_${report.endDate || "end"}.csv`);
 }
 
 /** Exports the Accounts Receivable Aging report to CSV. */
@@ -228,7 +326,7 @@ export function exportARAgingCSV(report: ARAgingReport): void {
     [sanitizeCSV("AGING BUCKETS SUMMARY"), sanitizeCSV("AMOUNT"), sanitizeCSV("INVOICES COUNT"), sanitizeCSV("% OF TOTAL")],
   ];
 
-  report.buckets.forEach((b) => {
+  (report.buckets ?? []).forEach((b) => {
     const share = report.totalReceivables > 0 ? (b.totalAmount / report.totalReceivables) * 100 : 0;
     rows.push([
       sanitizeCSV(b.bucketName),
@@ -252,7 +350,7 @@ export function exportARAgingCSV(report: ARAgingReport): void {
     sanitizeCSV("BALANCE DUE"),
   ]);
 
-  const allInvoices = report.buckets.flatMap((b) =>
+  const allInvoices = (report.buckets ?? []).flatMap((b) =>
     (b.invoices || []).map((inv) => ({ ...inv, bucketName: b.bucketName }))
   );
 
@@ -326,7 +424,7 @@ export function exportScheduleCCSV(report: ScheduleCReport): void {
     ],
   ];
 
-  report.expenseLines.forEach((l) => {
+  (report.expenseLines ?? []).forEach((l) => {
     rows.push([
       sanitizeCSV(l.lineName),
       sanitizeCSV(l.lineNumber),

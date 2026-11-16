@@ -156,10 +156,13 @@ func TestBuildARAgingDSOAndDelinquency(t *testing.T) {
 		t.Errorf("expected DSO 0 with no credit sales, got %v", zero.DSODays)
 	}
 
-	// No receivables -> delinquency 0.
+	// No receivables -> delinquency 0, non-nil empty Clients slice.
 	empty := BuildARAgingData(nil, arTestAsOf, models.NewMoney(1000), 90)
 	if empty.DelinquencyRate != 0 || empty.TotalReceivables.Cents != 0 {
 		t.Errorf("expected empty report with zero metrics, got %+v", empty)
+	}
+	if empty.Clients == nil {
+		t.Errorf("expected non-nil empty Clients slice, got nil")
 	}
 }
 

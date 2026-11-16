@@ -5,7 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflex-tech-bookkeeping-app-api/constants"
+	"reflex-tech-bookkeeping-app-api/db"
+	"reflex-tech-bookkeeping-app-api/models"
 	"testing"
+	"time"
 )
 
 func TestCreateDemoReceiptPNGAndHelpers(t *testing.T) {
@@ -106,5 +109,43 @@ func TestDemoDatasetStatusStruct(t *testing.T) {
 	status := DemoDatasetStatus{Active: true, Counts: DemoDatasetCounts{Statements: 1}}
 	if !status.Active || status.Counts.Statements != 1 {
 		t.Fatalf("DemoDatasetStatus struct mismatch: %+v", status)
+	}
+}
+
+func TestRemoveDemoDataset_PreservesRealExtractionUnavailable(t *testing.T) {
+	setupUtilsTestDB(t)
+	var expAcc models.ChartAccount
+	db.DB.Where("code = ?", "5010").First(&expAcc)
+
+	realExp := models.Expense{
+		IsManual:         false,
+		Timestamp:        time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		Vendor:           "Corner Cafe",
+		Description:      "AI extraction unavailable — please enter receipt details",
+		Amount:           models.NewMoney(0),
+		ChartAccountID:   &expAcc.ID,
+		AllocationStatus: "UNLINKED",
+		ReviewStatus:     "PENDING",
+	}
+	if err := db.DB.Create(&realExp).Error; err != nil {
+		t.Fatalf("create real expense: %v", err)
+	}
+	realRec := models.Receipt{
+		ExpenseID:   &realExp.ID,
+		DocumentURI: "/tmp/non-demo-real-receipt-001.png",
+		FileHash:    "realhash001",
+	}
+	if err := db.DB.Create(&realRec).Error; err != nil {
+		t.Fatalf("create real receipt: %v", err)
+	}
+
+	if _, err := RemoveDemoDataset(); err != nil {
+		t.Fatalf("RemoveDemoDataset: %v", err)
+	}
+
+	var count int64
+	db.DB.Model(&models.Expense{}).Where("id = ?", realExp.ID).Count(&count)
+	if count != 1 {
+		t.Fatalf("expected real 'AI extraction unavailable' expense to survive RemoveDemoDataset, count=%d", count)
 	}
 }

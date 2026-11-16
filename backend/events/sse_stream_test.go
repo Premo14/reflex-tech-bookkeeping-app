@@ -1,7 +1,9 @@
 package events
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -414,12 +416,19 @@ func TestSSEStream_PanicRecovery(t *testing.T) {
 // ---- HandleSSEStream: Fiber httptest integration ----
 
 func TestHandleSSEStream_Headers(t *testing.T) {
+	oldDuration := SetSSETickerDuration(50 * time.Millisecond)
+	defer func() {
+		Hub.CloseAll()
+		WaitSSEStreams()
+		SetSSETickerDuration(oldDuration)
+	}()
+
 	app := fiber.New()
 	app.Get("/sse", HandleSSEStream)
 
 	// Make a request to verify headers are set correctly
 	req := httptest.NewRequest("GET", "/sse", nil)
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 200 * time.Millisecond})
 	if err != nil {
 		// SSE streams may not complete in a test context
 		t.Logf("SSE test: %v (stream may not close in test context)", err)
@@ -456,11 +465,18 @@ func TestHandleSSEStream_Headers(t *testing.T) {
 }
 
 func TestHandleSSEStream_ConnectedEvent(t *testing.T) {
+	oldDuration := SetSSETickerDuration(50 * time.Millisecond)
+	defer func() {
+		Hub.CloseAll()
+		WaitSSEStreams()
+		SetSSETickerDuration(oldDuration)
+	}()
+
 	app := fiber.New()
 	app.Get("/sse", HandleSSEStream)
 
 	req := httptest.NewRequest("GET", "/sse", nil)
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 200 * time.Millisecond})
 	if err != nil {
 		t.Logf("SSE connected event test: %v", err)
 		return
@@ -516,3 +532,69 @@ func TestHandleSSEStream_PingInterval(t *testing.T) {
 		t.Error("Message not received")
 	}
 }
+
+func TestBroadcast_UnmarshalablePayloadAndFullBuffer(t *testing.T) {
+	hub := &EventHub{clients: make(map[chan []byte]struct{})}
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	// 1. Unmarshalable payload (func/chan) returns early without sending
+	hub.Broadcast("bad_json", make(chan int))
+	select {
+	case msg := <-ch:
+		t.Errorf("expected no message for unmarshalable payload, got %s", string(msg))
+	default:
+	}
+
+	// 2. Fill channel buffer (64) and broadcast one more to hit default drop branch
+	for i := 0; i < 65; i++ {
+		hub.Broadcast("flood", i)
+	}
+	if len(ch) != 64 {
+		t.Errorf("expected channel buffer at cap 64, got %d", len(ch))
+	}
+}
+
+type failNthWriter struct {
+	writes int
+	failAt int
+}
+
+func (f *failNthWriter) Write(p []byte) (int, error) {
+	f.writes++
+	if f.writes >= f.failAt {
+		return 0, errors.New("write failed")
+	}
+	return len(p), nil
+}
+
+func TestStreamSSEWriter_FlushErrorBranches(t *testing.T) {
+	origTicker := SetSSETickerDuration(getSSETickerDuration())
+	origPanic := SetSSEPanicTrigger(nil)
+	defer func() {
+		SetSSETickerDuration(origTicker)
+		SetSSEPanicTrigger(origPanic)
+	}()
+
+	// 1. Fail on initial connected flush
+	streamSSEWriter(bufio.NewWriter(&failNthWriter{failAt: 1}))
+
+	// 2. Fail on ping flush (initial flush succeeds at write 1, ping flush fails at write 2)
+	SetSSETickerDuration(5 * time.Millisecond)
+	streamSSEWriter(bufio.NewWriter(&failNthWriter{failAt: 2}))
+
+	// 3. Fail on message flush (broadcast message arrives before ticker)
+	SetSSETickerDuration(10 * time.Second)
+	SetSSEPanicTrigger(func() {
+		Broadcast("immediate_msg", "payload")
+	})
+	streamSSEWriter(bufio.NewWriter(&failNthWriter{failAt: 2}))
+
+	// 4. Fail on panic recovery flush
+	SetSSEPanicTrigger(func() {
+		panic("synthetic panic with broken writer")
+	})
+	streamSSEWriter(bufio.NewWriter(&failNthWriter{failAt: 2}))
+}
+
+
